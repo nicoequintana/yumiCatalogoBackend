@@ -80,3 +80,24 @@ export async function eliminarArchivo(publicId, resourceType) {
     throw new Error(`No se pudo eliminar el archivo de Cloudinary: ${JSON.stringify(resultado)}`);
   }
 }
+
+/**
+ * Deletes a Cloudinary folder. The Admin API's `delete_folder` only succeeds
+ * on an empty folder — callers must delete every asset inside it first (the
+ * product's fotos/video via `eliminarArchivo`). A folder that's already gone
+ * or never existed is treated as a no-op, matching `eliminarArchivo`'s
+ * "cleanup never throws for already-gone resources" contract.
+ *
+ * @param {string} folder
+ * @returns {Promise<void>}
+ */
+export async function eliminarCarpeta(folder) {
+  configurar();
+
+  try {
+    await cloudinary.api.delete_folder(folder);
+  } catch (error) {
+    if (error?.error?.http_code === 404) return;
+    throw error;
+  }
+}

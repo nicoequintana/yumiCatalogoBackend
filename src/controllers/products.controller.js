@@ -577,6 +577,12 @@ export async function eliminar(req, res, next) {
     if (producto.driveFolderId) {
       await googleDrive.eliminarArchivo(producto.driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
     }
+    // Same idea for the Cloudinary side: remove the per-product folder now
+    // that every asset inside it was just deleted above. Uses the same
+    // folder name formula as crear/actualizar so it matches regardless of
+    // when the product's media was last uploaded.
+    const carpetaCloudinary = `productos/${producto.id}-${sanitizarNombreParaCarpeta(producto.nombre.trim())}`;
+    await cloudinary.eliminarCarpeta(carpetaCloudinary).catch((err) => console.error("Cleanup carpeta Cloudinary:", err));
 
     res.json({ ok: true });
   } catch (err) {
