@@ -9,7 +9,7 @@ export function requireAuth(req, res, next) {
   }
 
   try {
-    jwt.verify(token, process.env.JWT_SECRET);
+    jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
     next();
   } catch {
     res.status(401).json({ error: "No autorizado." });
