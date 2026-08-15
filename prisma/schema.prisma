@@ -38,20 +38,24 @@ model Caracteristica {
 }
 
 model Foto {
-  id          Int     @id @default(autoincrement())
-  url         String
-  driveFileId String?
-  orden       Int
-  productId   Int
-  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id                      Int     @id @default(autoincrement())
+  url                     String
+  driveFileId             String?
+  cloudinaryPublicId      String?
+  cloudinaryResourceType  String?
+  orden                   Int
+  productId               Int
+  product                 Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model Video {
-  id          Int     @id @default(autoincrement())
-  url         String
-  driveFileId String?
-  productId   Int     @unique
-  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id                      Int     @id @default(autoincrement())
+  url                     String
+  driveFileId             String?
+  cloudinaryPublicId      String?
+  cloudinaryResourceType  String?
+  productId               Int     @unique
+  product                 Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model Categoria {
