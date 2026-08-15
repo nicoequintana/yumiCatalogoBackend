@@ -64,3 +64,10 @@ model Categoria {
   productos Product[]
   createdAt DateTime  @default(now())
 }
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
