@@ -129,7 +129,7 @@ function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
  * Cloudinary exclusively; existing Drive-backed products are untouched and
  * keep being served via the existing Drive proxy routes.
  */
-async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
+async function subirArchivosNuevos({ fotosNuevas, videoNuevo, folder }) {
   const fotosSubidas = [];
   let videoSubido = null;
 
@@ -138,6 +138,7 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
       const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
         foto.buffer,
         "image",
+        folder,
       );
       fotosSubidas.push({ cloudinaryPublicId, cloudinaryResourceType, url });
     }
@@ -146,6 +147,7 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
       const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
         videoNuevo.buffer,
         "video",
+        folder,
       );
       videoSubido = { cloudinaryPublicId, cloudinaryResourceType, url };
     }
@@ -282,10 +284,10 @@ export async function crear(req, res, next) {
 
     // Create the DB row first (no media yet) so we have a real id — this
     // ordering originally existed to name the product's Drive subfolder
-    // (design item 1's ordering fix); Cloudinary has no per-product folder
-    // structure, but the DB-row-first ordering is kept anyway since it's
-    // also relied on for the orphan-prevention behavior below (a
-    // media-less product row is an accepted partial state on upload failure).
+    // (design item 1's ordering fix), and still serves the same purpose for
+    // Cloudinary's per-product folder below. Also relied on for the
+    // orphan-prevention behavior below (a media-less product row is an
+    // accepted partial state on upload failure).
     producto = await prisma.product.create({
       data: {
         nombre: nombre.trim(),
@@ -299,8 +301,9 @@ export async function crear(req, res, next) {
     });
 
     // Cloudinary storage migration: Drive per-product folder creation
-    // removed here (see commented block below) — Cloudinary uploads in this
-    // codebase use no per-product folder structure (design decision).
+    // removed here (see commented block below) — Cloudinary doesn't need a
+    // separate "create folder" call like Drive did; passing `folder` at
+    // upload time (see just below) creates it implicitly.
     // let driveFolderId = null;
     // if (fotosNuevas.length > 0 || videoArr.length > 0) {
     //   const carpeta = await googleDrive.crearCarpeta(
@@ -310,7 +313,11 @@ export async function crear(req, res, next) {
     //   driveFolderId = carpeta.driveFolderId;
     // }
 
-    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null });
+    // Cloudinary organizes uploads by product, mirroring Drive's old
+    // per-product subfolder — see cloudinary.service.js's subirArchivo doc.
+    const folder = `productos/${producto.id}-${nombre.trim()}`;
+
+    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null, folder });
     const { fotosSubidas, videoSubido } = subidas;
 
     producto = await prisma.product.update({
@@ -372,8 +379,10 @@ export async function actualizar(req, res, next) {
 
     // Cloudinary storage migration: Drive lazy-folder-creation removed here
     // (see commented block below) — new uploads on ANY product (new or
-    // legacy Drive-backed) now go to Cloudinary, which uses no per-product
-    // folder structure. A legacy product's EXISTING Drive-hosted photos are
+    // legacy Drive-backed) now go to Cloudinary instead, grouped into the
+    // product's own Cloudinary folder (see the `folder` line just below —
+    // same per-product grouping idea as Drive's old subfolder, different
+    // storage backend). A legacy product's EXISTING Drive-hosted photos are
     // untouched either way — this only affects where a NEW upload lands.
     // let driveFolderId = existente.driveFolderId;
     // if (!driveFolderId && (fotosNuevas.length > 0 || videoArr.length > 0)) {
@@ -383,10 +392,12 @@ export async function actualizar(req, res, next) {
     //   );
     //   driveFolderId = carpeta.driveFolderId;
     // }
+    const folder = `productos/${existente.id}-${(nombre ?? existente.nombre).trim()}`;
 
     const subidas = await subirArchivosNuevos({
       fotosNuevas,
       videoNuevo: videoArr[0] ?? null,
+      folder,
     });
     const { fotosSubidas, videoSubido } = subidas;
 

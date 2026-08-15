@@ -29,28 +29,34 @@ function configurar() {
  * Uploads a file buffer to Cloudinary. Videos MUST pass
  * `resourceType: "video"` explicitly — Cloudinary's SDK defaults to
  * `"image"` when unset, which silently mis-processes (or fails to later
- * delete) a video asset. No per-product folder structure (design decision;
- * unlike Drive, Cloudinary uploads are not organized per-product).
+ * delete) a video asset.
+ *
+ * `folder` groups a product's media together (e.g. `productos/42-collar`),
+ * mirroring Drive's old per-product subfolder — passed straight through to
+ * the Upload API's `folder` param, which both places the asset there and
+ * prefixes it onto the returned `public_id`. Omit it to upload to the
+ * account's root (used by nothing today, kept optional for flexibility).
  *
  * @param {Buffer} buffer - raw file bytes
  * @param {"image"|"video"} resourceType
+ * @param {string} [folder]
  * @returns {Promise<{ cloudinaryPublicId: string, cloudinaryResourceType: string, url: string }>}
  */
-export function subirArchivo(buffer, resourceType) {
+export function subirArchivo(buffer, resourceType, folder) {
   configurar();
 
+  const opciones = { resource_type: resourceType };
+  if (folder) opciones.folder = folder;
+
   return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { resource_type: resourceType },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve({
-          cloudinaryPublicId: result.public_id,
-          cloudinaryResourceType: result.resource_type,
-          url: result.secure_url,
-        });
-      },
-    );
+    const uploadStream = cloudinary.uploader.upload_stream(opciones, (error, result) => {
+      if (error) return reject(error);
+      resolve({
+        cloudinaryPublicId: result.public_id,
+        cloudinaryResourceType: result.resource_type,
+        url: result.secure_url,
+      });
+    });
     uploadStream.end(buffer);
   });
 }
