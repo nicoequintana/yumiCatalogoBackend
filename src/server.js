@@ -33,6 +33,11 @@ app.use((err, _req, res, _next) => {
     return res.status(status).json({ error: mapMulterError(err) });
   }
 
+  if (err?.code === "P2002") {
+    const campo = Array.isArray(err.meta?.target) ? err.meta.target[0] : err.meta?.target;
+    return res.status(400).json({ error: `Ya existe un registro con ese ${campo ?? "valor"}.` });
+  }
+
   const status = err?.status ?? 500;
   const mensaje = status === 500 ? "Error interno del servidor." : err.message;
   res.status(status).json({ error: mensaje });
