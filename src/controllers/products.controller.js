@@ -349,6 +349,9 @@ export async function actualizar(req, res, next) {
     } catch (dbErr) {
       // Orphan prevention (design D6): DB write failed after successful Drive upload(s).
       await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
+      if (driveFolderId && driveFolderId !== existente.driveFolderId) {
+        await googleDrive.eliminarArchivo(driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
+      }
       throw dbErr;
     }
 
