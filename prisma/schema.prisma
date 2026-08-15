@@ -20,7 +20,7 @@ model Product {
   etiqueta        String?
   driveFolderId   String?
   categoriaId     Int?
-  categoria       Categoria?       @relation(fields: [categoriaId], references: [id])
+  categoria       Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
   caracteristicas Caracteristica[]
   fotos           Foto[]
   video           Video?
