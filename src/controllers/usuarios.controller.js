@@ -17,9 +17,9 @@ export async function listar(_req, res, next) {
   try {
     const usuarios = await prisma.usuario.findMany({
       orderBy: { email: "asc" },
-      select: { id: true, email: true, createdAt: true, passwordHash: undefined },
+      select: { id: true, email: true, createdAt: true },
     });
-    res.json(usuarios);
+    res.json(usuarios.map(mapUsuario));
   } catch (err) {
     next(err);
   }

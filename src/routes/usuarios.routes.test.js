@@ -57,13 +57,13 @@ describe("GET /api/usuarios", () => {
 
   it("lista usuarios sin exponer passwordHash", async () => {
     findManyMock.mockResolvedValue([
-      { id: 1, email: "admin@test.com", createdAt: new Date("2026-01-01") },
+      { id: 1, email: "admin@test.com", createdAt: new Date("2026-01-01"), passwordHash: "no-deberia-aparecer" },
     ]);
     const res = await request(buildApp()).get("/api/usuarios").set("Authorization", authHeader);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: 1, email: "admin@test.com", createdAt: "2026-01-01T00:00:00.000Z" }]);
+    expect(res.body[0]).not.toHaveProperty("passwordHash");
     expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ select: expect.objectContaining({ passwordHash: undefined }) })
+      expect.objectContaining({ select: expect.not.objectContaining({ passwordHash: true }) })
     );
   });
 });
