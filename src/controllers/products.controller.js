@@ -487,7 +487,7 @@ export async function actualizar(req, res, next) {
           .catch((err) => console.error(err));
       }
     }
-    if (eliminarVideo && existente.video) {
+    if (videoSubido && existente.video) {
       if (existente.video.driveFileId) {
         await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
       } else if (existente.video.cloudinaryPublicId) {
@@ -495,8 +495,7 @@ export async function actualizar(req, res, next) {
           .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
           .catch((err) => console.error(err));
       }
-    }
-    if (videoSubido && existente.video) {
+    } else if (eliminarVideo && existente.video) {
       if (existente.video.driveFileId) {
         await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
       } else if (existente.video.cloudinaryPublicId) {
