@@ -8,6 +8,7 @@ const PRODUCT_INCLUDE = {
   caracteristicas: true,
   fotos: { orderBy: { orden: "asc" } },
   video: true,
+  categoria: true,
 };
 
 /**
@@ -32,6 +33,7 @@ function mapProducto(producto) {
     descripcion: producto.descripcion,
     precio: producto.precio.toString(),
     etiqueta: producto.etiqueta,
+    categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -188,7 +190,7 @@ export async function crear(req, res, next) {
   let subidas = null;
   let producto = null;
   try {
-    const { nombre, descripcion, precio, etiqueta } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
@@ -205,6 +207,7 @@ export async function crear(req, res, next) {
         descripcion: descripcion.trim(),
         precio: String(precio),
         etiqueta: etiqueta?.trim() || null,
+        categoriaId: categoriaId ? Number(categoriaId) : null,
         caracteristicas: { create: caracteristicas },
       },
       include: PRODUCT_INCLUDE,
@@ -253,7 +256,7 @@ export async function actualizar(req, res, next) {
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
-    const { nombre, descripcion, precio, etiqueta } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
@@ -294,6 +297,7 @@ export async function actualizar(req, res, next) {
             descripcion: descripcion !== undefined ? descripcion.trim() : undefined,
             precio: precio !== undefined ? String(precio) : undefined,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
+            categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
             driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
         });
