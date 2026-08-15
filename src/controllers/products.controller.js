@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
+import * as cloudinary from "../services/cloudinary.service.js";
 
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
@@ -39,12 +40,18 @@ function mapProducto(producto) {
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
-      url: f.driveFileId ? `/api/products/${producto.id}/fotos/${f.id}` : f.url,
+      url: f.cloudinaryPublicId ? f.url : f.driveFileId ? `/api/products/${producto.id}/fotos/${f.id}` : f.url,
       driveFileId: f.driveFileId,
       orden: f.orden,
     })),
     video: producto.video
-      ? { id: producto.video.id, url: `/api/products/${producto.id}/video`, driveFileId: producto.video.driveFileId }
+      ? {
+          id: producto.video.id,
+          url: producto.video.cloudinaryPublicId
+            ? producto.video.url
+            : `/api/products/${producto.id}/video`,
+          driveFileId: producto.video.driveFileId,
+        }
       : null,
     createdAt: producto.createdAt,
     updatedAt: producto.updatedAt,
@@ -111,32 +118,41 @@ function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
   }
 }
 
-/** Uploads new photos + optional video to Drive. Returns their Drive metadata for DB writes. */
-async function subirArchivosNuevos({ fotosNuevas, videoNuevo, parents }) {
+/**
+ * Uploads new photos + optional video to Cloudinary. Returns their
+ * Cloudinary metadata for DB writes.
+ *
+ * MIGRATION NOTE (Cloudinary storage migration): this function used to
+ * upload to Google Drive — see the commented-out version immediately below
+ * for the original implementation, kept (not deleted) per an explicit
+ * decision to preserve that work rather than lose it. New uploads go to
+ * Cloudinary exclusively; existing Drive-backed products are untouched and
+ * keep being served via the existing Drive proxy routes.
+ */
+async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
   const fotosSubidas = [];
   let videoSubido = null;
 
   try {
     for (const foto of fotosNuevas) {
-      const { driveFileId, url } = await googleDrive.subirArchivo(foto.buffer, foto.mimetype, foto.originalname, {
-        makePublic: true,
-        parents,
-      });
-      fotosSubidas.push({ driveFileId, url });
+      const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
+        foto.buffer,
+        "image",
+      );
+      fotosSubidas.push({ cloudinaryPublicId, cloudinaryResourceType, url });
     }
 
     if (videoNuevo) {
-      const { driveFileId, url } = await googleDrive.subirArchivo(
+      const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
         videoNuevo.buffer,
-        videoNuevo.mimetype,
-        videoNuevo.originalname,
-        { makePublic: false, parents },
+        "video",
       );
-      videoSubido = { driveFileId, url };
+      videoSubido = { cloudinaryPublicId, cloudinaryResourceType, url };
     }
   } catch (err) {
-    // Orphan prevention (design D6): if any upload after the first succeeded
-    // and a later one failed, clean up everything already uploaded in this batch.
+    // Orphan prevention (design D6, carried over from the Drive-era code):
+    // if any upload after the first succeeded and a later one failed, clean
+    // up everything already uploaded in this batch.
     await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
     throw err;
   }
@@ -144,20 +160,51 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo, parents }) {
   return { fotosSubidas, videoSubido };
 }
 
-/** Best-effort Drive cleanup — never throws, used in catch blocks. */
+// --- Cloudinary storage migration: original Drive-uploading implementation, kept for reference ---
+// async function subirArchivosNuevosDrive({ fotosNuevas, videoNuevo, parents }) {
+//   const fotosSubidas = [];
+//   let videoSubido = null;
+//
+//   try {
+//     for (const foto of fotosNuevas) {
+//       const { driveFileId, url } = await googleDrive.subirArchivo(foto.buffer, foto.mimetype, foto.originalname, {
+//         makePublic: true,
+//         parents,
+//       });
+//       fotosSubidas.push({ driveFileId, url });
+//     }
+//
+//     if (videoNuevo) {
+//       const { driveFileId, url } = await googleDrive.subirArchivo(
+//         videoNuevo.buffer,
+//         videoNuevo.mimetype,
+//         videoNuevo.originalname,
+//         { makePublic: false, parents },
+//       );
+//       videoSubido = { driveFileId, url };
+//     }
+//   } catch (err) {
+//     await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
+//     throw err;
+//   }
+//
+//   return { fotosSubidas, videoSubido };
+// }
+
+/** Best-effort Cloudinary cleanup — never throws, used in catch blocks. */
 async function limpiarArchivosSubidos({ fotos = [], video = null }) {
   for (const foto of fotos) {
     try {
-      await googleDrive.eliminarArchivo(foto.driveFileId);
+      await cloudinary.eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType);
     } catch (err) {
-      console.error("No se pudo limpiar la foto huérfana en Drive:", foto.driveFileId, err);
+      console.error("No se pudo limpiar la foto huérfana en Cloudinary:", foto.cloudinaryPublicId, err);
     }
   }
   if (video) {
     try {
-      await googleDrive.eliminarArchivo(video.driveFileId);
+      await cloudinary.eliminarArchivo(video.cloudinaryPublicId, video.cloudinaryResourceType);
     } catch (err) {
-      console.error("No se pudo limpiar el video huérfano en Drive:", video.driveFileId, err);
+      console.error("No se pudo limpiar el video huérfano en Cloudinary:", video.cloudinaryPublicId, err);
     }
   }
 }
@@ -233,8 +280,12 @@ export async function crear(req, res, next) {
 
     validarArchivos({ fotosNuevas, fotosExistentesCount: 0, video: videoArr });
 
-    // Create the DB row first (no media yet) so we have a real id to name
-    // the product's Drive subfolder with (design item 1's ordering fix).
+    // Create the DB row first (no media yet) so we have a real id — this
+    // ordering originally existed to name the product's Drive subfolder
+    // (design item 1's ordering fix); Cloudinary has no per-product folder
+    // structure, but the DB-row-first ordering is kept anyway since it's
+    // also relied on for the orphan-prevention behavior below (a
+    // media-less product row is an accepted partial state on upload failure).
     producto = await prisma.product.create({
       data: {
         nombre: nombre.trim(),
@@ -247,26 +298,41 @@ export async function crear(req, res, next) {
       include: PRODUCT_INCLUDE,
     });
 
-    let driveFolderId = null;
-    if (fotosNuevas.length > 0 || videoArr.length > 0) {
-      const carpeta = await googleDrive.crearCarpeta(
-        `${producto.id}-${nombre.trim()}`,
-        process.env.GOOGLE_DRIVE_FOLDER_ID,
-      );
-      driveFolderId = carpeta.driveFolderId;
-    }
+    // Cloudinary storage migration: Drive per-product folder creation
+    // removed here (see commented block below) — Cloudinary uploads in this
+    // codebase use no per-product folder structure (design decision).
+    // let driveFolderId = null;
+    // if (fotosNuevas.length > 0 || videoArr.length > 0) {
+    //   const carpeta = await googleDrive.crearCarpeta(
+    //     `${producto.id}-${nombre.trim()}`,
+    //     process.env.GOOGLE_DRIVE_FOLDER_ID,
+    //   );
+    //   driveFolderId = carpeta.driveFolderId;
+    // }
 
-    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null, parents: driveFolderId ? [driveFolderId] : undefined });
+    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null });
     const { fotosSubidas, videoSubido } = subidas;
 
     producto = await prisma.product.update({
       where: { id: producto.id },
       data: {
-        driveFolderId,
         fotos: {
-          create: fotosSubidas.map((f, index) => ({ url: f.url, driveFileId: f.driveFileId, orden: index })),
+          create: fotosSubidas.map((f, index) => ({
+            url: f.url,
+            cloudinaryPublicId: f.cloudinaryPublicId,
+            cloudinaryResourceType: f.cloudinaryResourceType,
+            orden: index,
+          })),
         },
-        video: videoSubido ? { create: { url: videoSubido.url, driveFileId: videoSubido.driveFileId } } : undefined,
+        video: videoSubido
+          ? {
+              create: {
+                url: videoSubido.url,
+                cloudinaryPublicId: videoSubido.cloudinaryPublicId,
+                cloudinaryResourceType: videoSubido.cloudinaryResourceType,
+              },
+            }
+          : undefined,
       },
       include: PRODUCT_INCLUDE,
     });
@@ -304,19 +370,23 @@ export async function actualizar(req, res, next) {
     // Photos removed by the client (present before, absent from fotosExistentes) get deleted from Drive too.
     const fotosARemover = existente.fotos.filter((f) => !fotosExistentesIds.includes(f.id));
 
-    let driveFolderId = existente.driveFolderId;
-    if (!driveFolderId && (fotosNuevas.length > 0 || videoArr.length > 0)) {
-      const carpeta = await googleDrive.crearCarpeta(
-        `${existente.id}-${(nombre ?? existente.nombre).trim()}`,
-        process.env.GOOGLE_DRIVE_FOLDER_ID,
-      );
-      driveFolderId = carpeta.driveFolderId;
-    }
+    // Cloudinary storage migration: Drive lazy-folder-creation removed here
+    // (see commented block below) — new uploads on ANY product (new or
+    // legacy Drive-backed) now go to Cloudinary, which uses no per-product
+    // folder structure. A legacy product's EXISTING Drive-hosted photos are
+    // untouched either way — this only affects where a NEW upload lands.
+    // let driveFolderId = existente.driveFolderId;
+    // if (!driveFolderId && (fotosNuevas.length > 0 || videoArr.length > 0)) {
+    //   const carpeta = await googleDrive.crearCarpeta(
+    //     `${existente.id}-${(nombre ?? existente.nombre).trim()}`,
+    //     process.env.GOOGLE_DRIVE_FOLDER_ID,
+    //   );
+    //   driveFolderId = carpeta.driveFolderId;
+    // }
 
     const subidas = await subirArchivosNuevos({
       fotosNuevas,
       videoNuevo: videoArr[0] ?? null,
-      parents: driveFolderId ? [driveFolderId] : undefined,
     });
     const { fotosSubidas, videoSubido } = subidas;
 
@@ -332,7 +402,8 @@ export async function actualizar(req, res, next) {
             precio: precio !== undefined ? String(precio) : undefined,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
             categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
-            driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
+            // Cloudinary storage migration: driveFolderId no longer computed for new uploads.
+            // driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
         });
 
@@ -359,7 +430,8 @@ export async function actualizar(req, res, next) {
           await tx.foto.createMany({
             data: fotosSubidas.map((f, index) => ({
               url: f.url,
-              driveFileId: f.driveFileId,
+              cloudinaryPublicId: f.cloudinaryPublicId,
+              cloudinaryResourceType: f.cloudinaryResourceType,
               orden: ordenBase + index,
               productId: id,
             })),
@@ -371,11 +443,20 @@ export async function actualizar(req, res, next) {
           if (existente.video) {
             await tx.video.update({
               where: { productId: id },
-              data: { url: videoSubido.url, driveFileId: videoSubido.driveFileId },
+              data: {
+                url: videoSubido.url,
+                cloudinaryPublicId: videoSubido.cloudinaryPublicId,
+                cloudinaryResourceType: videoSubido.cloudinaryResourceType,
+              },
             });
           } else {
             await tx.video.create({
-              data: { url: videoSubido.url, driveFileId: videoSubido.driveFileId, productId: id },
+              data: {
+                url: videoSubido.url,
+                cloudinaryPublicId: videoSubido.cloudinaryPublicId,
+                cloudinaryResourceType: videoSubido.cloudinaryResourceType,
+                productId: id,
+              },
             });
           }
         } else if (eliminarVideo && existente.video) {
@@ -385,23 +466,44 @@ export async function actualizar(req, res, next) {
         return tx.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
       });
     } catch (dbErr) {
-      // Orphan prevention (design D6): DB write failed after successful Drive upload(s).
+      // Orphan prevention (design D6): DB write failed after successful Cloudinary upload(s).
       await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
-      if (driveFolderId && driveFolderId !== existente.driveFolderId) {
-        await googleDrive.eliminarArchivo(driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
-      }
+      // Cloudinary storage migration: driveFolderId no longer computed here, nothing to clean up.
+      // if (driveFolderId && driveFolderId !== existente.driveFolderId) {
+      //   await googleDrive.eliminarArchivo(driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
+      // }
       throw dbErr;
     }
 
-    // DB writes succeeded — now clean up Drive files for photos/video the client actually removed.
+    // DB writes succeeded — now clean up whichever storage backend each
+    // removed photo/video actually used (existing rows may be Drive- or
+    // Cloudinary-backed; a row has exactly one of the two ids set).
     for (const foto of fotosARemover) {
-      if (foto.driveFileId) await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error(err));
+      if (foto.driveFileId) {
+        await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error(err));
+      } else if (foto.cloudinaryPublicId) {
+        await cloudinary
+          .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
+          .catch((err) => console.error(err));
+      }
     }
-    if (eliminarVideo && existente.video?.driveFileId) {
-      await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+    if (eliminarVideo && existente.video) {
+      if (existente.video.driveFileId) {
+        await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+      } else if (existente.video.cloudinaryPublicId) {
+        await cloudinary
+          .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
+          .catch((err) => console.error(err));
+      }
     }
-    if (videoSubido && existente.video?.driveFileId) {
-      await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+    if (videoSubido && existente.video) {
+      if (existente.video.driveFileId) {
+        await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+      } else if (existente.video.cloudinaryPublicId) {
+        await cloudinary
+          .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
+          .catch((err) => console.error(err));
+      }
     }
 
     res.json(mapProducto(productoActualizado));
@@ -430,13 +532,24 @@ export async function eliminar(req, res, next) {
     for (const foto of producto.fotos) {
       if (foto.driveFileId) {
         await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+      } else if (foto.cloudinaryPublicId) {
+        await cloudinary
+          .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
+          .catch((err) => console.error("Cleanup foto:", err));
       }
     }
-    if (producto.video?.driveFileId) {
-      await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+    if (producto.video) {
+      if (producto.video.driveFileId) {
+        await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+      } else if (producto.video.cloudinaryPublicId) {
+        await cloudinary
+          .eliminarArchivo(producto.video.cloudinaryPublicId, producto.video.cloudinaryResourceType)
+          .catch((err) => console.error("Cleanup video:", err));
+      }
     }
-    // Then remove the (now-empty, or never-used) per-product folder itself,
-    // if one exists.
+    // Then remove the (now-empty, or never-used) per-product Drive folder
+    // itself, if one exists (only ever set for legacy Drive-era products —
+    // Cloudinary uploads never create one).
     if (producto.driveFolderId) {
       await googleDrive.eliminarArchivo(producto.driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
     }
@@ -606,6 +719,10 @@ export async function eliminarFoto(req, res, next) {
 
     if (foto.driveFileId) {
       await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+    } else if (foto.cloudinaryPublicId) {
+      await cloudinary
+        .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
+        .catch((err) => console.error("Cleanup foto:", err));
     }
 
     const productoActualizado = await prisma.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
