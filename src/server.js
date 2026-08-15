@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import productsRouter from "./routes/products.routes.js";
 import categoriasRouter from "./routes/categorias.routes.js";
+import ogRouter from "./routes/og.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -17,6 +18,7 @@ app.get("/health", (_req, res) => {
 
 app.use("/api/products", productsRouter);
 app.use("/api/categorias", categoriasRouter);
+app.use("/og", ogRouter);
 
 // 404 fallback for unknown routes
 app.use((_req, res) => {
