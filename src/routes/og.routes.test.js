@@ -71,6 +71,17 @@ describe("GET /og/producto/:id", () => {
     expect(res.text).toContain("https://aura.example.com/og-default.svg");
   });
 
+  it("devuelve tags genéricos (200) para id no-numérico sin consultar Prisma", async () => {
+    const res = await request(buildApp())
+      .get("/og/producto/abc")
+      .set("User-Agent", "Twitterbot/1.0");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("Aura Prestigio");
+    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
   it("escapa HTML en nombre y descripción para evitar inyección", async () => {
     findUniqueMock.mockResolvedValue({
       id: 5,
