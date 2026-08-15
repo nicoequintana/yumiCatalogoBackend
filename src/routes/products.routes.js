@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
 
 const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
@@ -39,10 +40,10 @@ router.get("/", productsController.listar);
 router.get("/:id/video", productsController.streamVideo);
 router.get("/:id/fotos/:fotoId", productsController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
-router.post("/", uploadFields, productsController.crear);
-router.post("/:id/compartir", productsController.compartir);
-router.put("/:id", uploadFields, productsController.actualizar);
-router.delete("/:id", productsController.eliminar);
-router.delete("/:id/fotos/:fotoId", productsController.eliminarFoto);
+router.post("/", requireAuth, uploadFields, productsController.crear);
+router.post("/:id/compartir", requireAuth, productsController.compartir);
+router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
+router.delete("/:id", requireAuth, productsController.eliminar);
+router.delete("/:id/fotos/:fotoId", requireAuth, productsController.eliminarFoto);
 
 export default router;
