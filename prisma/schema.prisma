@@ -19,6 +19,8 @@ model Product {
   precio          Decimal          @db.Decimal(10, 2)
   etiqueta        String?
   driveFolderId   String?
+  categoriaId     Int?
+  categoria       Categoria?       @relation(fields: [categoriaId], references: [id])
   caracteristicas Caracteristica[]
   fotos           Foto[]
   video           Video?
@@ -48,4 +50,11 @@ model Video {
   driveFileId String?
   productId   Int     @unique
   product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Categoria {
+  id        Int       @id @default(autoincrement())
+  nombre    String    @unique
+  productos Product[]
+  createdAt DateTime  @default(now())
 }
