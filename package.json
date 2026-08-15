@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "npx --yes kill-port 4000 --silent || true",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "vitest run"
