@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 
-const MAX_FOTOS = 4;
+const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
 
 const PRODUCT_INCLUDE = {
@@ -108,7 +108,7 @@ function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
 }
 
 /** Uploads new photos + optional video to Drive. Returns their Drive metadata for DB writes. */
-async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
+async function subirArchivosNuevos({ fotosNuevas, videoNuevo, parents }) {
   const fotosSubidas = [];
   let videoSubido = null;
 
@@ -116,6 +116,7 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
     for (const foto of fotosNuevas) {
       const { driveFileId, url } = await googleDrive.subirArchivo(foto.buffer, foto.mimetype, foto.originalname, {
         makePublic: true,
+        parents,
       });
       fotosSubidas.push({ driveFileId, url });
     }
@@ -125,7 +126,7 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo }) {
         videoNuevo.buffer,
         videoNuevo.mimetype,
         videoNuevo.originalname,
-        { makePublic: false },
+        { makePublic: false, parents },
       );
       videoSubido = { driveFileId, url };
     }
@@ -185,6 +186,7 @@ export async function obtenerPorId(req, res, next) {
 
 export async function crear(req, res, next) {
   let subidas = null;
+  let producto = null;
   try {
     const { nombre, descripcion, precio, etiqueta } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
@@ -195,33 +197,50 @@ export async function crear(req, res, next) {
 
     validarArchivos({ fotosNuevas, fotosExistentesCount: 0, video: videoArr });
 
-    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null });
+    // Create the DB row first (no media yet) so we have a real id to name
+    // the product's Drive subfolder with (design item 1's ordering fix).
+    producto = await prisma.product.create({
+      data: {
+        nombre: nombre.trim(),
+        descripcion: descripcion.trim(),
+        precio: String(precio),
+        etiqueta: etiqueta?.trim() || null,
+        caracteristicas: { create: caracteristicas },
+      },
+      include: PRODUCT_INCLUDE,
+    });
+
+    let driveFolderId = null;
+    if (fotosNuevas.length > 0 || videoArr.length > 0) {
+      const carpeta = await googleDrive.crearCarpeta(
+        `${producto.id}-${nombre.trim()}`,
+        process.env.GOOGLE_DRIVE_FOLDER_ID,
+      );
+      driveFolderId = carpeta.driveFolderId;
+    }
+
+    subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null, parents: driveFolderId ? [driveFolderId] : undefined });
     const { fotosSubidas, videoSubido } = subidas;
 
-    let producto;
-    try {
-      producto = await prisma.product.create({
-        data: {
-          nombre: nombre.trim(),
-          descripcion: descripcion.trim(),
-          precio: String(precio),
-          etiqueta: etiqueta?.trim() || null,
-          caracteristicas: { create: caracteristicas },
-          fotos: {
-            create: fotosSubidas.map((f, index) => ({ url: f.url, driveFileId: f.driveFileId, orden: index })),
-          },
-          video: videoSubido ? { create: { url: videoSubido.url, driveFileId: videoSubido.driveFileId } } : undefined,
+    producto = await prisma.product.update({
+      where: { id: producto.id },
+      data: {
+        driveFolderId,
+        fotos: {
+          create: fotosSubidas.map((f, index) => ({ url: f.url, driveFileId: f.driveFileId, orden: index })),
         },
-        include: PRODUCT_INCLUDE,
-      });
-    } catch (dbErr) {
-      // Orphan prevention (design D6): DB write failed after successful Drive upload(s).
-      await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
-      throw dbErr;
-    }
+        video: videoSubido ? { create: { url: videoSubido.url, driveFileId: videoSubido.driveFileId } } : undefined,
+      },
+      include: PRODUCT_INCLUDE,
+    });
 
     res.status(201).json(mapProducto(producto));
   } catch (err) {
+    // Orphan prevention (design D6): clean up any Drive uploads from this
+    // batch. The product DB row (if created) is intentionally NOT rolled
+    // back — per design item 1, a partially-created product (no media) is
+    // an accepted state the admin can fix by editing.
+    if (subidas) await limpiarArchivosSubidos({ fotos: subidas.fotosSubidas, video: subidas.videoSubido });
     next(err);
   }
 }
