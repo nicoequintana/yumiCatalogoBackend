@@ -29,7 +29,7 @@ const upload = multer({
 });
 
 const uploadFields = upload.fields([
-  { name: "fotos", maxCount: 4 },
+  { name: "fotos", maxCount: 10 },
   { name: "video", maxCount: 1 },
 ]);
 

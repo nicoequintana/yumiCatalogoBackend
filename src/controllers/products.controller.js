@@ -383,22 +383,24 @@ export async function eliminar(req, res, next) {
     // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
     await prisma.product.delete({ where: { id } });
 
+    // Always sweep individual files first — a product may have a
+    // driveFolderId AND still have some fotos/video whose driveFileId
+    // predates that folder (e.g. a legacy product that was edited once
+    // after this feature shipped: the new upload went into a fresh
+    // subfolder, but its original photos are still in the flat root
+    // folder). Deleting the folder alone would leave those orphaned.
+    for (const foto of producto.fotos) {
+      if (foto.driveFileId) {
+        await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+      }
+    }
+    if (producto.video?.driveFileId) {
+      await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+    }
+    // Then remove the (now-empty, or never-used) per-product folder itself,
+    // if one exists.
     if (producto.driveFolderId) {
-      // Deleting the folder cascades to every file inside it (design item 1) —
-      // no need to iterate individual fotos/video for products created after
-      // the per-product-folder change.
       await googleDrive.eliminarArchivo(producto.driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
-    } else {
-      // Legacy product (created before per-product folders): fall back to
-      // deleting each file individually from the flat root folder.
-      for (const foto of producto.fotos) {
-        if (foto.driveFileId) {
-          await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
-        }
-      }
-      if (producto.video?.driveFileId) {
-        await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
-      }
     }
 
     res.json({ ok: true });
