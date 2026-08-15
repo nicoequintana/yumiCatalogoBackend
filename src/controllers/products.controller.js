@@ -267,7 +267,20 @@ export async function actualizar(req, res, next) {
     // Photos removed by the client (present before, absent from fotosExistentes) get deleted from Drive too.
     const fotosARemover = existente.fotos.filter((f) => !fotosExistentesIds.includes(f.id));
 
-    const subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null });
+    let driveFolderId = existente.driveFolderId;
+    if (!driveFolderId && (fotosNuevas.length > 0 || videoArr.length > 0)) {
+      const carpeta = await googleDrive.crearCarpeta(
+        `${existente.id}-${(nombre ?? existente.nombre).trim()}`,
+        process.env.GOOGLE_DRIVE_FOLDER_ID,
+      );
+      driveFolderId = carpeta.driveFolderId;
+    }
+
+    const subidas = await subirArchivosNuevos({
+      fotosNuevas,
+      videoNuevo: videoArr[0] ?? null,
+      parents: driveFolderId ? [driveFolderId] : undefined,
+    });
     const { fotosSubidas, videoSubido } = subidas;
 
     let productoActualizado;
@@ -281,6 +294,7 @@ export async function actualizar(req, res, next) {
             descripcion: descripcion !== undefined ? descripcion.trim() : undefined,
             precio: precio !== undefined ? String(precio) : undefined,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
+            driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
         });
 
@@ -366,13 +380,22 @@ export async function eliminar(req, res, next) {
     // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
     await prisma.product.delete({ where: { id } });
 
-    for (const foto of producto.fotos) {
-      if (foto.driveFileId) {
-        await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+    if (producto.driveFolderId) {
+      // Deleting the folder cascades to every file inside it (design item 1) —
+      // no need to iterate individual fotos/video for products created after
+      // the per-product-folder change.
+      await googleDrive.eliminarArchivo(producto.driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
+    } else {
+      // Legacy product (created before per-product folders): fall back to
+      // deleting each file individually from the flat root folder.
+      for (const foto of producto.fotos) {
+        if (foto.driveFileId) {
+          await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+        }
       }
-    }
-    if (producto.video?.driveFileId) {
-      await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+      if (producto.video?.driveFileId) {
+        await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+      }
     }
 
     res.json({ ok: true });
