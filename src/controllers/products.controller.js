@@ -34,6 +34,8 @@ function mapProducto(producto) {
     precio: producto.precio.toString(),
     etiqueta: producto.etiqueta,
     categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
+    vistas: producto.vistas,
+    compartidos: producto.compartidos,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -177,10 +179,42 @@ export async function obtenerPorId(req, res, next) {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
 
-    const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
-    if (!producto) throw httpError(404, "Producto no encontrado.");
+    const existe = await prisma.product.findUnique({ where: { id } });
+    if (!existe) throw httpError(404, "Producto no encontrado.");
+
+    // Admin edit-form prefills also hit this endpoint but aren't a real
+    // visitor view — ?admin=1 (set by AdminProductoForm.jsx) skips the
+    // increment so an admin editing a product doesn't inflate its own count.
+    const esAdmin = req.query.admin !== undefined;
+
+    let producto;
+    if (esAdmin) {
+      producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
+    } else {
+      producto = await prisma.product.update({
+        where: { id },
+        data: { vistas: { increment: 1 } },
+        include: PRODUCT_INCLUDE,
+      });
+    }
 
     res.json(mapProducto(producto));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function compartir(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+
+    const existe = await prisma.product.findUnique({ where: { id } });
+    if (!existe) throw httpError(404, "Producto no encontrado.");
+
+    await prisma.product.update({ where: { id }, data: { compartidos: { increment: 1 } } });
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

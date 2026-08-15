@@ -40,6 +40,7 @@ router.get("/:id/video", productsController.streamVideo);
 router.get("/:id/fotos/:fotoId", productsController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
 router.post("/", uploadFields, productsController.crear);
+router.post("/:id/compartir", productsController.compartir);
 router.put("/:id", uploadFields, productsController.actualizar);
 router.delete("/:id", productsController.eliminar);
 router.delete("/:id/fotos/:fotoId", productsController.eliminarFoto);
