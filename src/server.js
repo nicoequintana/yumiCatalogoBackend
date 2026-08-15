@@ -48,7 +48,7 @@ function mapMulterError(err) {
   if (err.code === "LIMIT_UNEXPECTED_FILE") {
     // multer reuses this code both for a genuinely unknown field name and
     // for exceeding a field's maxCount — err.field tells them apart.
-    if (err.field === "fotos") return "Se permiten máximo 4 fotos por producto.";
+    if (err.field === "fotos") return "Se permiten máximo 10 fotos por producto.";
     if (err.field === "video") return "Se permite máximo 1 video por producto.";
     return "Campo de archivo inesperado.";
   }

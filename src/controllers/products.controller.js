@@ -64,6 +64,20 @@ function httpError(status, message) {
   return err;
 }
 
+/**
+ * Sanitizes a free-text product name for use as a Cloudinary folder path
+ * segment. Cloudinary's `folder` param treats `/` as a path separator, so an
+ * unsanitized name containing `/` (e.g. "Anillo/Oro 18k") would silently
+ * create nested subfolders instead of one flat per-product folder. Replaces
+ * `/` and other path-meaningful characters with `-`.
+ *
+ * @param {string} nombre
+ * @returns {string}
+ */
+function sanitizarNombreParaCarpeta(nombre) {
+  return nombre.replace(/[/\\?%*:|"<>]/g, "-");
+}
+
 function parseCaracteristicas(raw) {
   if (raw === undefined) return undefined;
   try {
@@ -315,7 +329,7 @@ export async function crear(req, res, next) {
 
     // Cloudinary organizes uploads by product, mirroring Drive's old
     // per-product subfolder — see cloudinary.service.js's subirArchivo doc.
-    const folder = `productos/${producto.id}-${nombre.trim()}`;
+    const folder = `productos/${producto.id}-${sanitizarNombreParaCarpeta(nombre.trim())}`;
 
     subidas = await subirArchivosNuevos({ fotosNuevas, videoNuevo: videoArr[0] ?? null, folder });
     const { fotosSubidas, videoSubido } = subidas;
@@ -392,7 +406,7 @@ export async function actualizar(req, res, next) {
     //   );
     //   driveFolderId = carpeta.driveFolderId;
     // }
-    const folder = `productos/${existente.id}-${(nombre ?? existente.nombre).trim()}`;
+    const folder = `productos/${existente.id}-${sanitizarNombreParaCarpeta((nombre ?? existente.nombre).trim())}`;
 
     const subidas = await subirArchivosNuevos({
       fotosNuevas,
