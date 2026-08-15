@@ -4,6 +4,7 @@ import express from "express";
 import productsRouter from "./routes/products.routes.js";
 import categoriasRouter from "./routes/categorias.routes.js";
 import ogRouter from "./routes/og.routes.js";
+import authRouter from "./routes/auth.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -16,6 +17,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.use("/api/auth", authRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/categorias", categoriasRouter);
 app.use("/og", ogRouter);
