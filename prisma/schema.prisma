@@ -18,7 +18,7 @@ model Product {
   descripcion       String           @db.NVarChar(Max)
   precio            Decimal          @db.Decimal(10, 2)
   etiqueta          String?
-  sku               String?          @unique
+  sku               String           @unique
   visibleEnCatalogo Boolean          @default(false)
   driveFolderId     String?
   categoriaId       Int?

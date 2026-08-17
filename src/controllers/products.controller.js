@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
+import { generarSku } from "../lib/sku.js";
 
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
@@ -30,6 +31,7 @@ const PRODUCT_INCLUDE = {
 function mapProducto(producto) {
   return {
     id: producto.id,
+    sku: producto.sku,
     nombre: producto.nombre,
     descripcion: producto.descripcion,
     precio: producto.precio.toString(),
@@ -337,6 +339,7 @@ export async function crear(req, res, next) {
     producto = await prisma.product.update({
       where: { id: producto.id },
       data: {
+        sku: generarSku(producto.nombre, producto.id),
         fotos: {
           create: fotosSubidas.map((f, index) => ({
             url: f.url,
