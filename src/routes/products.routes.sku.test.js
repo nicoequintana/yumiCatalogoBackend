@@ -168,4 +168,13 @@ describe("PATCH /api/products/:id/visibilidad", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("responde 404 si el id no es un número", async () => {
+    const res = await request(buildApp())
+      .patch("/api/products/abc/visibilidad")
+      .set("Authorization", authHeader)
+      .send({ visibleEnCatalogo: true });
+
+    expect(res.status).toBe(404);
+  });
 });
