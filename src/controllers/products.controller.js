@@ -227,9 +227,12 @@ async function limpiarArchivosSubidos({ fotos = [], video = null }) {
   }
 }
 
-export async function listar(_req, res, next) {
+export async function listar(req, res, next) {
   try {
+    const esAdmin = req.query.admin !== undefined;
+
     const productos = await prisma.product.findMany({
+      where: esAdmin ? undefined : { visibleEnCatalogo: true },
       include: PRODUCT_INCLUDE,
       orderBy: { createdAt: "desc" },
     });
@@ -251,6 +254,10 @@ export async function obtenerPorId(req, res, next) {
     // visitor view — ?admin=1 (set by AdminProductoForm.jsx) skips the
     // increment so an admin editing a product doesn't inflate its own count.
     const esAdmin = req.query.admin !== undefined;
+
+    if (!esAdmin && !existe.visibleEnCatalogo) {
+      throw httpError(404, "Producto no encontrado.");
+    }
 
     let producto;
     if (esAdmin) {

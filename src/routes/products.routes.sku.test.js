@@ -86,3 +86,25 @@ describe("crear() genera el sku", () => {
     );
   });
 });
+
+describe("listar() filtra por visibilidad", () => {
+  it("GET /api/products sin ?admin solo trae productos visibles", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products");
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { visibleEnCatalogo: true } }),
+    );
+  });
+
+  it("GET /api/products?admin=1 trae todos los productos, visibles y ocultos", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?admin=1");
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: undefined }),
+    );
+  });
+});

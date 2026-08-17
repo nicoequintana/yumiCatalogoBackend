@@ -29,6 +29,7 @@ describe("GET /og/producto/:id", () => {
       nombre: "Anillo Solitario",
       descripcion: "Un anillo de oro 18k con diamante central.",
       fotos: [{ id: 1, orden: 0, url: "https://res.cloudinary.com/demo/anillo.jpg", cloudinaryPublicId: "anillo", driveFileId: null }],
+      visibleEnCatalogo: true,
     });
 
     const res = await request(buildApp())
@@ -88,6 +89,7 @@ describe("GET /og/producto/:id", () => {
       nombre: '<script>alert(1)</script>',
       descripcion: "Descripción normal.",
       fotos: [],
+      visibleEnCatalogo: true,
     });
 
     const res = await request(buildApp())
@@ -96,5 +98,24 @@ describe("GET /og/producto/:id", () => {
 
     expect(res.text).not.toContain("<script>alert(1)</script>");
     expect(res.text).toContain("&lt;script&gt;");
+  });
+
+  it("un producto oculto (visibleEnCatalogo=false) devuelve el HTML genérico, igual que uno inexistente", async () => {
+    findUniqueMock.mockResolvedValue({
+      id: 5,
+      nombre: "Anillo Solitario",
+      descripcion: "Un anillo de oro 18k con diamante central.",
+      fotos: [{ id: 1, orden: 0, url: "https://res.cloudinary.com/demo/anillo.jpg", cloudinaryPublicId: "anillo", driveFileId: null }],
+      visibleEnCatalogo: false,
+    });
+
+    const res = await request(buildApp())
+      .get("/og/producto/5")
+      .set("User-Agent", "facebookexternalhit/1.1");
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("Anillo Solitario");
+    expect(res.text).toContain("Aura Prestigio");
+    expect(res.text).toContain("https://aura.example.com/og-default.svg");
   });
 });

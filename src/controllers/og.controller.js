@@ -50,7 +50,7 @@ export async function servirOgProducto(req, res, next) {
       include: { fotos: true },
     });
 
-    if (!producto) {
+    if (!producto || !producto.visibleEnCatalogo) {
       const html = renderOgHtml({
         title: SITE_NAME,
         description: "Catálogo online de Aura Prestigio.",
