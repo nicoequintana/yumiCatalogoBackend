@@ -68,7 +68,7 @@ describe("GET /og/producto/:id", () => {
       .set("User-Agent", "Twitterbot/1.0");
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain("Aura Prestigio");
+    expect(res.text).toContain("YIMA Productos");
     expect(res.text).toContain("https://aura.example.com/og-default.svg");
   });
 
@@ -78,7 +78,7 @@ describe("GET /og/producto/:id", () => {
       .set("User-Agent", "Twitterbot/1.0");
 
     expect(res.status).toBe(200);
-    expect(res.text).toContain("Aura Prestigio");
+    expect(res.text).toContain("YIMA Productos");
     expect(res.text).toContain("https://aura.example.com/og-default.svg");
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
@@ -115,7 +115,7 @@ describe("GET /og/producto/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).not.toContain("Anillo Solitario");
-    expect(res.text).toContain("Aura Prestigio");
+    expect(res.text).toContain("YIMA Productos");
     expect(res.text).toContain("https://aura.example.com/og-default.svg");
   });
 });

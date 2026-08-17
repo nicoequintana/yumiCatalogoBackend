@@ -3,7 +3,7 @@ import { esBot } from "../lib/botDetector.js";
 import { truncarDescripcion, resolverImagenOg } from "../lib/ogMeta.js";
 
 const DESCRIPCION_MAX_LENGTH = 160;
-const SITE_NAME = "Aura Prestigio";
+const SITE_NAME = "YIMA Productos";
 
 function escapeHtml(texto) {
   return String(texto)
@@ -53,7 +53,7 @@ export async function servirOgProducto(req, res, next) {
     if (!producto || !producto.visibleEnCatalogo) {
       const html = renderOgHtml({
         title: SITE_NAME,
-        description: "Catálogo online de Aura Prestigio.",
+        description: "Catálogo online de YIMA Productos.",
         image: `${frontendUrl}/og-default.svg`,
         url: productUrl,
       });
