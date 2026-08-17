@@ -39,6 +39,7 @@ function mapProducto(producto) {
     categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
     vistas: producto.vistas,
     compartidos: producto.compartidos,
+    visibleEnCatalogo: producto.visibleEnCatalogo,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -541,6 +542,31 @@ export async function actualizar(req, res, next) {
     }
 
     res.json(mapProducto(productoActualizado));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function actualizarVisibilidad(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+
+    const { visibleEnCatalogo } = req.body;
+    if (typeof visibleEnCatalogo !== "boolean") {
+      throw httpError(400, "visibleEnCatalogo debe ser true o false.");
+    }
+
+    const existente = await prisma.product.findUnique({ where: { id } });
+    if (!existente) throw httpError(404, "Producto no encontrado.");
+
+    const producto = await prisma.product.update({
+      where: { id },
+      data: { visibleEnCatalogo },
+      include: PRODUCT_INCLUDE,
+    });
+
+    res.json(mapProducto(producto));
   } catch (err) {
     next(err);
   }

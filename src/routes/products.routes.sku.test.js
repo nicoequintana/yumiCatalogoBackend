@@ -108,3 +108,64 @@ describe("listar() filtra por visibilidad", () => {
     );
   });
 });
+
+describe("PATCH /api/products/:id/visibilidad", () => {
+  it("responde 401 sin token", async () => {
+    const res = await request(buildApp())
+      .patch("/api/products/1/visibilidad")
+      .send({ visibleEnCatalogo: true });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("actualiza visibleEnCatalogo y devuelve el producto", async () => {
+    findUniqueMock.mockResolvedValue({ id: 1, nombre: "Producto X" });
+    updateMock.mockResolvedValue({
+      id: 1,
+      nombre: "Producto X",
+      sku: "YIMA-PRODUC-1",
+      precio: "50",
+      etiqueta: null,
+      categoria: null,
+      caracteristicas: [],
+      fotos: [],
+      video: null,
+      vistas: 0,
+      compartidos: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      visibleEnCatalogo: true,
+    });
+
+    const res = await request(buildApp())
+      .patch("/api/products/1/visibilidad")
+      .set("Authorization", authHeader)
+      .send({ visibleEnCatalogo: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.visibleEnCatalogo).toBe(true);
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 1 }, data: { visibleEnCatalogo: true } }),
+    );
+  });
+
+  it("responde 404 si el producto no existe", async () => {
+    findUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .patch("/api/products/999/visibilidad")
+      .set("Authorization", authHeader)
+      .send({ visibleEnCatalogo: true });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("responde 400 si visibleEnCatalogo no es un booleano", async () => {
+    const res = await request(buildApp())
+      .patch("/api/products/1/visibilidad")
+      .set("Authorization", authHeader)
+      .send({ visibleEnCatalogo: "sí" });
+
+    expect(res.status).toBe(400);
+  });
+});
