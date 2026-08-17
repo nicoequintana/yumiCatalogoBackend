@@ -13,7 +13,10 @@ const PREFIJO = "YIMA";
 export function generarSku(nombre, id) {
   const segmento = nombre
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "") // quita diacríticos (tildes, diéresis)
+    // Quita diacríticos (tildes, diéresis) del bloque Unicode "Combining
+    // Diacritical Marks" (U+0300–U+036F). Efecto intencional: ñ -> n + tilde
+    // combinante, que esta regex también elimina, quedando "n" (accent-folding).
+    .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "") // solo alfanumérico
     .slice(0, 6);
