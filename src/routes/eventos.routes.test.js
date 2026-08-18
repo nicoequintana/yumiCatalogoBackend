@@ -98,6 +98,31 @@ describe("POST /api/eventos", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("responde 400 si productId es 0", async () => {
+    const res = await request(buildApp()).post("/api/eventos").send({ tipo: "VISTA_PRODUCTO", productId: 0 });
+
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si productId es negativo", async () => {
+    const res = await request(buildApp())
+      .post("/api/eventos")
+      .send({ tipo: "VISTA_PRODUCTO", productId: -1 });
+
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si productId es un float", async () => {
+    const res = await request(buildApp())
+      .post("/api/eventos")
+      .send({ tipo: "VISTA_PRODUCTO", productId: 1.5 });
+
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("nunca escribe un campo de tipo IP en el data pasado a Prisma", async () => {
     createMock.mockResolvedValue({ id: 4 });
 

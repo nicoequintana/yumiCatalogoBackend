@@ -24,7 +24,9 @@ export async function crear(req, res, next) {
     let productId = null;
     if (req.body?.productId !== undefined && req.body?.productId !== null) {
       productId = Number(req.body.productId);
-      if (Number.isNaN(productId)) throw httpError(400, "productId debe ser numérico.");
+      if (!Number.isInteger(productId) || productId <= 0) {
+        throw httpError(400, "productId debe ser un entero positivo.");
+      }
     }
 
     const evento = await prisma.eventoTrafico.create({
