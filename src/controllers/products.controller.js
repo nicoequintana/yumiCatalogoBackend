@@ -652,7 +652,9 @@ export async function actualizarVisibilidad(req, res, next) {
  * quick-edit controls (`destacado` toggle, `orden` input), mirroring
  * `actualizarVisibilidad`'s shape. Accepts JSON, so `destacado` arrives as a
  * real boolean here (unlike crear()/actualizar()'s multipart/form-data,
- * where it arrives as a string) — validated directly, no coercion needed.
+ * where it arrives as a string) — `validarCamposMerchandising()` handles
+ * both shapes via `coerceDestacado()`, so this endpoint reuses the same
+ * validator as crear()/actualizar() instead of re-checking the rules here.
  * At least one of the two fields must be present; each provided field is
  * validated and written, any omitted field is left untouched.
  */
@@ -666,23 +668,14 @@ export async function actualizarMerchandising(req, res, next) {
     if (destacado === undefined && orden === undefined) {
       throw httpError(400, "Debe enviar destacado y/o orden.");
     }
-    if (destacado !== undefined && typeof destacado !== "boolean") {
-      throw httpError(400, "destacado debe ser true o false.");
-    }
-    let ordenNormalizado;
-    if (orden !== undefined) {
-      if (orden === null || orden === "" || Number.isNaN(Number(orden)) || !Number.isInteger(Number(orden))) {
-        throw httpError(400, "orden debe ser un número entero.");
-      }
-      ordenNormalizado = Number(orden);
-    }
+    const merchandising = validarCamposMerchandising({ destacado, orden });
 
     const existente = await prisma.product.findUnique({ where: { id } });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
     const producto = await prisma.product.update({
       where: { id },
-      data: { destacado, orden: ordenNormalizado },
+      data: { destacado: merchandising.destacado, orden: merchandising.orden },
       include: PRODUCT_INCLUDE,
     });
 
