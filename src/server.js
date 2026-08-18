@@ -4,6 +4,7 @@ import express from "express";
 import productsRouter from "./routes/products.routes.js";
 import categoriasRouter from "./routes/categorias.routes.js";
 import ogRouter from "./routes/og.routes.js";
+import sitemapRouter from "./routes/sitemap.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import usuariosRouter from "./routes/usuarios.routes.js";
 import adminRouter from "./routes/admin.routes.js";
@@ -30,6 +31,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/config", configRouter);
 app.use("/api/eventos", eventosRouter);
 app.use("/og", ogRouter);
+app.use("/sitemap.xml", sitemapRouter);
 
 // 404 fallback for unknown routes
 app.use((_req, res) => {
