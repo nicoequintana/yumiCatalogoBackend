@@ -20,6 +20,9 @@ model Product {
   etiqueta          String?
   sku               String           @unique
   visibleEnCatalogo Boolean          @default(false)
+  disponibilidad    String           @default("DISPONIBLE") @db.VarChar(20) // valores: DISPONIBLE | AGOTADO | A_PEDIDO
+  destacado         Boolean          @default(false)
+  orden             Int              @default(0) // control manual de merchandising, menor = primero
   driveFolderId     String?
   categoriaId       Int?
   categoria         Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
@@ -31,6 +34,9 @@ model Product {
   eventos           EventoTrafico[]
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+
+  @@index([visibleEnCatalogo, orden])
+  @@index([destacado])
 }
 
 model Caracteristica {

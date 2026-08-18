@@ -44,6 +44,7 @@ router.post("/", requireAuth, uploadFields, productsController.crear);
 router.post("/:id/compartir", productsController.compartir);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
+router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);
 router.delete("/:id", requireAuth, productsController.eliminar);
 router.delete("/:id/fotos/:fotoId", requireAuth, productsController.eliminarFoto);
 

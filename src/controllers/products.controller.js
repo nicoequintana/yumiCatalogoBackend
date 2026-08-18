@@ -7,6 +7,8 @@ import { logError } from "../lib/logError.js";
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
 
+const DISPONIBILIDAD_VALIDA = ["DISPONIBLE", "AGOTADO", "A_PEDIDO"];
+
 const PRODUCT_INCLUDE = {
   caracteristicas: true,
   fotos: { orderBy: { orden: "asc" } },
@@ -41,6 +43,9 @@ function mapProducto(producto) {
     vistas: producto.vistas,
     compartidos: producto.compartidos,
     visibleEnCatalogo: producto.visibleEnCatalogo,
+    disponibilidad: producto.disponibilidad,
+    destacado: producto.destacado,
+    orden: producto.orden,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -120,6 +125,53 @@ function validarCamposBase({ nombre, descripcion, precio }, { esCreacion }) {
       throw httpError(400, "El precio del producto debe ser un número válido.");
     }
   }
+}
+
+/**
+ * Coerces a `destacado` value that may arrive as a real boolean (JSON body)
+ * or as a string (multipart/form-data, e.g. crear()/actualizar()) into a
+ * strict boolean. Only the exact string forms "true"/"false" are accepted —
+ * anything else (e.g. "1", "sí") is rejected rather than guessed at.
+ */
+function coerceDestacado(destacado) {
+  if (typeof destacado === "boolean") return destacado;
+  if (destacado === "true") return true;
+  if (destacado === "false") return false;
+  return undefined;
+}
+
+/**
+ * Validates + normalizes the merchandising fields added in Sprint 3
+ * (`disponibilidad`, `destacado`, `orden`). Follows the same `esCreacion`
+ * pattern as `validarCamposBase`: a field is only validated/applied when the
+ * caller explicitly sent it — omitting it on update leaves the existing
+ * value untouched, and on create it just falls back to its DB default.
+ * Returns the normalized values (booleans/numbers coerced from the raw
+ * strings multipart/form-data sends) for the caller to use in the Prisma
+ * write.
+ */
+function validarCamposMerchandising({ disponibilidad, destacado, orden }) {
+  if (disponibilidad !== undefined && !DISPONIBILIDAD_VALIDA.includes(disponibilidad)) {
+    throw httpError(400, "disponibilidad debe ser DISPONIBLE, AGOTADO o A_PEDIDO.");
+  }
+
+  let destacadoNormalizado;
+  if (destacado !== undefined) {
+    destacadoNormalizado = coerceDestacado(destacado);
+    if (destacadoNormalizado === undefined) {
+      throw httpError(400, "destacado debe ser true o false.");
+    }
+  }
+
+  let ordenNormalizado;
+  if (orden !== undefined) {
+    if (orden === null || orden === "" || Number.isNaN(Number(orden)) || !Number.isInteger(Number(orden))) {
+      throw httpError(400, "orden debe ser un número entero.");
+    }
+    ordenNormalizado = Number(orden);
+  }
+
+  return { disponibilidad, destacado: destacadoNormalizado, orden: ordenNormalizado };
 }
 
 function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
@@ -236,7 +288,7 @@ export async function listar(req, res, next) {
     const productos = await prisma.product.findMany({
       where: esAdmin ? undefined : { visibleEnCatalogo: true },
       include: PRODUCT_INCLUDE,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
     });
     res.json(productos.map(mapProducto));
   } catch (err) {
@@ -298,8 +350,9 @@ export async function crear(req, res, next) {
   let subidas = null;
   let producto = null;
   try {
-    const { nombre, descripcion, precio, etiqueta, categoriaId } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId, disponibilidad, destacado, orden } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
+    const merchandising = validarCamposMerchandising({ disponibilidad, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
     const fotosNuevas = req.files?.fotos ?? [];
@@ -329,6 +382,9 @@ export async function crear(req, res, next) {
             etiqueta: etiqueta?.trim() || null,
             categoriaId: categoriaId ? Number(categoriaId) : null,
             sku: generarSku(nombre.trim()),
+            disponibilidad: merchandising.disponibilidad ?? "DISPONIBLE",
+            destacado: merchandising.destacado ?? false,
+            orden: merchandising.orden ?? 0,
             caracteristicas: { create: caracteristicas },
           },
           include: PRODUCT_INCLUDE,
@@ -403,8 +459,9 @@ export async function actualizar(req, res, next) {
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
-    const { nombre, descripcion, precio, etiqueta, categoriaId } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId, disponibilidad, destacado, orden } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
+    const merchandising = validarCamposMerchandising({ disponibilidad, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
     const fotosExistentesIds = parseFotosExistentes(req.body.fotosExistentes) ?? existente.fotos.map((f) => f.id);
@@ -453,6 +510,9 @@ export async function actualizar(req, res, next) {
             precio: precio !== undefined ? String(precio) : undefined,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
             categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
+            disponibilidad: merchandising.disponibilidad,
+            destacado: merchandising.destacado,
+            orden: merchandising.orden,
             // Cloudinary storage migration: driveFolderId no longer computed for new uploads.
             // driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
@@ -578,6 +638,51 @@ export async function actualizarVisibilidad(req, res, next) {
     const producto = await prisma.product.update({
       where: { id },
       data: { visibleEnCatalogo },
+      include: PRODUCT_INCLUDE,
+    });
+
+    res.json(mapProducto(producto));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /:id/merchandising — combined endpoint for the two admin-table
+ * quick-edit controls (`destacado` toggle, `orden` input), mirroring
+ * `actualizarVisibilidad`'s shape. Accepts JSON, so `destacado` arrives as a
+ * real boolean here (unlike crear()/actualizar()'s multipart/form-data,
+ * where it arrives as a string) — validated directly, no coercion needed.
+ * At least one of the two fields must be present; each provided field is
+ * validated and written, any omitted field is left untouched.
+ */
+export async function actualizarMerchandising(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+
+    const { destacado, orden } = req.body;
+
+    if (destacado === undefined && orden === undefined) {
+      throw httpError(400, "Debe enviar destacado y/o orden.");
+    }
+    if (destacado !== undefined && typeof destacado !== "boolean") {
+      throw httpError(400, "destacado debe ser true o false.");
+    }
+    let ordenNormalizado;
+    if (orden !== undefined) {
+      if (orden === null || orden === "" || Number.isNaN(Number(orden)) || !Number.isInteger(Number(orden))) {
+        throw httpError(400, "orden debe ser un número entero.");
+      }
+      ordenNormalizado = Number(orden);
+    }
+
+    const existente = await prisma.product.findUnique({ where: { id } });
+    if (!existente) throw httpError(404, "Producto no encontrado.");
+
+    const producto = await prisma.product.update({
+      where: { id },
+      data: { destacado, orden: ordenNormalizado },
       include: PRODUCT_INCLUDE,
     });
 
