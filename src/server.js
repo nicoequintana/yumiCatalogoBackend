@@ -16,6 +16,12 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const CORS_ORIGIN = process.env.CORS_ORIGIN?.split(",") ?? "http://localhost:5173";
 
+// Deploy en EasyPanel corre detrás de un reverse proxy: sin esto,
+// express-rate-limit (y cualquier lectura de req.ip) vería la IP interna
+// del proxy en vez de la IP real del cliente, agrupando a todos los
+// usuarios en un mismo bucket de rate limit.
+app.set("trust proxy", 1);
+
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
