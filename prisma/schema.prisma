@@ -28,6 +28,7 @@ model Product {
   caracteristicas   Caracteristica[]
   fotos             Foto[]
   video             Video?
+  eventos           EventoTrafico[]
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 }
@@ -72,4 +73,29 @@ model Usuario {
   email        String   @unique
   passwordHash String
   createdAt    DateTime @default(now())
+}
+
+model EventoTrafico {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA
+  productId Int?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  referrer  String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([tipo, createdAt])
+  @@index([productId, tipo])
+}
+
+model ErrorLog {
+  id        Int      @id @default(autoincrement())
+  mensaje   String   @db.NVarChar(Max)
+  stack     String?  @db.NVarChar(Max)
+  ruta      String?
+  metodo    String?
+  status    Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
