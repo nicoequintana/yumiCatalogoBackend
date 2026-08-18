@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as ordenesController from "../controllers/ordenes.controller.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
@@ -18,5 +19,11 @@ const limitadorCrearOrden = crearLimitadorDeVelocidad({
 });
 
 router.post("/", limitadorCrearOrden, ordenesController.crear);
+
+// Gestión admin de órdenes — todas protegidas con requireAuth (a diferencia
+// del checkout de invitado arriba, que es público).
+router.get("/", requireAuth, ordenesController.listar);
+router.get("/:id", requireAuth, ordenesController.obtenerPorId);
+router.patch("/:id/estado", requireAuth, ordenesController.actualizarEstado);
 
 export default router;

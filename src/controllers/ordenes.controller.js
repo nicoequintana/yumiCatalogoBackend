@@ -3,6 +3,9 @@ import { normalizarDni, esDniValido } from "../lib/dni.js";
 
 const DISPONIBILIDAD_AGOTADO = "AGOTADO";
 const MAX_INTENTOS_DNI = 5;
+const ESTADO_VALIDO = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION", "ENTREGADA", "CANCELADA"];
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -198,6 +201,148 @@ export async function crear(req, res, next) {
     emitirEventoOrdenCreada();
 
     res.status(201).json(orden);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Construye el `where` de `listar()` a partir de los filtros opcionales de
+ * query string: estado (match exacto), rango de fechas sobre `createdAt`
+ * (`desde`/`hasta`, ISO), y dni/nombre del cliente (relation filter contra
+ * `Cliente`, vía `where.cliente`). Todos combinables.
+ *
+ * Mismo criterio que `products.controller.js`'s `construirFiltrosListado`:
+ * un valor malformado (fecha inválida, estado desconocido) nunca tira
+ * 400/500 acá — simplemente esa porción del filtro se ignora.
+ */
+function construirFiltrosOrdenes(query) {
+  const where = {};
+
+  if (query.estado !== undefined && ESTADO_VALIDO.includes(query.estado)) {
+    where.estado = query.estado;
+  }
+
+  const rangoFechas = {};
+  if (query.desde !== undefined) {
+    const desde = new Date(query.desde);
+    if (!Number.isNaN(desde.getTime())) rangoFechas.gte = desde;
+  }
+  if (query.hasta !== undefined) {
+    const hasta = new Date(query.hasta);
+    if (!Number.isNaN(hasta.getTime())) rangoFechas.lte = hasta;
+  }
+  if (Object.keys(rangoFechas).length > 0) where.createdAt = rangoFechas;
+
+  const filtroCliente = {};
+  if (typeof query.dni === "string" && query.dni !== "") {
+    filtroCliente.dni = normalizarDni(query.dni);
+  }
+  // Sin `mode: "insensitive"` a propósito: el conector mssql de Prisma no lo
+  // soporta y la collation por defecto de esta base ya es case-insensitive
+  // (mismo criterio que `products.controller.js`'s `construirFiltrosListado`).
+  if (typeof query.nombre === "string" && query.nombre !== "") {
+    filtroCliente.nombre = { contains: query.nombre };
+  }
+  if (Object.keys(filtroCliente).length > 0) where.cliente = filtroCliente;
+
+  return where;
+}
+
+/**
+ * GET /api/ordenes — listado paginado para el panel admin, protegido con
+ * requireAuth. Filtros combinables por query string (estado/desde/hasta/
+ * dni/nombre), orden por createdAt desc (más reciente primero). Incluye
+ * `cliente` e `items` completos: el set de datos por orden es chico y la
+ * tabla admin necesita poder mostrar cantidad de items y total sin un
+ * segundo request.
+ *
+ * Paginación: mismo patrón que `admin.controller.js`'s `listarErrorLogs`
+ * (Sprint 1) — page/pageSize floored/clamped con defaults sanos.
+ */
+export async function listar(req, res, next) {
+  try {
+    const pageParsed = Math.floor(Number(req.query.page));
+    const page = Number.isFinite(pageParsed) && pageParsed > 0 ? pageParsed : 1;
+
+    const pageSizeParsed = Math.floor(Number(req.query.pageSize));
+    const pageSize =
+      Number.isFinite(pageSizeParsed) && pageSizeParsed > 0
+        ? Math.min(pageSizeParsed, MAX_PAGE_SIZE)
+        : DEFAULT_PAGE_SIZE;
+
+    const where = construirFiltrosOrdenes(req.query);
+
+    const [total, ordenes] = await Promise.all([
+      prisma.orden.count({ where }),
+      prisma.orden.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { cliente: true, items: true },
+      }),
+    ]);
+
+    res.json({ data: ordenes, page, pageSize, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/ordenes/:id — detalle completo de una orden, protegido con
+ * requireAuth. Incluye `cliente` e `items` (con nombreProducto/
+ * precioUnitario/cantidad ya snapshoteados en ItemOrden, sin necesidad de
+ * volver a joinear contra Product). 404 si el id no es numérico o no existe.
+ */
+export async function obtenerPorId(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw httpError(404, "Orden no encontrada.");
+
+    const orden = await prisma.orden.findUnique({
+      where: { id },
+      include: { cliente: true, items: true },
+    });
+    if (!orden) throw httpError(404, "Orden no encontrada.");
+
+    res.json(orden);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /api/ordenes/:id/estado — cambia el estado de una orden, protegido
+ * con requireAuth. Validación manual contra los 5 valores válidos (mismo
+ * estilo `.includes()` que `products.controller.js` usa para
+ * `disponibilidad`).
+ *
+ * Deliberadamente SIN máquina de estados: cualquier estado válido puede
+ * pasar a cualquier otro (incluso ENTREGADA -> PENDIENTE), sin restricciones
+ * sobre el estado de origen. Decisión de diseño ya cerrada en el plan del
+ * sprint — el admin es humano y puede necesitar corregir errores de carga.
+ */
+export async function actualizarEstado(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw httpError(404, "Orden no encontrada.");
+
+    const { estado } = req.body;
+    if (!ESTADO_VALIDO.includes(estado)) {
+      throw httpError(400, `estado debe ser uno de: ${ESTADO_VALIDO.join(", ")}.`);
+    }
+
+    const actual = await prisma.orden.findUnique({ where: { id } });
+    if (!actual) throw httpError(404, "Orden no encontrada.");
+
+    const orden = await prisma.orden.update({
+      where: { id },
+      data: { estado },
+    });
+
+    res.json(orden);
   } catch (err) {
     next(err);
   }

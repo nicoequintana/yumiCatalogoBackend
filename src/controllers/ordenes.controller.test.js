@@ -5,6 +5,10 @@ const clienteCreateMock = vi.fn();
 const clienteUpdateMock = vi.fn();
 const productFindManyMock = vi.fn();
 const ordenCreateMock = vi.fn();
+const ordenFindManyMock = vi.fn();
+const ordenFindUniqueMock = vi.fn();
+const ordenUpdateMock = vi.fn();
+const ordenCountMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const transactionMock = vi.fn();
 
@@ -18,6 +22,13 @@ vi.mock("../lib/prisma.js", () => ({
     product: {
       findMany: (...args) => productFindManyMock(...args),
     },
+    orden: {
+      create: (...args) => ordenCreateMock(...args),
+      findMany: (...args) => ordenFindManyMock(...args),
+      findUnique: (...args) => ordenFindUniqueMock(...args),
+      update: (...args) => ordenUpdateMock(...args),
+      count: (...args) => ordenCountMock(...args),
+    },
     eventoTrafico: {
       create: (...args) => eventoTraficoCreateMock(...args),
     },
@@ -25,10 +36,10 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { crear } = await import("./ordenes.controller.js");
+const { crear, listar, obtenerPorId, actualizarEstado } = await import("./ordenes.controller.js");
 
-function buildReqRes(body) {
-  const req = { body };
+function buildReqRes({ body, query, params } = {}) {
+  const req = { body: body ?? {}, query: query ?? {}, params: params ?? {} };
   const res = {
     statusCode: null,
     body: null,
@@ -37,6 +48,9 @@ function buildReqRes(body) {
       return this;
     },
     json(payload) {
+      // Mirrors Express's real behavior: res.json() without a prior
+      // res.status() call implicitly responds 200.
+      if (this.statusCode === null) this.statusCode = 200;
       this.body = payload;
       return this;
     },
@@ -95,6 +109,10 @@ beforeEach(() => {
   clienteUpdateMock.mockReset();
   productFindManyMock.mockReset();
   ordenCreateMock.mockReset();
+  ordenFindManyMock.mockReset();
+  ordenFindUniqueMock.mockReset();
+  ordenUpdateMock.mockReset();
+  ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   transactionMock.mockReset();
 
@@ -132,7 +150,7 @@ function bodyValido(overrides = {}) {
 
 describe("crear() — validación de campos requeridos", () => {
   it("responde 400 si falta dni", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ dni: undefined }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ dni: undefined }) });
     await crear(req, res, next);
     expect(next).toHaveBeenCalled();
     expect(next.mock.calls[0][0].status).toBe(400);
@@ -140,32 +158,32 @@ describe("crear() — validación de campos requeridos", () => {
   });
 
   it("responde 400 si falta nombre", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ nombre: "" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ nombre: "" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 si falta telefono", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ telefono: "" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ telefono: "" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 si items es un array vacío", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
     expect(productFindManyMock).not.toHaveBeenCalled();
   });
 
   it("responde 400 si items no es un array", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: "no-array" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: "no-array" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 si falta items", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: undefined }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: undefined }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
@@ -173,7 +191,7 @@ describe("crear() — validación de campos requeridos", () => {
 
 describe("crear() — validación de DNI", () => {
   it("responde 400 con DNI inválido (muy corto) antes de tocar la DB", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ dni: "123" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ dni: "123" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
     expect(clienteFindUniqueMock).not.toHaveBeenCalled();
@@ -181,13 +199,13 @@ describe("crear() — validación de DNI", () => {
   });
 
   it("responde 400 con DNI inválido (muy largo)", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ dni: "123456789012" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ dni: "123456789012" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 con DNI que no tiene ningún dígito", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ dni: "abcdefgh" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ dni: "abcdefgh" }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
@@ -195,33 +213,35 @@ describe("crear() — validación de DNI", () => {
 
 describe("crear() — validación de items", () => {
   it("responde 400 si un item tiene productId no numérico", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: "abc", cantidad: 1 }] }));
+    const { req, res, next } = buildReqRes({
+      body: bodyValido({ items: [{ productId: "abc", cantidad: 1 }] }),
+    });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
     expect(productFindManyMock).not.toHaveBeenCalled();
   });
 
   it("responde 400 si un item tiene productId <= 0", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 0, cantidad: 1 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 0, cantidad: 1 }] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 si un item tiene cantidad <= 0", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: 0 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 0 }] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
     expect(productFindManyMock).not.toHaveBeenCalled();
   });
 
   it("responde 400 si un item tiene cantidad negativa", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: -1 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: -1 }] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
 
   it("responde 400 si un item tiene cantidad no entera", async () => {
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: 1.5 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1.5 }] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
   });
@@ -230,14 +250,14 @@ describe("crear() — validación de items", () => {
 describe("crear() — validación de productos contra la DB", () => {
   it("responde 400 si algún productId no existe, y no crea la orden (whole request rejected)", async () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]); // solo vuelve 1 de los 2 pedidos
-    const { req, res, next } = buildReqRes(
-      bodyValido({
+    const { req, res, next } = buildReqRes({
+      body: bodyValido({
         items: [
           { productId: 1, cantidad: 1 },
           { productId: 999, cantidad: 1 },
         ],
       }),
-    );
+    });
 
     await crear(req, res, next);
 
@@ -248,7 +268,7 @@ describe("crear() — validación de productos contra la DB", () => {
 
   it("responde 400 si un producto está AGOTADO, y no crea la orden", async () => {
     productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, disponibilidad: "AGOTADO" }]);
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: 1 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1 }] }) });
 
     await crear(req, res, next);
 
@@ -258,7 +278,7 @@ describe("crear() — validación de productos contra la DB", () => {
 
   it("responde 400 si un producto tiene visibleEnCatalogo false, y no crea la orden", async () => {
     productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, visibleEnCatalogo: false }]);
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: 1 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1 }] }) });
 
     await crear(req, res, next);
 
@@ -274,7 +294,7 @@ describe("crear() — cliente nuevo", () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(bodyValido());
+    const { req, res, next } = buildReqRes({ body: bodyValido() });
     await crear(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
@@ -305,9 +325,9 @@ describe("crear() — cliente existente reutilizado", () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(
-      bodyValido({ nombre: "Juan Perez Actualizado", telefono: "1199999999" }),
-    );
+    const { req, res, next } = buildReqRes({
+      body: bodyValido({ nombre: "Juan Perez Actualizado", telefono: "1199999999" }),
+    });
     await crear(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
@@ -330,7 +350,7 @@ describe("crear() — cliente existente reutilizado", () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(bodyValido({ dni: "12.345.678" }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ dni: "12.345.678" }) });
     await crear(req, res, next);
 
     expect(clienteFindUniqueMock).toHaveBeenCalledWith(expect.objectContaining({ where: { dni: "12345678" } }));
@@ -350,7 +370,7 @@ describe("crear() — snapshot de precio y nombre (invariante permanente)", () =
     productFindManyMock.mockResolvedValue([productoMutable]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(bodyValido({ items: [{ productId: 1, cantidad: 3 }] }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 3 }] }) });
     await crear(req, res, next);
 
     expect(ordenCreateMock).toHaveBeenCalledWith(
@@ -387,14 +407,14 @@ describe("crear() — snapshot de precio y nombre (invariante permanente)", () =
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE, PRODUCTO_2_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(
-      bodyValido({
+    const { req, res, next } = buildReqRes({
+      body: bodyValido({
         items: [
           { productId: 1, cantidad: 2 },
           { productId: 2, cantidad: 5 },
         ],
       }),
-    );
+    });
     await crear(req, res, next);
 
     const callArgs = ordenCreateMock.mock.calls[0][0];
@@ -425,7 +445,7 @@ describe("crear() — concurrencia (retry-on-P2002 para dni)", () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(bodyValido());
+    const { req, res, next } = buildReqRes({ body: bodyValido() });
     await crear(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
@@ -443,7 +463,7 @@ describe("crear() — evento ORDEN_CREADA no bloquea la respuesta", () => {
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
     eventoTraficoCreateMock.mockRejectedValue(new Error("DB caída"));
 
-    const { req, res, next } = buildReqRes(bodyValido());
+    const { req, res, next } = buildReqRes({ body: bodyValido() });
     await crear(req, res, next);
 
     // Give any un-awaited fire-and-forget promise a tick to settle.
@@ -461,11 +481,273 @@ describe("crear() — respuesta 201", () => {
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
-    const { req, res, next } = buildReqRes(bodyValido());
+    const { req, res, next } = buildReqRes({ body: bodyValido() });
     await crear(req, res, next);
 
     expect(res.statusCode).toBe(201);
     expect(res.body.cliente).toEqual(CLIENTE_EXISTENTE);
     expect(res.body.items).toEqual(ORDEN_CREADA_MOCK.items);
+  });
+});
+
+describe("listar()", () => {
+  it("lista órdenes ordenadas por createdAt desc, con cliente e items incluidos", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_CREADA_MOCK]);
+    ordenCountMock.mockResolvedValue(1);
+
+    const { req, res, next } = buildReqRes();
+    await listar(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(ordenFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: { createdAt: "desc" },
+        include: { cliente: true, items: true },
+      }),
+    );
+    expect(res.body.data).toEqual([ORDEN_CREADA_MOCK]);
+    expect(res.body.total).toBe(1);
+  });
+
+  it("filtra por estado exacto", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { estado: "CONFIRMADA" } });
+    await listar(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(ordenFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ estado: "CONFIRMADA" }) }),
+    );
+  });
+
+  it("ignora un estado con valor inválido (no filtra, no rompe)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { estado: "NO_EXISTE" } });
+    await listar(req, res, next);
+
+    expect(res.statusCode).toBe(200);
+    const whereUsado = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(whereUsado.estado).toBeUndefined();
+  });
+
+  it("filtra por rango de fechas (desde/hasta) sobre createdAt", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { desde: "2026-01-01", hasta: "2026-01-31" },
+    });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
+    expect(where.createdAt.lte).toBeInstanceOf(Date);
+  });
+
+  it("filtra solo por desde (sin hasta)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { desde: "2026-01-01" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
+    expect(where.createdAt.lte).toBeUndefined();
+  });
+
+  it("ignora una fecha inválida sin romper la consulta", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { desde: "no-es-fecha" } });
+    await listar(req, res, next);
+
+    expect(res.statusCode).toBe(200);
+    const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+  });
+
+  it("filtra por dni del cliente (relation filter)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { dni: "12.345.678" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    // El dni se normaliza antes de filtrar, igual que en crear().
+    expect(where.cliente).toEqual(expect.objectContaining({ dni: "12345678" }));
+  });
+
+  it("filtra por nombre del cliente (relation filter, contains)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { nombre: "Juan" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.cliente).toEqual(expect.objectContaining({ nombre: { contains: "Juan" } }));
+  });
+
+  it("combina múltiples filtros a la vez", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { estado: "PENDIENTE", dni: "12345678", nombre: "Juan", desde: "2026-01-01" },
+    });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.estado).toBe("PENDIENTE");
+    expect(where.cliente).toEqual(expect.objectContaining({ dni: "12345678", nombre: { contains: "Juan" } }));
+    expect(where.createdAt.gte).toBeInstanceOf(Date);
+  });
+
+  it("usa page y pageSize de la query string para paginar", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { page: "2", pageSize: "5" } });
+    await listar(req, res, next);
+
+    expect(res.body.page).toBe(2);
+    expect(res.body.pageSize).toBe(5);
+    expect(ordenFindManyMock).toHaveBeenCalledWith(expect.objectContaining({ skip: 5, take: 5 }));
+  });
+
+  it("clampea pageSize por encima del máximo permitido", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { pageSize: "999999" } });
+    await listar(req, res, next);
+
+    expect(res.body.pageSize).toBe(100);
+    expect(ordenFindManyMock).toHaveBeenCalledWith(expect.objectContaining({ take: 100 }));
+  });
+
+  it("usa el default si page/pageSize son inválidos, sin tirar 500", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { page: "abc", pageSize: "-3" } });
+    await listar(req, res, next);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.page).toBe(1);
+    expect(res.body.pageSize).toBe(20);
+  });
+});
+
+describe("obtenerPorId()", () => {
+  it("devuelve la orden con cliente e items", async () => {
+    ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" } });
+    await obtenerPorId(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(ordenFindUniqueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 100 },
+        include: { cliente: true, items: true },
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(ORDEN_CREADA_MOCK);
+  });
+
+  it("responde 404 si la orden no existe", async () => {
+    ordenFindUniqueMock.mockResolvedValue(null);
+
+    const { req, res, next } = buildReqRes({ params: { id: "999" } });
+    await obtenerPorId(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(404);
+    expect(res.statusCode).toBeNull();
+  });
+
+  it("responde 404 si el id no es un número válido", async () => {
+    const { req, res, next } = buildReqRes({ params: { id: "abc" } });
+    await obtenerPorId(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(404);
+    expect(ordenFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("actualizarEstado()", () => {
+  it("actualiza el estado a un valor válido", async () => {
+    ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(ordenUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 100 }, data: { estado: "CONFIRMADA" } }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.body.estado).toBe("CONFIRMADA");
+  });
+
+  it("permite ENTREGADA -> PENDIENTE (sin máquina de estados, cambios libres)", async () => {
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "ENTREGADA" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "PENDIENTE" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.estado).toBe("PENDIENTE");
+  });
+
+  it("permite CANCELADA -> CONFIRMADA (cualquier transición es válida)", async () => {
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CANCELADA" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("responde 400 si el estado no es uno de los 5 valores válidos", async () => {
+    ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "INVENTADO" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(400);
+    expect(ordenUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 404 si la orden no existe", async () => {
+    ordenFindUniqueMock.mockResolvedValue(null);
+
+    const { req, res, next } = buildReqRes({ params: { id: "999" }, body: { estado: "CONFIRMADA" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(404);
+    expect(ordenUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 404 si el id no es un número válido", async () => {
+    const { req, res, next } = buildReqRes({ params: { id: "abc" }, body: { estado: "CONFIRMADA" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(404);
+    expect(ordenFindUniqueMock).not.toHaveBeenCalled();
   });
 });

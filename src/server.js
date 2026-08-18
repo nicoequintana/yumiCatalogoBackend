@@ -11,6 +11,7 @@ import adminRouter from "./routes/admin.routes.js";
 import configRouter from "./routes/config.routes.js";
 import eventosRouter from "./routes/eventos.routes.js";
 import ordenesRouter from "./routes/ordenes.routes.js";
+import clientesRouter from "./routes/clientes.routes.js";
 import { logError } from "./lib/logError.js";
 
 const app = express();
@@ -38,6 +39,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/config", configRouter);
 app.use("/api/eventos", eventosRouter);
 app.use("/api/ordenes", ordenesRouter);
+app.use("/api/clientes", clientesRouter);
 app.use("/og", ogRouter);
 app.use("/sitemap.xml", sitemapRouter);
 
