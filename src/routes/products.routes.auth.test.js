@@ -49,9 +49,17 @@ describe("Auth en rutas de escritura de /api/products", () => {
     const res = await request(buildApp()).delete("/api/products/1/fotos/2");
     expect(res.status).toBe(401);
   });
+});
 
-  it("POST /:id/compartir responde 401 sin token", async () => {
+describe("POST /:id/compartir es público", () => {
+  it("responde sin exigir token (contador anónimo, igual que las vistas)", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.update.mockResolvedValue({ id: 1, compartidos: 1 });
+
     const res = await request(buildApp()).post("/api/products/1/compartir");
-    expect(res.status).toBe(401);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
   });
 });
