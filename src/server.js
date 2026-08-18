@@ -6,6 +6,8 @@ import categoriasRouter from "./routes/categorias.routes.js";
 import ogRouter from "./routes/og.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import usuariosRouter from "./routes/usuarios.routes.js";
+import adminRouter from "./routes/admin.routes.js";
+import { logError } from "./lib/logError.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +24,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/usuarios", usuariosRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/categorias", categoriasRouter);
+app.use("/api/admin", adminRouter);
 app.use("/og", ogRouter);
 
 // 404 fallback for unknown routes
@@ -31,21 +34,37 @@ app.use((_req, res) => {
 
 // Central error handler — never leak raw stack traces to the client.
 // eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   console.error(err);
 
   if (err?.name === "MulterError") {
     const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    logError({
+      mensaje: err.message,
+      stack: err.stack,
+      ruta: req.originalUrl,
+      metodo: req.method,
+      status,
+    });
     return res.status(status).json({ error: mapMulterError(err) });
   }
 
   if (err?.code === "P2002") {
     const campo = Array.isArray(err.meta?.target) ? err.meta.target[0] : err.meta?.target;
+    logError({
+      mensaje: err.message,
+      stack: err.stack,
+      ruta: req.originalUrl,
+      metodo: req.method,
+      status: 400,
+    });
     return res.status(400).json({ error: `Ya existe un registro con ese ${campo ?? "valor"}.` });
   }
 
   const status = err?.status ?? 500;
   const mensaje = status === 500 ? "Error interno del servidor." : err.message;
+  // Fire-and-forget: the response must not wait on the logging insert.
+  logError({ mensaje: err?.message, stack: err?.stack, ruta: req.originalUrl, metodo: req.method, status });
   res.status(status).json({ error: mensaje });
 });
 

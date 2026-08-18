@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
+import { logError } from "../lib/logError.js";
 
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
@@ -704,7 +705,13 @@ export async function streamVideo(req, res, next) {
       if (!res.writableEnded) stream.destroy();
     });
     stream.on("error", (streamErr) => {
-      console.error("Error al transmitir el video desde Drive:", streamErr);
+      logError({
+        mensaje: `Error al transmitir el video desde Drive: ${streamErr.message}`,
+        stack: streamErr.stack,
+        ruta: req.originalUrl,
+        metodo: req.method,
+        status: 502,
+      });
       if (!res.headersSent) {
         res.status(502).json({ error: "No se pudo transmitir el video desde Google Drive." });
       } else {
@@ -762,7 +769,13 @@ export async function streamFoto(req, res, next) {
       if (!res.writableEnded) stream.destroy();
     });
     stream.on("error", (streamErr) => {
-      console.error("Error al transmitir la foto desde Drive:", streamErr);
+      logError({
+        mensaje: `Error al transmitir la foto desde Drive: ${streamErr.message}`,
+        stack: streamErr.stack,
+        ruta: req.originalUrl,
+        metodo: req.method,
+        status: 502,
+      });
       if (!res.headersSent) {
         res.status(502).json({ error: "No se pudo transmitir la foto desde Google Drive." });
       } else {
