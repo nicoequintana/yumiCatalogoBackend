@@ -7,6 +7,8 @@ import ogRouter from "./routes/og.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import usuariosRouter from "./routes/usuarios.routes.js";
 import adminRouter from "./routes/admin.routes.js";
+import configRouter from "./routes/config.routes.js";
+import eventosRouter from "./routes/eventos.routes.js";
 import { logError } from "./lib/logError.js";
 
 const app = express();
@@ -25,6 +27,8 @@ app.use("/api/usuarios", usuariosRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/categorias", categoriasRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/config", configRouter);
+app.use("/api/eventos", eventosRouter);
 app.use("/og", ogRouter);
 
 // 404 fallback for unknown routes
