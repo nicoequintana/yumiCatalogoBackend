@@ -326,6 +326,15 @@ export async function obtenerPorId(req, res, next) {
  * pasar a cualquier otro (incluso ENTREGADA -> PENDIENTE), sin restricciones
  * sobre el estado de origen. Decisión de diseño ya cerrada en el plan del
  * sprint — el admin es humano y puede necesitar corregir errores de carga.
+ *
+ * Incluye `cliente` e `items` en la respuesta (mismo shape que
+ * `obtenerPorId()`), no solo los campos escalares de `Orden`: el frontend
+ * (`AdminOrdenDetalle.jsx`) reemplaza su estado completo con esta respuesta
+ * (`setOrden(actualizado)`) y renderiza `orden.items.reduce(...)` sin guard —
+ * devolver la orden "pelada" (sin include) rompía esa pantalla con un
+ * `Cannot read properties of undefined (reading 'reduce')` apenas se
+ * cambiaba el estado desde la UI (encontrado en Sprint 7 Task 2, E2E
+ * scenario 5, verificado en un browser real).
  */
 export async function actualizarEstado(req, res, next) {
   try {
@@ -343,6 +352,7 @@ export async function actualizarEstado(req, res, next) {
     const orden = await prisma.orden.update({
       where: { id },
       data: { estado },
+      include: { cliente: true, items: true },
     });
 
     res.json(orden);

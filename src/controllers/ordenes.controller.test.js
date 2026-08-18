@@ -709,7 +709,11 @@ describe("actualizarEstado()", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(ordenUpdateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 100 }, data: { estado: "CONFIRMADA" } }),
+      expect.objectContaining({
+        where: { id: 100 },
+        data: { estado: "CONFIRMADA" },
+        include: { cliente: true, items: true },
+      }),
     );
     expect(res.statusCode).toBe(200);
     expect(res.body.estado).toBe("CONFIRMADA");
