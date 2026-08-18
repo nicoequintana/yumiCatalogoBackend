@@ -103,6 +103,20 @@ const ORDEN_CREADA_MOCK = {
   updatedAt: new Date(),
 };
 
+// Shape devuelta por listar(): cliente completo + _count.items (NO items
+// completos) — ver nota en ordenes.controller.js sobre por qué el listado
+// no trae el detalle línea por línea.
+const ORDEN_LISTADO_MOCK = {
+  id: 100,
+  clienteId: 10,
+  estado: "PENDIENTE",
+  notas: null,
+  cliente: CLIENTE_EXISTENTE,
+  _count: { items: 1 },
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
+
 beforeEach(() => {
   clienteFindUniqueMock.mockReset();
   clienteCreateMock.mockReset();
@@ -491,8 +505,8 @@ describe("crear() — respuesta 201", () => {
 });
 
 describe("listar()", () => {
-  it("lista órdenes ordenadas por createdAt desc, con cliente e items incluidos", async () => {
-    ordenFindManyMock.mockResolvedValue([ORDEN_CREADA_MOCK]);
+  it("lista órdenes ordenadas por createdAt desc, con cliente y _count.items (NO items completos)", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_LISTADO_MOCK]);
     ordenCountMock.mockResolvedValue(1);
 
     const { req, res, next } = buildReqRes();
@@ -503,10 +517,11 @@ describe("listar()", () => {
     expect(ordenFindManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: { createdAt: "desc" },
-        include: { cliente: true, items: true },
+        include: { cliente: true, _count: { select: { items: true } } },
       }),
     );
-    expect(res.body.data).toEqual([ORDEN_CREADA_MOCK]);
+    expect(res.body.data).toEqual([ORDEN_LISTADO_MOCK]);
+    expect(res.body.data[0].items).toBeUndefined();
     expect(res.body.total).toBe(1);
   });
 

@@ -253,9 +253,12 @@ function construirFiltrosOrdenes(query) {
  * GET /api/ordenes — listado paginado para el panel admin, protegido con
  * requireAuth. Filtros combinables por query string (estado/desde/hasta/
  * dni/nombre), orden por createdAt desc (más reciente primero). Incluye
- * `cliente` e `items` completos: el set de datos por orden es chico y la
- * tabla admin necesita poder mostrar cantidad de items y total sin un
- * segundo request.
+ * `cliente` completo y `_count.items` (NO los items completos): nada en el
+ * schema ni en `crear()` limita cuántos items puede tener una orden, así que
+ * traer los items completos de hasta `MAX_PAGE_SIZE` órdenes podría inflar
+ * el payload del listado sin necesidad real todavía (no hay frontend
+ * consumiéndolo en este diff). El detalle línea por línea vive en
+ * `obtenerPorId()` — split estándar lista/detalle.
  *
  * Paginación: mismo patrón que `admin.controller.js`'s `listarErrorLogs`
  * (Sprint 1) — page/pageSize floored/clamped con defaults sanos.
@@ -280,7 +283,7 @@ export async function listar(req, res, next) {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: { cliente: true, items: true },
+        include: { cliente: true, _count: { select: { items: true } } },
       }),
     ]);
 
