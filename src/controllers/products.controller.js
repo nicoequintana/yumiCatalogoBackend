@@ -312,17 +312,32 @@ export async function crear(req, res, next) {
     // Cloudinary's per-product folder below. Also relied on for the
     // orphan-prevention behavior below (a media-less product row is an
     // accepted partial state on upload failure).
-    producto = await prisma.product.create({
-      data: {
-        nombre: nombre.trim(),
-        descripcion: descripcion.trim(),
-        precio: String(precio),
-        etiqueta: etiqueta?.trim() || null,
-        categoriaId: categoriaId ? Number(categoriaId) : null,
-        caracteristicas: { create: caracteristicas },
-      },
-      include: PRODUCT_INCLUDE,
-    });
+    //
+    // sku is NOT NULL + unique, so it must be generated up front (it can't
+    // depend on the id, which doesn't exist yet at this point). A handful of
+    // retries absorbs the rare random-suffix collision (P2002 on sku)
+    // instead of failing the whole request over it.
+    const MAX_INTENTOS_SKU = 5;
+    for (let intento = 1; intento <= MAX_INTENTOS_SKU; intento++) {
+      try {
+        producto = await prisma.product.create({
+          data: {
+            nombre: nombre.trim(),
+            descripcion: descripcion.trim(),
+            precio: String(precio),
+            etiqueta: etiqueta?.trim() || null,
+            categoriaId: categoriaId ? Number(categoriaId) : null,
+            sku: generarSku(nombre.trim()),
+            caracteristicas: { create: caracteristicas },
+          },
+          include: PRODUCT_INCLUDE,
+        });
+        break;
+      } catch (err) {
+        const esColisionSku = err?.code === "P2002" && err.meta?.target?.includes?.("sku");
+        if (!esColisionSku || intento === MAX_INTENTOS_SKU) throw err;
+      }
+    }
 
     // Cloudinary storage migration: Drive per-product folder creation
     // removed here (see commented block below) — Cloudinary doesn't need a
@@ -347,7 +362,6 @@ export async function crear(req, res, next) {
     producto = await prisma.product.update({
       where: { id: producto.id },
       data: {
-        sku: generarSku(producto.nombre, producto.id),
         fotos: {
           create: fotosSubidas.map((f, index) => ({
             url: f.url,

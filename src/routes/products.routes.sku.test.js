@@ -46,10 +46,12 @@ beforeEach(() => {
 });
 
 describe("crear() genera el sku", () => {
-  it("arma el sku con las 6 letras del nombre y el id recién creado", async () => {
+  it("arma el sku con las 6 letras del nombre antes de crear el producto (sku es NOT NULL)", async () => {
     createMock.mockResolvedValue({
       id: 42,
       nombre: "Bruma Facial",
+      sku: "YIMA-BRUMAF-1234",
+      precio: "100",
       caracteristicas: [],
       fotos: [],
       video: null,
@@ -58,7 +60,7 @@ describe("crear() genera el sku", () => {
     updateMock.mockResolvedValue({
       id: 42,
       nombre: "Bruma Facial",
-      sku: "YIMA-BRUMAF-42",
+      sku: "YIMA-BRUMAF-1234",
       precio: "100",
       caracteristicas: [],
       fotos: [],
@@ -79,11 +81,54 @@ describe("crear() genera el sku", () => {
       .field("precio", "100");
 
     expect(res.status).toBe(201);
-    expect(updateMock).toHaveBeenCalledWith(
+    expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ sku: "YIMA-BRUMAF-42" }),
+        data: expect.objectContaining({ sku: expect.stringMatching(/^YIMA-BRUMAF-\d{4}$/) }),
       }),
     );
+  });
+
+  it("reintenta con un nuevo sku si choca con uno existente (P2002)", async () => {
+    const errorColision = Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { target: ["sku"] },
+    });
+
+    createMock.mockRejectedValueOnce(errorColision).mockResolvedValueOnce({
+      id: 42,
+      nombre: "Bruma Facial",
+      sku: "YIMA-BRUMAF-5678",
+      precio: "100",
+      caracteristicas: [],
+      fotos: [],
+      video: null,
+      categoria: null,
+    });
+    updateMock.mockResolvedValue({
+      id: 42,
+      nombre: "Bruma Facial",
+      sku: "YIMA-BRUMAF-5678",
+      precio: "100",
+      caracteristicas: [],
+      fotos: [],
+      video: null,
+      categoria: null,
+      vistas: 0,
+      compartidos: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      visibleEnCatalogo: false,
+    });
+
+    const res = await request(buildApp())
+      .post("/api/products")
+      .set("Authorization", authHeader)
+      .field("nombre", "Bruma Facial")
+      .field("descripcion", "Descripción de prueba")
+      .field("precio", "100");
+
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1,25 +1,27 @@
 const PREFIJO = "YIMA";
 
 /**
- * Genera el SKU de un producto: YIMA-{6 letras/números del nombre}-{id}.
- * Se llama una única vez al crear el producto (id ya asignado) — nunca se
- * recalcula si el nombre cambia después, para no invalidar un SKU ya
- * impreso o referenciado externamente.
+ * Genera el SKU de un producto: YIMA-{6 letras/números del nombre}-{4 dígitos
+ * al azar}. No depende del id autoincremental: se necesita ANTES del
+ * `prisma.product.create()` (sku es NOT NULL en el schema), momento en el
+ * que el id todavía no existe. El sufijo random es lo que evita colisiones
+ * entre productos con nombres similares en su lugar.
  *
  * @param {string} nombre
- * @param {number} id
  * @returns {string}
  */
-export function generarSku(nombre, id) {
+export function generarSku(nombre) {
   const segmento = nombre
     .normalize("NFD")
     // Quita diacríticos (tildes, diéresis) del bloque Unicode "Combining
     // Diacritical Marks" (U+0300–U+036F). Efecto intencional: ñ -> n + tilde
     // combinante, que esta regex también elimina, quedando "n" (accent-folding).
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, "") // solo alfanumérico
     .slice(0, 6);
 
-  return `${PREFIJO}-${segmento}-${id}`;
+  const sufijo = String(Math.floor(1000 + Math.random() * 9000));
+
+  return `${PREFIJO}-${segmento}-${sufijo}`;
 }
