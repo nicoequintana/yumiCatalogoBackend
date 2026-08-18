@@ -77,4 +77,45 @@ describe("GET /api/admin/error-logs", () => {
       expect.objectContaining({ skip: 5, take: 5 })
     );
   });
+
+  it("clampea pageSize por encima del máximo permitido (100)", async () => {
+    findManyMock.mockResolvedValue([]);
+    countMock.mockResolvedValue(0);
+
+    const res = await request(buildApp())
+      .get("/api/admin/error-logs?pageSize=999999999")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.pageSize).toBe(100);
+    expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ take: 100 }));
+  });
+
+  it("usa el default si page es fraccionario o no numérico, sin tirar 500", async () => {
+    findManyMock.mockResolvedValue([]);
+    countMock.mockResolvedValue(0);
+
+    const res = await request(buildApp())
+      .get("/api/admin/error-logs?page=2.5&pageSize=abc")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(2);
+    expect(res.body.pageSize).toBe(20);
+    expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ skip: 20, take: 20 }));
+  });
+
+  it("usa el default si page es negativo o cero", async () => {
+    findManyMock.mockResolvedValue([]);
+    countMock.mockResolvedValue(0);
+
+    const res = await request(buildApp())
+      .get("/api/admin/error-logs?page=-1&pageSize=0")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(1);
+    expect(res.body.pageSize).toBe(20);
+    expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ skip: 0, take: 20 }));
+  });
 });
