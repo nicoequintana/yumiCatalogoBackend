@@ -63,3 +63,56 @@ describe("POST /:id/compartir es público", () => {
     expect(res.body).toEqual({ ok: true });
   });
 });
+
+describe("POST /:id/favorito es público", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("responde sin exigir token (contador anónimo, igual que compartir)", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
+
+    const res = await request(buildApp()).post("/api/products/1/favorito");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("incrementa favoritosCount en 1", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
+
+    await request(buildApp()).post("/api/products/1/favorito");
+
+    expect(prisma.product.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { favoritosCount: { increment: 1 } },
+    });
+  });
+
+  it("responde 404 si el producto no existe", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    prisma.product.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp()).post("/api/products/999/favorito");
+
+    expect(res.status).toBe(404);
+    expect(prisma.product.update).not.toHaveBeenCalled();
+  });
+
+  it("no revienta ante llamadas dobles (dos incrementos independientes)", async () => {
+    const { prisma } = await import("../lib/prisma.js");
+    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
+
+    const res1 = await request(buildApp()).post("/api/products/1/favorito");
+    const res2 = await request(buildApp()).post("/api/products/1/favorito");
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(prisma.product.update).toHaveBeenCalledTimes(2);
+  });
+});

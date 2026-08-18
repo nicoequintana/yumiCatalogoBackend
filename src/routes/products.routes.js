@@ -42,6 +42,7 @@ router.get("/:id/fotos/:fotoId", productsController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 router.post("/:id/compartir", productsController.compartir);
+router.post("/:id/favorito", productsController.favorito);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);

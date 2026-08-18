@@ -42,6 +42,7 @@ function mapProducto(producto) {
     categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
     vistas: producto.vistas,
     compartidos: producto.compartidos,
+    favoritosCount: producto.favoritosCount,
     visibleEnCatalogo: producto.visibleEnCatalogo,
     disponibilidad: producto.disponibilidad,
     destacado: producto.destacado,
@@ -425,6 +426,22 @@ export async function compartir(req, res, next) {
     if (!existe) throw httpError(404, "Producto no encontrado.");
 
     await prisma.product.update({ where: { id }, data: { compartidos: { increment: 1 } } });
+
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function favorito(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+
+    const existe = await prisma.product.findUnique({ where: { id } });
+    if (!existe) throw httpError(404, "Producto no encontrado.");
+
+    await prisma.product.update({ where: { id }, data: { favoritosCount: { increment: 1 } } });
 
     res.json({ ok: true });
   } catch (err) {

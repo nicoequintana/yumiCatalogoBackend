@@ -28,6 +28,7 @@ model Product {
   categoria         Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
   vistas            Int              @default(0)
   compartidos       Int              @default(0)
+  favoritosCount    Int              @default(0)
   caracteristicas   Caracteristica[]
   fotos             Foto[]
   video             Video?
