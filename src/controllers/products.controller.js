@@ -281,12 +281,63 @@ async function limpiarArchivosSubidos({ fotos = [], video = null }) {
   }
 }
 
+/**
+ * Builds the `where` clause for `listar()` from optional query-string
+ * filters (categoria, search, minPrecio/maxPrecio, disponibilidad).
+ *
+ * Malformed values are never a 400/500 on this browse endpoint — a bad
+ * `?minPrecio=abc` or an unknown `?disponibilidad=X` from a stale link or a
+ * fumbled UI control just silently drops that one filter instead of failing
+ * the whole listing. Each filter is validated independently before being
+ * added.
+ *
+ * `visibleEnCatalogo: true` (when not in admin mode) is inserted FIRST so it
+ * stays the leading key of the `where` object — there's a SQL Server index
+ * on `[visibleEnCatalogo, orden]` and this keeps queries aligned with it.
+ */
+function construirFiltrosListado(query, { esAdmin }) {
+  const where = {};
+  if (!esAdmin) where.visibleEnCatalogo = true;
+
+  if (query.categoria !== undefined) {
+    const categoriaId = Number(query.categoria);
+    if (!Number.isNaN(categoriaId)) where.categoriaId = categoriaId;
+  }
+
+  if (typeof query.search === "string" && query.search !== "") {
+    // No `mode: "insensitive"` here on purpose: this database's default
+    // collation is SQL_Latin1_General_CP1_CI_AS (case-insensitive already,
+    // confirmed live against the dev SQL Server), and the mssql Prisma
+    // connector doesn't support the `mode` option at all — passing it
+    // throws "Unknown argument mode" at runtime. Plain `contains` is both
+    // correct and the only option here.
+    where.nombre = { contains: query.search };
+  }
+
+  const rangoPrecio = {};
+  if (query.minPrecio !== undefined) {
+    const min = Number(query.minPrecio);
+    if (!Number.isNaN(min)) rangoPrecio.gte = min;
+  }
+  if (query.maxPrecio !== undefined) {
+    const max = Number(query.maxPrecio);
+    if (!Number.isNaN(max)) rangoPrecio.lte = max;
+  }
+  if (Object.keys(rangoPrecio).length > 0) where.precio = rangoPrecio;
+
+  if (query.disponibilidad !== undefined && DISPONIBILIDAD_VALIDA.includes(query.disponibilidad)) {
+    where.disponibilidad = query.disponibilidad;
+  }
+
+  return Object.keys(where).length > 0 ? where : undefined;
+}
+
 export async function listar(req, res, next) {
   try {
     const esAdmin = req.query.admin !== undefined;
 
     const productos = await prisma.product.findMany({
-      where: esAdmin ? undefined : { visibleEnCatalogo: true },
+      where: construirFiltrosListado(req.query, { esAdmin }),
       include: PRODUCT_INCLUDE,
       orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
     });
@@ -294,6 +345,39 @@ export async function listar(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+/**
+ * Fetches up to 4 related products for the detail page: same categoriaId OR
+ * same etiqueta as the current product (either match counts, not both),
+ * excluding the product itself. Short-circuits to `[]` without a DB
+ * round-trip when the product has neither field set — that's a normal case
+ * (nothing to match on), not an error.
+ *
+ * Only one level deep: related rows are mapped with plain `mapProducto` and
+ * never get their own `relacionados` computed, avoiding recursion.
+ */
+async function obtenerRelacionados(producto, { esAdmin }) {
+  const { categoriaId, etiqueta } = producto;
+  if (!categoriaId && !etiqueta) return [];
+
+  const or = [];
+  if (categoriaId) or.push({ categoriaId });
+  if (etiqueta) or.push({ etiqueta });
+
+  const where = {
+    id: { not: producto.id },
+    OR: or,
+    ...(esAdmin ? {} : { visibleEnCatalogo: true }),
+  };
+
+  const relacionados = await prisma.product.findMany({
+    where,
+    include: PRODUCT_INCLUDE,
+    take: 4,
+  });
+
+  return relacionados.map(mapProducto);
 }
 
 export async function obtenerPorId(req, res, next) {
@@ -324,7 +408,9 @@ export async function obtenerPorId(req, res, next) {
       });
     }
 
-    res.json(mapProducto(producto));
+    const relacionados = await obtenerRelacionados(producto, { esAdmin });
+
+    res.json({ ...mapProducto(producto), relacionados });
   } catch (err) {
     next(err);
   }
