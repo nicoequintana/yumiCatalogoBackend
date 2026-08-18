@@ -33,6 +33,7 @@ model Product {
   fotos             Foto[]
   video             Video?
   eventos           EventoTrafico[]
+  itemsOrden        ItemOrden[]
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -93,6 +94,45 @@ model EventoTrafico {
 
   @@index([tipo, createdAt])
   @@index([productId, tipo])
+}
+
+model Cliente {
+  id        Int      @id @default(autoincrement())
+  dni       String   @unique
+  nombre    String
+  telefono  String
+  email     String?
+  ordenes   Orden[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Orden {
+  id        Int         @id @default(autoincrement())
+  clienteId Int
+  cliente   Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
+  estado    String      @default("PENDIENTE") @db.VarChar(20) // valores: PENDIENTE | CONFIRMADA | EN_PREPARACION | ENTREGADA | CANCELADA
+  notas     String?     @db.NVarChar(Max)
+  items     ItemOrden[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([clienteId])
+  @@index([estado, createdAt])
+}
+
+model ItemOrden {
+  id             Int     @id @default(autoincrement())
+  ordenId        Int
+  orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  productId      Int
+  product        Product @relation(fields: [productId], references: [id], onDelete: NoAction)
+  nombreProducto String  // snapshot, no se recalcula
+  precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
+  cantidad       Int
+
+  @@index([ordenId])
+  @@index([productId])
 }
 
 model ErrorLog {
