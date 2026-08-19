@@ -110,7 +110,10 @@ model Usuario {
 
 model EventoTrafico {
   id        Int      @id @default(autoincrement())
-  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO
+  // Es VarChar y no un enum de Prisma a propósito: agregar un tipo nuevo es una
+  // línea en `TIPOS_VALIDOS` (eventos.controller.js), sin migración de base.
+  // La fuente de verdad es esa constante — este comentario debe seguirla.
   productId Int?
   product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   referrer  String?
