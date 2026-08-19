@@ -1,0 +1,173 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+model Product {
+  id                 Int              @id @default(autoincrement())
+  nombre             String
+  descripcion        String           @db.NVarChar(Max)
+  precio             Decimal          @db.Decimal(10, 2)
+  etiqueta           String?
+  fraseComercial     String?
+  porQueLoVasAQuerer String?          @db.NVarChar(Max)
+  tePasaEsto         String?          @db.NVarChar(Max)
+  sku                String           @unique
+  visibleEnCatalogo  Boolean          @default(false)
+  stock              Int              @default(0)
+  destacado          Boolean          @default(false)
+  orden              Int              @default(0) // control manual de merchandising, menor = primero
+  driveFolderId      String?
+  categoriaId        Int?
+  categoria          Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
+  vistas             Int              @default(0)
+  compartidos        Int              @default(0)
+  favoritosCount     Int              @default(0)
+  caracteristicas    Caracteristica[]
+  listas             ProductoLista[]
+  especificaciones   Especificacion[]
+  fotos              Foto[]
+  video              Video?
+  eventos            EventoTrafico[]
+  itemsOrden         ItemOrden[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([visibleEnCatalogo, orden])
+  @@index([destacado])
+}
+
+model Caracteristica {
+  id        Int     @id @default(autoincrement())
+  texto     String
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model ProductoLista {
+  id        Int     @id @default(autoincrement())
+  tipo      String  @db.VarChar(20) // BENEFICIO | USO | IDEAL_PARA | INCLUYE
+  texto     String
+  orden     Int     @default(0)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, tipo])
+}
+
+model Especificacion {
+  id        Int     @id @default(autoincrement())
+  nombre    String
+  valor     String
+  orden     Int     @default(0)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Foto {
+  id                     Int     @id @default(autoincrement())
+  url                    String
+  driveFileId            String?
+  cloudinaryPublicId     String?
+  cloudinaryResourceType String?
+  orden                  Int
+  productId              Int
+  product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Video {
+  id                     Int     @id @default(autoincrement())
+  url                    String
+  driveFileId            String?
+  cloudinaryPublicId     String?
+  cloudinaryResourceType String?
+  productId              Int     @unique
+  product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Categoria {
+  id        Int       @id @default(autoincrement())
+  nombre    String    @unique
+  productos Product[]
+  createdAt DateTime  @default(now())
+}
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model EventoTrafico {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA
+  productId Int?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  referrer  String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([tipo, createdAt])
+  @@index([productId, tipo])
+}
+
+model Cliente {
+  id        Int      @id @default(autoincrement())
+  dni       String   @unique
+  nombre    String
+  telefono  String
+  email     String?
+  ordenes   Orden[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Orden {
+  id        Int         @id @default(autoincrement())
+  clienteId Int
+  cliente   Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
+  estado    String      @default("PENDIENTE") @db.VarChar(20) // valores: PENDIENTE | CONFIRMADA | EN_PREPARACION | ENTREGADA | CANCELADA
+  notas     String?     @db.NVarChar(Max)
+  items     ItemOrden[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([clienteId])
+  @@index([estado, createdAt])
+}
+
+model ItemOrden {
+  id             Int     @id @default(autoincrement())
+  ordenId        Int
+  orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  productId      Int
+  product        Product @relation(fields: [productId], references: [id], onDelete: NoAction)
+  nombreProducto String // snapshot, no se recalcula
+  precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
+  cantidad       Int
+
+  @@index([ordenId])
+  @@index([productId])
+}
+
+model ErrorLog {
+  id        Int      @id @default(autoincrement())
+  mensaje   String   @db.NVarChar(Max)
+  stack     String?  @db.NVarChar(Max)
+  ruta      String?
+  metodo    String?
+  status    Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
