@@ -9,5 +9,6 @@ router.use(requireAuth);
 router.get("/error-logs", adminController.listarErrorLogs);
 router.get("/audit-logs", adminController.listarAuditLogs);
 router.get("/ventas", adminController.resumenVentas);
+router.get("/embudo", adminController.embudoConversion);
 
 export default router;
