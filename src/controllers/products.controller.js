@@ -156,6 +156,65 @@ function parseFotosExistentes(raw) {
   }
 }
 
+/**
+ * Parsea `ordenFotos`: la secuencia final completa de fotos que pide el
+ * cliente, mezclando existentes y recién subidas.
+ *
+ *   [{ "tipo": "existente", "id": 12 }, { "tipo": "nueva", "index": 0 }, ...]
+ *
+ * Existe porque `fotosExistentes` sola no alcanza: solo dice QUÉ fotos
+ * sobreviven, no en qué orden, y las nuevas siempre se agregaban al final.
+ * Con eso era imposible reordenar fotos ya guardadas o subir una foto nueva
+ * como portada — la posición 0 define la portada del catálogo y la 1 es la
+ * imagen de "¿Qué problema resuelve?".
+ *
+ * Omitirlo mantiene el comportamiento histórico (existentes en el orden de la
+ * base, nuevas al final), así que ningún cliente viejo se rompe.
+ */
+function parsearOrdenFotos(raw) {
+  if (raw === undefined || raw === "") return undefined;
+
+  let parsed;
+  try {
+    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) throw new Error();
+  } catch {
+    throw httpError(400, "El campo ordenFotos debe ser un JSON válido (array).");
+  }
+
+  return parsed.map((token) => {
+    if (token?.tipo === "existente" && Number.isInteger(Number(token.id))) {
+      return { tipo: "existente", id: Number(token.id) };
+    }
+    if (token?.tipo === "nueva" && Number.isInteger(Number(token.index))) {
+      return { tipo: "nueva", index: Number(token.index) };
+    }
+    throw httpError(400, "ordenFotos tiene una entrada inválida: se espera {tipo, id} o {tipo, index}.");
+  });
+}
+
+/**
+ * La secuencia tiene que cubrir exactamente las fotos enviadas — ni de más ni
+ * de menos, sin repetir. Un hueco o un duplicado dejaría `orden` inconsistente
+ * y la portada quedaría a merced del desempate de la base.
+ */
+function validarOrdenFotos(ordenFotos, { idsConservados, cantidadNuevas }) {
+  if (ordenFotos === undefined) return;
+
+  const existentes = ordenFotos.filter((t) => t.tipo === "existente").map((t) => t.id);
+  const nuevas = ordenFotos.filter((t) => t.tipo === "nueva").map((t) => t.index);
+
+  if (new Set(existentes).size !== existentes.length || new Set(nuevas).size !== nuevas.length) {
+    throw httpError(400, "ordenFotos no puede repetir la misma foto.");
+  }
+  if (existentes.length !== idsConservados.length || existentes.some((id) => !idsConservados.includes(id))) {
+    throw httpError(400, "ordenFotos debe listar exactamente las fotos existentes que se conservan.");
+  }
+  if (nuevas.length !== cantidadNuevas || nuevas.some((i) => i < 0 || i >= cantidadNuevas)) {
+    throw httpError(400, "ordenFotos debe listar exactamente las fotos nuevas enviadas.");
+  }
+}
+
 function validarCamposBase({ nombre, descripcion, precio }, { esCreacion }) {
   if (esCreacion || nombre !== undefined) {
     if (typeof nombre !== "string" || nombre.trim() === "") {
@@ -721,6 +780,14 @@ export async function actualizar(req, res, next) {
     // Photos removed by the client (present before, absent from fotosExistentes) get deleted from Drive too.
     const fotosARemover = existente.fotos.filter((f) => !fotosExistentesIds.includes(f.id));
 
+    // Se valida ANTES de subir nada a Cloudinary: si la secuencia es
+    // inconsistente conviene fallar con 400 sin haber dejado archivos huérfanos.
+    const ordenFotos = parsearOrdenFotos(req.body.ordenFotos);
+    validarOrdenFotos(ordenFotos, {
+      idsConservados: existente.fotos.filter((f) => fotosExistentesIds.includes(f.id)).map((f) => f.id),
+      cantidadNuevas: fotosNuevas.length,
+    });
+
     // Cloudinary storage migration: Drive lazy-folder-creation removed here
     // (see commented block below) — new uploads on ANY product (new or
     // legacy Drive-backed) now go to Cloudinary instead, grouped into the
@@ -809,20 +876,50 @@ export async function actualizar(req, res, next) {
           await tx.foto.deleteMany({ where: { id: { in: fotosARemover.map((f) => f.id) } } });
         }
         const fotosConservadas = existente.fotos.filter((f) => fotosExistentesIds.includes(f.id));
-        const ordenBase = fotosConservadas.length;
-        for (const [index, foto] of fotosConservadas.entries()) {
-          await tx.foto.update({ where: { id: foto.id }, data: { orden: index } });
-        }
-        if (fotosSubidas.length > 0) {
-          await tx.foto.createMany({
-            data: fotosSubidas.map((f, index) => ({
-              url: f.url,
-              cloudinaryPublicId: f.cloudinaryPublicId,
-              cloudinaryResourceType: f.cloudinaryResourceType,
-              orden: ordenBase + index,
-              productId: id,
-            })),
-          });
+
+        if (ordenFotos) {
+          // Secuencia explícita: la posición en el array ES el `orden` final,
+          // así una foto recién subida puede quedar de portada por delante de
+          // las que ya estaban.
+          const nuevasPorIndice = fotosSubidas;
+          const aCrear = [];
+
+          for (const [posicion, token] of ordenFotos.entries()) {
+            if (token.tipo === "existente") {
+              await tx.foto.update({ where: { id: token.id }, data: { orden: posicion } });
+            } else {
+              const subida = nuevasPorIndice[token.index];
+              aCrear.push({
+                url: subida.url,
+                cloudinaryPublicId: subida.cloudinaryPublicId,
+                cloudinaryResourceType: subida.cloudinaryResourceType,
+                orden: posicion,
+                productId: id,
+              });
+            }
+          }
+
+          if (aCrear.length > 0) {
+            await tx.foto.createMany({ data: aCrear });
+          }
+        } else {
+          // Sin secuencia explícita: comportamiento histórico — se conserva el
+          // orden que ya tenían y las nuevas van al final.
+          const ordenBase = fotosConservadas.length;
+          for (const [index, foto] of fotosConservadas.entries()) {
+            await tx.foto.update({ where: { id: foto.id }, data: { orden: index } });
+          }
+          if (fotosSubidas.length > 0) {
+            await tx.foto.createMany({
+              data: fotosSubidas.map((f, index) => ({
+                url: f.url,
+                cloudinaryPublicId: f.cloudinaryPublicId,
+                cloudinaryResourceType: f.cloudinaryResourceType,
+                orden: ordenBase + index,
+                productId: id,
+              })),
+            });
+          }
         }
 
         // Video: replace, remove, or leave unchanged
