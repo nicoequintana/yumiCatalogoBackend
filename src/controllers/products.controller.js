@@ -1333,8 +1333,26 @@ export async function importar(req, res, next) {
       });
     }
 
+    // `generarSku` usa un sufijo random de 4 dígitos: dos productos con nombres
+    // parecidos en el mismo archivo pueden colisionar. `crear` absorbe eso
+    // reintentando contra la base, pero acá todos los SKU se generan ANTES de
+    // escribir, así que la colisión se resuelve en memoria: se regenera hasta
+    // encontrar uno libre dentro del lote. Una colisión contra un SKU que ya
+    // está en la base sigue cayendo en el P2002 del error handler central.
+    const skusDelLote = new Set();
+    const skuPorIndice = procesado.productos.map((producto) => {
+      let sku = generarSku(producto.nombre);
+      let intentos = 0;
+      while (skusDelLote.has(sku) && intentos < 10) {
+        sku = generarSku(producto.nombre);
+        intentos += 1;
+      }
+      skusDelLote.add(sku);
+      return sku;
+    });
+
     const creados = await prisma.$transaction(
-      procesado.productos.map((producto) =>
+      procesado.productos.map((producto, indice) =>
         prisma.product.create({
           data: {
             nombre: producto.nombre,
@@ -1342,7 +1360,7 @@ export async function importar(req, res, next) {
             precio: producto.precio,
             etiqueta: producto.etiqueta,
             categoriaId: producto.categoriaId,
-            sku: generarSku(producto.nombre),
+            sku: skuPorIndice[indice],
             stock: producto.stock,
             visibleEnCatalogo: false,
             fraseComercial: producto.fraseComercial,

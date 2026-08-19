@@ -188,6 +188,59 @@ describe("POST /api/products/import", () => {
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
+  it("genera SKU unicos aunque muchas filas compartan el mismo nombre", async () => {
+    productCreateMock.mockImplementation(({ data }) =>
+      Promise.resolve({ ...data, id: 1, fotos: [], caracteristicas: [], listas: [], especificaciones: [] }),
+    );
+
+    const filas = Array.from({ length: 20 }, () => ({ nombre: "Vela", descripcion: "d", precio: 100 }));
+
+    const res = await request(buildApp())
+      .post("/api/products/import")
+      .set("Authorization", authHeader)
+      .attach("archivo", await xlsxCon(filas), "p.xlsx");
+
+    expect(res.status).toBe(201);
+    const skus = productCreateMock.mock.calls.map((c) => c[0].data.sku);
+    expect(skus).toHaveLength(20);
+    expect(new Set(skus).size).toBe(skus.length);
+  });
+
+  it("REGRESION: fuerza colisiones de sufijo random y verifica que igual salgan SKU unicos", async () => {
+    // Sin este fix, `generarSku` se llama una vez por fila sin reintento: si
+    // `Math.random` repite el mismo sufijo (como acá, a propósito), dos filas
+    // del mismo lote terminan con el SKU idéntico.
+    productCreateMock.mockImplementation(({ data }) =>
+      Promise.resolve({ ...data, id: 1, fotos: [], caracteristicas: [], listas: [], especificaciones: [] }),
+    );
+
+    const secuencia = [0.1, 0.1, 0.1, 0.9]; // 3 colisiones seguidas, la 4ta libera
+    let indice = 0;
+    const randomSpy = vi.spyOn(Math, "random").mockImplementation(() => {
+      const valor = secuencia[Math.min(indice, secuencia.length - 1)];
+      indice += 1;
+      return valor;
+    });
+
+    try {
+      const filas = [
+        { nombre: "Vela", descripcion: "d", precio: 100 },
+        { nombre: "Vela", descripcion: "d", precio: 100 },
+      ];
+
+      const res = await request(buildApp())
+        .post("/api/products/import")
+        .set("Authorization", authHeader)
+        .attach("archivo", await xlsxCon(filas), "p.xlsx");
+
+      expect(res.status).toBe(201);
+      const skus = productCreateMock.mock.calls.map((c) => c[0].data.sku);
+      expect(skus[0]).not.toBe(skus[1]);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it("audita la importación con la cantidad", async () => {
     productCreateMock.mockImplementation(({ data }) =>
       Promise.resolve({ ...data, id: 1, fotos: [], caracteristicas: [], listas: [], especificaciones: [] }),
