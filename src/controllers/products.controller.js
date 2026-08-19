@@ -2,6 +2,8 @@ import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
+import { procesarArchivo } from "../lib/importProductos.js";
+import { generarPlantilla } from "../lib/plantillaProductos.js";
 import { logError } from "../lib/logError.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
@@ -1261,6 +1263,116 @@ export async function eliminarFoto(req, res, next) {
 
     const productoActualizado = await prisma.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
     res.json(mapProducto(productoActualizado));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `GET /api/products/import/template` — devuelve el `.xlsx` de plantilla con
+ * los desplegables poblados con las categorías que existen ahora mismo.
+ *
+ * Sin caché a propósito: si el admin crea una categoría y vuelve a descargar
+ * la plantilla, la categoría nueva tiene que aparecer en el desplegable.
+ */
+export async function descargarPlantilla(_req, res, next) {
+  try {
+    const categorias = await prisma.categoria.findMany({
+      select: { nombre: true },
+      orderBy: { nombre: "asc" },
+    });
+
+    const buffer = await generarPlantilla(categorias.map((c) => c.nombre));
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", 'attachment; filename="plantilla-productos.xlsx"');
+    res.setHeader("Cache-Control", "no-store");
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `POST /api/products/import` — crea N productos desde un `.xlsx`.
+ *
+ * Todo o nada: si una sola fila es inválida no se escribe nada. La alternativa
+ * (importar las válidas) dejaría la base en un estado que el admin no puede
+ * distinguir visualmente — los productos entran ocultos y sin fotos — y como
+ * `Product.nombre` no es único, reintentar el archivo corregido duplicaría los
+ * que sí habían entrado.
+ *
+ * Todos los productos entran con `visibleEnCatalogo: false` FORZADO: un
+ * producto importado no tiene fotos todavía, y publicarlo lo mostraría como una
+ * tarjeta rota en `/coleccion`. Publicar es una acción posterior y explícita.
+ */
+export async function importar(req, res, next) {
+  try {
+    if (!req.file) throw httpError(400, "Subí un archivo .xlsx con los productos.");
+
+    // Una sola consulta para todas las filas, no una por fila.
+    const categorias = await prisma.categoria.findMany({ select: { id: true, nombre: true } });
+    const categoriasPorNombre = new Map(categorias.map((c) => [c.nombre.toLowerCase(), c.id]));
+
+    let procesado;
+    try {
+      procesado = await procesarArchivo(req.file.buffer, categoriasPorNombre);
+    } catch (err) {
+      // Problema del ARCHIVO (vacío, sin la hoja, supera el límite): no tiene
+      // fila a la que apuntar, así que es un 400 con mensaje suelto.
+      throw httpError(400, err.message);
+    }
+
+    if (procesado.errores.length > 0) {
+      return res.status(400).json({
+        error: "El archivo tiene errores. No se importó ningún producto.",
+        errores: procesado.errores,
+      });
+    }
+
+    const creados = await prisma.$transaction(
+      procesado.productos.map((producto) =>
+        prisma.product.create({
+          data: {
+            nombre: producto.nombre,
+            descripcion: producto.descripcion,
+            precio: producto.precio,
+            etiqueta: producto.etiqueta,
+            categoriaId: producto.categoriaId,
+            sku: generarSku(producto.nombre),
+            stock: producto.stock,
+            visibleEnCatalogo: false,
+            fraseComercial: producto.fraseComercial,
+            porQueLoVasAQuerer: producto.porQueLoVasAQuerer,
+            tePasaEsto: producto.tePasaEsto,
+            caracteristicas: { create: producto.caracteristicas },
+            listas: {
+              create: [
+                ...producto.beneficios.map((item, i) => ({ ...item, tipo: "BENEFICIO", orden: i })),
+                ...producto.usos.map((item, i) => ({ ...item, tipo: "USO", orden: i })),
+                ...producto.idealPara.map((item, i) => ({ ...item, tipo: "IDEAL_PARA", orden: i })),
+                ...producto.incluye.map((item, i) => ({ ...item, tipo: "INCLUYE", orden: i })),
+              ],
+            },
+            especificaciones: {
+              create: producto.especificaciones.map((e, i) => ({ ...e, orden: i })),
+            },
+          },
+          include: PRODUCT_INCLUDE,
+        }),
+      ),
+    );
+
+    logAudit(req, {
+      accion: "IMPORTAR",
+      entidad: "Producto",
+      detalle: { cantidad: creados.length, skus: creados.map((p) => p.sku) },
+    });
+
+    res.status(201).json({ cantidad: creados.length, productos: creados.map(mapProducto) });
   } catch (err) {
     next(err);
   }

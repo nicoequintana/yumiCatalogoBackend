@@ -34,12 +34,34 @@ const uploadFields = upload.fields([
   { name: "video", maxCount: 1 },
 ]);
 
+const MIMES_XLSX = [
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/octet-stream", // algunos browsers mandan esto para .xlsx
+];
+
+// Multer propio para el import: un solo archivo, tope chico (una planilla de
+// texto no pesa nada) y filtro por extensión además de MIME, porque el MIME
+// que manda el browser para .xlsx no es confiable.
+const uploadXlsx = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter(_req, file, cb) {
+    const esXlsx = file.originalname.toLowerCase().endsWith(".xlsx");
+    if (!esXlsx || !MIMES_XLSX.includes(file.mimetype)) {
+      return cb(new Error("El archivo debe ser un .xlsx. Descargá la plantilla y completala."));
+    }
+    cb(null, true);
+  },
+}).single("archivo");
+
 const router = Router();
 
 router.get("/", productsController.listar);
+router.get("/import/template", requireAuth, productsController.descargarPlantilla);
 router.get("/:id/video", productsController.streamVideo);
 router.get("/:id/fotos/:fotoId", productsController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
+router.post("/import", requireAuth, uploadXlsx, productsController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 router.post("/:id/compartir", productsController.compartir);
 router.post("/:id/favorito", productsController.favorito);
