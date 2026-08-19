@@ -8,5 +8,6 @@ router.use(requireAuth);
 
 router.get("/error-logs", adminController.listarErrorLogs);
 router.get("/audit-logs", adminController.listarAuditLogs);
+router.get("/ventas", adminController.resumenVentas);
 
 export default router;
