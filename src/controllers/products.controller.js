@@ -12,6 +12,8 @@ const PRODUCT_INCLUDE = {
   fotos: { orderBy: { orden: "asc" } },
   video: true,
   categoria: true,
+  listas: { orderBy: { orden: "asc" } },
+  especificaciones: { orderBy: { orden: "asc" } },
 };
 
 /**
@@ -29,6 +31,14 @@ const PRODUCT_INCLUDE = {
  * `placehold.co` URL untouched — there is nothing to proxy and no ORB risk
  * for that host.
  */
+function agruparListasPorTipo(listas) {
+  const porTipo = { BENEFICIO: [], USO: [], IDEAL_PARA: [], INCLUYE: [] };
+  for (const item of listas) {
+    porTipo[item.tipo]?.push({ id: item.id, texto: item.texto });
+  }
+  return porTipo;
+}
+
 function mapProducto(producto) {
   return {
     id: producto.id,
@@ -46,6 +56,14 @@ function mapProducto(producto) {
     destacado: producto.destacado,
     orden: producto.orden,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
+    fraseComercial: producto.fraseComercial,
+    porQueLoVasAQuerer: producto.porQueLoVasAQuerer,
+    tePasaEsto: producto.tePasaEsto,
+    beneficios: agruparListasPorTipo(producto.listas ?? []).BENEFICIO,
+    usos: agruparListasPorTipo(producto.listas ?? []).USO,
+    idealPara: agruparListasPorTipo(producto.listas ?? []).IDEAL_PARA,
+    incluye: agruparListasPorTipo(producto.listas ?? []).INCLUYE,
+    especificaciones: (producto.especificaciones ?? []).map((e) => ({ id: e.id, nombre: e.nombre, valor: e.valor })),
     fotos: producto.fotos.map((f) => ({
       id: f.id,
       url: f.cloudinaryPublicId ? f.url : f.driveFileId ? `/api/products/${producto.id}/fotos/${f.id}` : f.url,
@@ -484,11 +502,19 @@ export async function crear(req, res, next) {
   let subidas = null;
   let producto = null;
   try {
-    const { nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden } = req.body;
+    const {
+      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden,
+      fraseComercial, porQueLoVasAQuerer, tePasaEsto,
+    } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
     const merchandising = validarCamposMerchandising({ stock, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
+    const beneficios = parseListas(req.body.beneficios, "BENEFICIO") ?? [];
+    const usos = parseListas(req.body.usos, "USO") ?? [];
+    const idealPara = parseListas(req.body.idealPara, "IDEAL_PARA") ?? [];
+    const incluye = parseListas(req.body.incluye, "INCLUYE") ?? [];
+    const especificaciones = parseEspecificaciones(req.body.especificaciones) ?? [];
     const fotosNuevas = req.files?.fotos ?? [];
     const videoArr = req.files?.video ?? [];
 
@@ -520,6 +546,11 @@ export async function crear(req, res, next) {
             destacado: merchandising.destacado ?? false,
             orden: merchandising.orden ?? 0,
             caracteristicas: { create: caracteristicas },
+            fraseComercial: fraseComercial?.trim() || null,
+            porQueLoVasAQuerer: porQueLoVasAQuerer?.trim() || null,
+            tePasaEsto: tePasaEsto?.trim() || null,
+            listas: { create: [...beneficios, ...usos, ...idealPara, ...incluye] },
+            especificaciones: { create: especificaciones },
           },
           include: PRODUCT_INCLUDE,
         });
@@ -593,11 +624,19 @@ export async function actualizar(req, res, next) {
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
-    const { nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden } = req.body;
+    const {
+      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden,
+      fraseComercial, porQueLoVasAQuerer, tePasaEsto,
+    } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
     const merchandising = validarCamposMerchandising({ stock, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
+    const beneficios = parseListas(req.body.beneficios, "BENEFICIO");
+    const usos = parseListas(req.body.usos, "USO");
+    const idealPara = parseListas(req.body.idealPara, "IDEAL_PARA");
+    const incluye = parseListas(req.body.incluye, "INCLUYE");
+    const especificaciones = parseEspecificaciones(req.body.especificaciones);
     const fotosExistentesIds = parseFotosExistentes(req.body.fotosExistentes) ?? existente.fotos.map((f) => f.id);
     const fotosNuevas = req.files?.fotos ?? [];
     const videoArr = req.files?.video ?? [];
@@ -647,6 +686,9 @@ export async function actualizar(req, res, next) {
             stock: merchandising.stock,
             destacado: merchandising.destacado,
             orden: merchandising.orden,
+            fraseComercial: fraseComercial !== undefined ? fraseComercial?.trim() || null : undefined,
+            porQueLoVasAQuerer: porQueLoVasAQuerer !== undefined ? porQueLoVasAQuerer?.trim() || null : undefined,
+            tePasaEsto: tePasaEsto !== undefined ? tePasaEsto?.trim() || null : undefined,
             // Cloudinary storage migration: driveFolderId no longer computed for new uploads.
             // driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
@@ -658,6 +700,32 @@ export async function actualizar(req, res, next) {
           if (caracteristicas.length > 0) {
             await tx.caracteristica.createMany({
               data: caracteristicas.map((c) => ({ ...c, productId: id })),
+            });
+          }
+        }
+
+        // Listas comerciales: full replace per-tipo, only when provided
+        for (const [tipo, items] of [
+          ["BENEFICIO", beneficios],
+          ["USO", usos],
+          ["IDEAL_PARA", idealPara],
+          ["INCLUYE", incluye],
+        ]) {
+          if (items === undefined) continue;
+          await tx.productoLista.deleteMany({ where: { productId: id, tipo } });
+          if (items.length > 0) {
+            await tx.productoLista.createMany({
+              data: items.map((item) => ({ ...item, productId: id })),
+            });
+          }
+        }
+
+        // Especificaciones: full replace when provided
+        if (especificaciones !== undefined) {
+          await tx.especificacion.deleteMany({ where: { productId: id } });
+          if (especificaciones.length > 0) {
+            await tx.especificacion.createMany({
+              data: especificaciones.map((e) => ({ ...e, productId: id })),
             });
           }
         }
