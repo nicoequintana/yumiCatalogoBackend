@@ -13,34 +13,34 @@ datasource db {
 }
 
 model Product {
-  id                Int              @id @default(autoincrement())
-  nombre            String
-  descripcion       String           @db.NVarChar(Max)
-  precio            Decimal          @db.Decimal(10, 2)
-  etiqueta          String?
-  fraseComercial    String?
-  porQueLoVasAQuerer String?         @db.NVarChar(Max)
-  tePasaEsto        String?          @db.NVarChar(Max)
-  sku               String           @unique
-  visibleEnCatalogo Boolean          @default(false)
-  stock             Int              @default(0)
-  destacado         Boolean          @default(false)
-  orden             Int              @default(0) // control manual de merchandising, menor = primero
-  driveFolderId     String?
-  categoriaId       Int?
-  categoria         Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
-  vistas            Int              @default(0)
-  compartidos       Int              @default(0)
-  favoritosCount    Int              @default(0)
-  caracteristicas   Caracteristica[]
-  listas            ProductoLista[]
-  especificaciones  Especificacion[]
-  fotos             Foto[]
-  video             Video?
-  eventos           EventoTrafico[]
-  itemsOrden        ItemOrden[]
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  id                 Int              @id @default(autoincrement())
+  nombre             String
+  descripcion        String           @db.NVarChar(Max)
+  precio             Decimal          @db.Decimal(10, 2)
+  etiqueta           String?
+  fraseComercial     String?
+  porQueLoVasAQuerer String?          @db.NVarChar(Max)
+  tePasaEsto         String?          @db.NVarChar(Max)
+  sku                String           @unique
+  visibleEnCatalogo  Boolean          @default(false)
+  stock              Int              @default(0)
+  destacado          Boolean          @default(false)
+  orden              Int              @default(0) // control manual de merchandising, menor = primero
+  driveFolderId      String?
+  categoriaId        Int?
+  categoria          Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
+  vistas             Int              @default(0)
+  compartidos        Int              @default(0)
+  favoritosCount     Int              @default(0)
+  caracteristicas    Caracteristica[]
+  listas             ProductoLista[]
+  especificaciones   Especificacion[]
+  fotos              Foto[]
+  video              Video?
+  eventos            EventoTrafico[]
+  itemsOrden         ItemOrden[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   @@index([visibleEnCatalogo, orden])
   @@index([destacado])
@@ -54,23 +54,23 @@ model Caracteristica {
 }
 
 model ProductoLista {
-  id        Int      @id @default(autoincrement())
-  tipo      String   @db.VarChar(20) // BENEFICIO | USO | IDEAL_PARA | INCLUYE
+  id        Int     @id @default(autoincrement())
+  tipo      String  @db.VarChar(20) // BENEFICIO | USO | IDEAL_PARA | INCLUYE
   texto     String
-  orden     Int      @default(0)
+  orden     Int     @default(0)
   productId Int
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([productId, tipo])
 }
 
 model Especificacion {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   nombre    String
   valor     String
-  orden     Int      @default(0)
+  orden     Int     @default(0)
   productId Int
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model Foto {
@@ -152,7 +152,7 @@ model ItemOrden {
   orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
   productId      Int
   product        Product @relation(fields: [productId], references: [id], onDelete: NoAction)
-  nombreProducto String  // snapshot, no se recalcula
+  nombreProducto String // snapshot, no se recalcula
   precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
   cantidad       Int
 
