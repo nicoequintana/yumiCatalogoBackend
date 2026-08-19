@@ -549,8 +549,15 @@ export async function crear(req, res, next) {
             fraseComercial: fraseComercial?.trim() || null,
             porQueLoVasAQuerer: porQueLoVasAQuerer?.trim() || null,
             tePasaEsto: tePasaEsto?.trim() || null,
-            listas: { create: [...beneficios, ...usos, ...idealPara, ...incluye] },
-            especificaciones: { create: especificaciones },
+            listas: {
+              create: [
+                ...beneficios.map((item, index) => ({ ...item, orden: index })),
+                ...usos.map((item, index) => ({ ...item, orden: index })),
+                ...idealPara.map((item, index) => ({ ...item, orden: index })),
+                ...incluye.map((item, index) => ({ ...item, orden: index })),
+              ],
+            },
+            especificaciones: { create: especificaciones.map((e, index) => ({ ...e, orden: index })) },
           },
           include: PRODUCT_INCLUDE,
         });
@@ -715,7 +722,7 @@ export async function actualizar(req, res, next) {
           await tx.productoLista.deleteMany({ where: { productId: id, tipo } });
           if (items.length > 0) {
             await tx.productoLista.createMany({
-              data: items.map((item) => ({ ...item, productId: id })),
+              data: items.map((item, index) => ({ ...item, orden: index, productId: id })),
             });
           }
         }
@@ -725,7 +732,7 @@ export async function actualizar(req, res, next) {
           await tx.especificacion.deleteMany({ where: { productId: id } });
           if (especificaciones.length > 0) {
             await tx.especificacion.createMany({
-              data: especificaciones.map((e) => ({ ...e, productId: id })),
+              data: especificaciones.map((e, index) => ({ ...e, orden: index, productId: id })),
             });
           }
         }

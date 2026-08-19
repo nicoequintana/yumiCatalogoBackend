@@ -156,6 +156,40 @@ describe("POST /api/products agrupa listas por tipo y expone especificaciones", 
     expect(res.body.beneficios).toEqual([]);
     expect(res.body.especificaciones).toEqual([]);
   });
+
+  it("asigna orden por posición dentro de cada tipo de lista, no globalmente entre tipos", async () => {
+    createMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+    updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await post({
+      beneficios: JSON.stringify([{ texto: "Beneficio 1" }, { texto: "Beneficio 2" }]),
+      usos: JSON.stringify([{ texto: "Uso 1" }]),
+      especificaciones: JSON.stringify([
+        { nombre: "Material", valor: "ABS" },
+        { nombre: "Peso", valor: "250 g" },
+      ]),
+    });
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          listas: {
+            create: [
+              { texto: "Beneficio 1", tipo: "BENEFICIO", orden: 0 },
+              { texto: "Beneficio 2", tipo: "BENEFICIO", orden: 1 },
+              { texto: "Uso 1", tipo: "USO", orden: 0 },
+            ],
+          },
+          especificaciones: {
+            create: [
+              { nombre: "Material", valor: "ABS", orden: 0 },
+              { nombre: "Peso", valor: "250 g", orden: 1 },
+            ],
+          },
+        }),
+      }),
+    );
+  });
 });
 
 describe("PUT /api/products/:id reemplaza listas y especificaciones (full replace)", () => {
@@ -175,7 +209,7 @@ describe("PUT /api/products/:id reemplaza listas y especificaciones (full replac
     expect(res.status).toBe(200);
     expect(listaDeleteManyMock).toHaveBeenCalledWith({ where: { productId: 42, tipo: "BENEFICIO" } });
     expect(listaCreateManyMock).toHaveBeenCalledWith({
-      data: [{ texto: "Nuevo beneficio", tipo: "BENEFICIO", productId: 42 }],
+      data: [{ texto: "Nuevo beneficio", tipo: "BENEFICIO", orden: 0, productId: 42 }],
     });
   });
 });
