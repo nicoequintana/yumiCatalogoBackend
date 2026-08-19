@@ -26,7 +26,14 @@ export async function login(req, res, next) {
     const passwordValida = await bcrypt.compare(password, usuario.passwordHash);
     if (!passwordValida) throw credencialesInvalidas();
 
-    const token = jwt.sign({ sub: usuario.id }, process.env.JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    // `email` viaja en el payload junto al `sub` para que `requireAuth` pueda
+    // exponer la identidad completa del admin en `req.usuario` sin pegarle a
+    // la DB en cada request. Solo datos de identificación — nunca el
+    // passwordHash ni ningún otro secreto: el payload de un JWT va firmado,
+    // no cifrado, y cualquiera con el token puede leerlo.
+    const token = jwt.sign({ sub: usuario.id, email: usuario.email }, process.env.JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
     res.json({ token });
   } catch (err) {
     next(err);

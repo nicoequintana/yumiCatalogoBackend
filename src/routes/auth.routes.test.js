@@ -44,6 +44,30 @@ describe("POST /api/auth/login", () => {
     expect(decoded.sub).toBe(1);
   });
 
+  it("incluye el email del usuario en el payload del token (para la traza de auditoría)", async () => {
+    const passwordHash = await bcrypt.hash("clave-correcta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@test.com", passwordHash });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@test.com", password: "clave-correcta" });
+
+    const decoded = jwt.verify(res.body.token, "test-secret");
+    expect(decoded.email).toBe("admin@test.com");
+  });
+
+  it("nunca incluye el passwordHash en el payload del token", async () => {
+    const passwordHash = await bcrypt.hash("clave-correcta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@test.com", passwordHash });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@test.com", password: "clave-correcta" });
+
+    const decoded = jwt.verify(res.body.token, "test-secret");
+    expect(decoded.passwordHash).toBeUndefined();
+  });
+
   it("responde 401 con mensaje genérico si el email no existe", async () => {
     findUniqueMock.mockResolvedValue(null);
 
