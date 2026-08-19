@@ -18,6 +18,9 @@ model Product {
   descripcion       String           @db.NVarChar(Max)
   precio            Decimal          @db.Decimal(10, 2)
   etiqueta          String?
+  fraseComercial    String?
+  porQueLoVasAQuerer String?         @db.NVarChar(Max)
+  tePasaEsto        String?          @db.NVarChar(Max)
   sku               String           @unique
   visibleEnCatalogo Boolean          @default(false)
   stock             Int              @default(0)
@@ -30,6 +33,8 @@ model Product {
   compartidos       Int              @default(0)
   favoritosCount    Int              @default(0)
   caracteristicas   Caracteristica[]
+  listas            ProductoLista[]
+  especificaciones  Especificacion[]
   fotos             Foto[]
   video             Video?
   eventos           EventoTrafico[]
@@ -46,6 +51,26 @@ model Caracteristica {
   texto     String
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model ProductoLista {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @db.VarChar(20) // BENEFICIO | USO | IDEAL_PARA | INCLUYE
+  texto     String
+  orden     Int      @default(0)
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, tipo])
+}
+
+model Especificacion {
+  id        Int      @id @default(autoincrement())
+  nombre    String
+  valor     String
+  orden     Int      @default(0)
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model Foto {
