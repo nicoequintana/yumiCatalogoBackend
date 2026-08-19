@@ -26,6 +26,19 @@ const productos = [
       "Acabado en bronce cepillado y acero mate. Un objeto de precisión pensado para el ritual de descorchar una gran añada.",
     precio: "145.00",
     etiqueta: "Exclusivo",
+    fraseComercial: "El ritual de descorchar, elevado a objeto de diseño.",
+    porQueLoVasAQuerer:
+      "Porque abrir una gran botella también merece un instrumento a la altura — no un simple sacacorchos, sino una pieza que se siente en la mano tanto como se ve en la mesa.",
+    tePasaEsto: "¿Alguna vez tuviste una gran añada esperando y solo un sacacorchos de plástico a mano?",
+    beneficios: ["Extracción sin esfuerzo, sin quebrar el corcho", "Diseño que acompaña cualquier mesa", "Estuche de presentación incluido"],
+    usos: ["Para abrir vinos de guarda", "Como regalo para sommeliers y amantes del vino", "Como pieza de exhibición en bar/cava"],
+    idealPara: ["Amantes del vino", "Regalos de alta gama", "Bares y cavas privadas"],
+    incluye: ["1 × Abridor Sommelier Élite", "1 × Estuche de presentación"],
+    especificaciones: [
+      { nombre: "Material", valor: "Bronce cepillado y acero mate" },
+      { nombre: "Peso", valor: "180 g" },
+      { nombre: "Dimensiones", valor: "12 × 4 × 3 cm" },
+    ],
     caracteristicas: [
       "Cuerpo en bronce cepillado",
       "Espiral de acero quirúrgico",
@@ -131,7 +144,21 @@ async function main() {
         descripcion: p.descripcion,
         precio: p.precio,
         etiqueta: p.etiqueta,
+        fraseComercial: p.fraseComercial ?? null,
+        porQueLoVasAQuerer: p.porQueLoVasAQuerer ?? null,
+        tePasaEsto: p.tePasaEsto ?? null,
         caracteristicas: { create: p.caracteristicas.map((texto) => ({ texto })) },
+        listas: {
+          create: [
+            ...(p.beneficios ?? []).map((texto, i) => ({ tipo: "BENEFICIO", texto, orden: i })),
+            ...(p.usos ?? []).map((texto, i) => ({ tipo: "USO", texto, orden: i })),
+            ...(p.idealPara ?? []).map((texto, i) => ({ tipo: "IDEAL_PARA", texto, orden: i })),
+            ...(p.incluye ?? []).map((texto, i) => ({ tipo: "INCLUYE", texto, orden: i })),
+          ],
+        },
+        especificaciones: {
+          create: (p.especificaciones ?? []).map((spec, i) => ({ nombre: spec.nombre, valor: spec.valor, orden: i })),
+        },
         fotos: {
           create: Array.from({ length: p.fotosCount }, (_, i) => ({
             url: placeholderFotoUrl(p.nombre, i),
