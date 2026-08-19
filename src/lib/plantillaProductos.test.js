@@ -59,7 +59,17 @@ describe("generarPlantilla", () => {
     const validacion = wb.getWorksheet("Productos").getCell(2, columna).dataValidation;
 
     expect(validacion.type).toBe("list");
-    expect(validacion.showErrorMessage).toBe(false);
+    // Se afirma "no bloquea" (falsy) y no `=== false` a propósito: ExcelJS
+    // omite el atributo `showErrorMessage` al escribir cuando es false, porque
+    // ese es el default implícito del formato OOXML. Al releer vuelve como
+    // `undefined`, que en Excel significa exactamente lo mismo: sugiere sin
+    // bloquear. Afirmar `false` estricto testearía un detalle de serialización
+    // de la librería, no la garantía que le importa al admin.
+    expect(validacion.showErrorMessage).toBeFalsy();
+    // El contraste con `categoria` es lo que da valor a esta prueba: esa sí
+    // bloquea, y su atributo sí viaja en el archivo.
+    const estricta = wb.getWorksheet("Productos").getCell(2, COLUMNAS.indexOf("categoria") + 1);
+    expect(estricta.dataValidation.showErrorMessage).toBe(true);
   });
 
   it("bloquea precios <= 0 y stock negativo o decimal", async () => {
