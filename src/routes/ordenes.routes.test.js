@@ -296,6 +296,52 @@ describe("auditoría de órdenes", () => {
     expect(auditCreateMock).not.toHaveBeenCalled();
   });
 
+  it("emite el evento ORDEN_CREADA al crear una orden", async () => {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN);
+    eventoTraficoCreateMock.mockResolvedValue({});
+
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .send({
+        dni: "12345678",
+        nombre: "Juan Perez",
+        telefono: "1122334455",
+        items: [{ productId: 1, cantidad: 1 }],
+      });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(201);
+    expect(eventoTraficoCreateMock).toHaveBeenCalledTimes(1);
+    expect(eventoTraficoCreateMock.mock.calls[0][0].data).toMatchObject({
+      tipo: "ORDEN_CREADA",
+    });
+  });
+
+  it("responde 201 igual si el insert del evento falla (best-effort)", async () => {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN);
+    eventoTraficoCreateMock.mockRejectedValue(new Error("DB caída"));
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .send({
+        dni: "12345678",
+        nombre: "Juan Perez",
+        telefono: "1122334455",
+        items: [{ productId: 1, cantidad: 1 }],
+      });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(201);
+    spy.mockRestore();
+  });
+
   it("NO registra nada en AuditLog al listar órdenes (las lecturas no se auditan)", async () => {
     ordenFindManyMock.mockResolvedValue([]);
     ordenCountMock.mockResolvedValue(0);

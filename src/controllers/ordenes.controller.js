@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { logAudit } from "../lib/logAudit.js";
+import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 
 const MAX_INTENTOS_DNI = 5;
 const ESTADO_VALIDO = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION", "ENTREGADA", "CANCELADA"];
@@ -136,21 +137,6 @@ async function upsertClienteConReintento(tx, { dni, nombre, telefono, email }) {
 }
 
 /**
- * Emite el evento ORDEN_CREADA en EventoTrafico. Best-effort, nunca debe
- * hacer fallar la creación de la orden ya confirmada — mismo espíritu que
- * `logError.js` (Sprint 1): fire-and-forget, con catch silencioso propio.
- * Escritura directa a Prisma (no HTTP a /api/eventos: ya estamos en el
- * backend).
- */
-async function emitirEventoOrdenCreada() {
-  try {
-    await prisma.eventoTrafico.create({ data: { tipo: "ORDEN_CREADA" } });
-  } catch (err) {
-    console.error("No se pudo registrar el evento ORDEN_CREADA:", err);
-  }
-}
-
-/**
  * POST /api/ordenes — checkout de invitado, PÚBLICO (sin requireAuth). El
  * rate-limiting se aplica a nivel de ruta (ver ordenes.routes.js), no acá.
  *
@@ -197,8 +183,9 @@ export async function crear(req, res, next) {
     });
 
     // Fire-and-forget: no se espera (ni se deja que una falla acá tumbe la
-    // respuesta ya exitosa).
-    emitirEventoOrdenCreada();
+    // respuesta ya exitosa). Va sin `productId` a propósito: una orden puede
+    // tener varios items, así que el evento es a nivel sitio, no de producto.
+    logEvento({ tipo: "ORDEN_CREADA", ...headersDeEvento(req) });
 
     res.status(201).json(orden);
   } catch (err) {

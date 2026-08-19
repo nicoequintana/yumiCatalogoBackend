@@ -4,6 +4,7 @@ import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
 import { logError } from "../lib/logError.js";
 import { logAudit } from "../lib/logAudit.js";
+import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
@@ -500,6 +501,12 @@ export async function obtenerPorId(req, res, next) {
         data: { vistas: { increment: 1 } },
         include: PRODUCT_INCLUDE,
       });
+      // El evento es ADITIVO al contador `vistas`, no lo reemplaza: el contador
+      // da el total acumulado, el evento agrega el cuándo y el de-dónde para el
+      // análisis de tráfico. Va acá adentro a propósito, atado a la misma
+      // condición `!esAdmin` que el incremento — un admin abriendo el form de
+      // edición no genera una vista. Fire-and-forget: la respuesta no espera.
+      logEvento({ tipo: "VISTA_PRODUCTO", productId: id, ...headersDeEvento(req) });
     }
 
     const relacionados = await obtenerRelacionados(producto, { esAdmin });
@@ -520,6 +527,9 @@ export async function compartir(req, res, next) {
 
     await prisma.product.update({ where: { id }, data: { compartidos: { increment: 1 } } });
 
+    // Aditivo al contador `compartidos` (ver `obtenerPorId`), fire-and-forget.
+    logEvento({ tipo: "COMPARTIDO", productId: id, ...headersDeEvento(req) });
+
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -535,6 +545,9 @@ export async function favorito(req, res, next) {
     if (!existe) throw httpError(404, "Producto no encontrado.");
 
     await prisma.product.update({ where: { id }, data: { favoritosCount: { increment: 1 } } });
+
+    // Aditivo al contador `favoritosCount` (ver `obtenerPorId`), fire-and-forget.
+    logEvento({ tipo: "FAVORITO_AGREGADO", productId: id, ...headersDeEvento(req) });
 
     res.json({ ok: true });
   } catch (err) {

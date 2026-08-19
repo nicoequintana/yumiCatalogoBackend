@@ -66,14 +66,37 @@ describe("POST /api/eventos", () => {
     });
   });
 
-  it.each(["VISTA_PRODUCTO", "CLICK_WHATSAPP", "FAVORITO_AGREGADO", "AGREGADO_CARRITO", "ORDEN_CREADA"])(
-    "acepta el tipo válido %s",
-    async (tipo) => {
-      createMock.mockResolvedValue({ id: 3 });
-      const res = await request(buildApp()).post("/api/eventos").send({ tipo });
-      expect(res.status).toBe(201);
-    },
-  );
+  it.each([
+    "VISTA_PRODUCTO",
+    "CLICK_WHATSAPP",
+    "FAVORITO_AGREGADO",
+    "AGREGADO_CARRITO",
+    "ORDEN_CREADA",
+    "COMPARTIDO",
+  ])("acepta el tipo válido %s", async (tipo) => {
+    createMock.mockResolvedValue({ id: 3 });
+    const res = await request(buildApp()).post("/api/eventos").send({ tipo });
+    expect(res.status).toBe(201);
+  });
+
+  it("acepta COMPARTIDO con productId y persiste el tipo tal cual", async () => {
+    createMock.mockResolvedValue({ id: 6 });
+
+    const res = await request(buildApp())
+      .post("/api/eventos")
+      .set("Referer", "https://yima.example.com/producto/7")
+      .send({ tipo: "COMPARTIDO", productId: 7 });
+
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith({
+      data: {
+        tipo: "COMPARTIDO",
+        productId: 7,
+        referrer: "https://yima.example.com/producto/7",
+        userAgent: null,
+      },
+    });
+  });
 
   it("responde 400 si tipo no es uno de los valores permitidos", async () => {
     const res = await request(buildApp()).post("/api/eventos").send({ tipo: "TIPO_INVENTADO" });
