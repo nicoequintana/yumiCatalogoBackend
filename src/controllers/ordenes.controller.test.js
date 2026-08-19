@@ -4,6 +4,8 @@ const clienteFindUniqueMock = vi.fn();
 const clienteCreateMock = vi.fn();
 const clienteUpdateMock = vi.fn();
 const productFindManyMock = vi.fn();
+const productFindUniqueMock = vi.fn();
+const productUpdateMock = vi.fn();
 const ordenCreateMock = vi.fn();
 const ordenFindManyMock = vi.fn();
 const ordenFindUniqueMock = vi.fn();
@@ -21,6 +23,8 @@ vi.mock("../lib/prisma.js", () => ({
     },
     product: {
       findMany: (...args) => productFindManyMock(...args),
+      findUnique: (...args) => productFindUniqueMock(...args),
+      update: (...args) => productUpdateMock(...args),
     },
     orden: {
       create: (...args) => ordenCreateMock(...args),
@@ -64,7 +68,7 @@ const PRODUCTO_DISPONIBLE = {
   nombre: "Producto A",
   precio: "100.00",
   visibleEnCatalogo: true,
-  disponibilidad: "DISPONIBLE",
+  stock: 10,
 };
 
 const PRODUCTO_2_DISPONIBLE = {
@@ -72,7 +76,7 @@ const PRODUCTO_2_DISPONIBLE = {
   nombre: "Producto B",
   precio: "50.00",
   visibleEnCatalogo: true,
-  disponibilidad: "DISPONIBLE",
+  stock: 10,
 };
 
 const CLIENTE_EXISTENTE = {
@@ -122,6 +126,8 @@ beforeEach(() => {
   clienteCreateMock.mockReset();
   clienteUpdateMock.mockReset();
   productFindManyMock.mockReset();
+  productFindUniqueMock.mockReset();
+  productUpdateMock.mockReset();
   ordenCreateMock.mockReset();
   ordenFindManyMock.mockReset();
   ordenFindUniqueMock.mockReset();
@@ -140,8 +146,13 @@ beforeEach(() => {
         create: (...args) => clienteCreateMock(...args),
         update: (...args) => clienteUpdateMock(...args),
       },
+      product: {
+        findUnique: (...args) => productFindUniqueMock(...args),
+        update: (...args) => productUpdateMock(...args),
+      },
       orden: {
         create: (...args) => ordenCreateMock(...args),
+        update: (...args) => ordenUpdateMock(...args),
       },
     };
     return cb(tx);
@@ -280,8 +291,8 @@ describe("crear() — validación de productos contra la DB", () => {
     expect(ordenCreateMock).not.toHaveBeenCalled();
   });
 
-  it("responde 400 si un producto está AGOTADO, y no crea la orden", async () => {
-    productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, disponibilidad: "AGOTADO" }]);
+  it("responde 400 si un producto está agotado (stock 0), y no crea la orden", async () => {
+    productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, stock: 0 }]);
     const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1 }] }) });
 
     await crear(req, res, next);
@@ -702,6 +713,8 @@ describe("obtenerPorId()", () => {
 describe("actualizarEstado()", () => {
   it("actualiza el estado a un valor válido", async () => {
     ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+    productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 10 });
+    productUpdateMock.mockResolvedValue({});
     ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
 
     const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
@@ -717,6 +730,65 @@ describe("actualizarEstado()", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(res.body.estado).toBe("CONFIRMADA");
+  });
+
+  describe("descuento de stock al confirmar", () => {
+    it("pasar de PENDIENTE a CONFIRMADA descuenta cantidad del stock de cada producto de la orden", async () => {
+      const ordenDosItems = {
+        ...ORDEN_CREADA_MOCK,
+        estado: "PENDIENTE",
+        items: [
+          { id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 2 },
+          { id: 2, ordenId: 100, productId: 2, nombreProducto: "Producto B", precioUnitario: "50.00", cantidad: 3 },
+        ],
+      };
+      ordenFindUniqueMock.mockResolvedValue(ordenDosItems);
+      productFindUniqueMock.mockImplementation(({ where: { id } }) =>
+        Promise.resolve(id === 1 ? { ...PRODUCTO_DISPONIBLE, stock: 10 } : { ...PRODUCTO_2_DISPONIBLE, stock: 10 }),
+      );
+      productUpdateMock.mockResolvedValue({});
+      ordenUpdateMock.mockResolvedValue({ ...ordenDosItems, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 1 }, data: { stock: 8 } });
+      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 2 }, data: { stock: 7 } });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("pasar de CONFIRMADA a CONFIRMADA de nuevo no vuelve a descontar stock", async () => {
+      ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(productFindUniqueMock).not.toHaveBeenCalled();
+      expect(productUpdateMock).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("el stock nunca queda negativo aunque la cantidad pedida supere el stock actual", async () => {
+      const ordenCantidadAlta = {
+        ...ORDEN_CREADA_MOCK,
+        estado: "PENDIENTE",
+        items: [{ id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 50 }],
+      };
+      ordenFindUniqueMock.mockResolvedValue(ordenCantidadAlta);
+      productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 3 });
+      productUpdateMock.mockResolvedValue({});
+      ordenUpdateMock.mockResolvedValue({ ...ordenCantidadAlta, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 1 }, data: { stock: 0 } });
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   it("permite ENTREGADA -> PENDIENTE (sin máquina de estados, cambios libres)", async () => {

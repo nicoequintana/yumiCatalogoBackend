@@ -47,7 +47,7 @@ const productoBase = {
   vistas: 0,
   compartidos: 0,
   visibleEnCatalogo: true,
-  disponibilidad: "DISPONIBLE",
+  stock: 10,
   destacado: false,
   orden: 0,
   createdAt: new Date(),
@@ -67,7 +67,7 @@ describe("GET /api/products - filtros de listado", () => {
     await request(buildApp()).get("/api/products?categoria=3");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true, categoriaId: 3 });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 }, categoriaId: 3 });
   });
 
   it("filtra por search (contains, sin mode)", async () => {
@@ -78,6 +78,7 @@ describe("GET /api/products - filtros de listado", () => {
     const { where } = findManyMock.mock.calls[0][0];
     expect(where).toEqual({
       visibleEnCatalogo: true,
+      stock: { gt: 0 },
       nombre: { contains: "bruma" },
     });
   });
@@ -88,7 +89,7 @@ describe("GET /api/products - filtros de listado", () => {
     await request(buildApp()).get("/api/products?search=");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
 
   it("filtra por minPrecio", async () => {
@@ -97,7 +98,7 @@ describe("GET /api/products - filtros de listado", () => {
     await request(buildApp()).get("/api/products?minPrecio=50");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true, precio: { gte: 50 } });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 }, precio: { gte: 50 } });
   });
 
   it("filtra por maxPrecio", async () => {
@@ -106,7 +107,7 @@ describe("GET /api/products - filtros de listado", () => {
     await request(buildApp()).get("/api/products?maxPrecio=200");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true, precio: { lte: 200 } });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 }, precio: { lte: 200 } });
   });
 
   it("combina minPrecio y maxPrecio en un rango", async () => {
@@ -115,26 +116,7 @@ describe("GET /api/products - filtros de listado", () => {
     await request(buildApp()).get("/api/products?minPrecio=50&maxPrecio=200");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true, precio: { gte: 50, lte: 200 } });
-  });
-
-  it("filtra por disponibilidad", async () => {
-    findManyMock.mockResolvedValue([]);
-
-    await request(buildApp()).get("/api/products?disponibilidad=AGOTADO");
-
-    const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true, disponibilidad: "AGOTADO" });
-  });
-
-  it("ignora disponibilidad inválida sin romper (200, filtro descartado)", async () => {
-    findManyMock.mockResolvedValue([]);
-
-    const res = await request(buildApp()).get("/api/products?disponibilidad=EN_OFERTA");
-
-    expect(res.status).toBe(200);
-    const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 }, precio: { gte: 50, lte: 200 } });
   });
 
   it("ignora minPrecio malformado sin romper (200, filtro descartado)", async () => {
@@ -144,7 +126,7 @@ describe("GET /api/products - filtros de listado", () => {
 
     expect(res.status).toBe(200);
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
 
   it("ignora categoria malformada sin romper (200, filtro descartado)", async () => {
@@ -154,36 +136,38 @@ describe("GET /api/products - filtros de listado", () => {
 
     expect(res.status).toBe(200);
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
 
   it("combina múltiples filtros con AND, visibleEnCatalogo primero en modo público", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get(
-      "/api/products?categoria=3&search=bruma&minPrecio=50&maxPrecio=200&disponibilidad=DISPONIBLE",
+      "/api/products?categoria=3&search=bruma&minPrecio=50&maxPrecio=200",
     );
 
     const { where } = findManyMock.mock.calls[0][0];
     const keys = Object.keys(where);
     expect(keys[0]).toBe("visibleEnCatalogo");
+    expect(keys[1]).toBe("stock");
     expect(where).toEqual({
       visibleEnCatalogo: true,
+      stock: { gt: 0 },
       categoriaId: 3,
       nombre: { contains: "bruma" },
       precio: { gte: 50, lte: 200 },
-      disponibilidad: "DISPONIBLE",
     });
   });
 
-  it("modo admin: sin visibleEnCatalogo, filtros igual aplican", async () => {
+  it("modo admin: sin visibleEnCatalogo ni stock, filtros igual aplican", async () => {
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp()).get("/api/products?admin=1&categoria=3&disponibilidad=AGOTADO");
+    await request(buildApp()).get("/api/products?admin=1&categoria=3");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ categoriaId: 3, disponibilidad: "AGOTADO" });
+    expect(where).toEqual({ categoriaId: 3 });
     expect(where.visibleEnCatalogo).toBeUndefined();
+    expect(where.stock).toBeUndefined();
   });
 
   it("modo admin sin filtros: where undefined (comportamiento previo intacto)", async () => {
@@ -195,13 +179,13 @@ describe("GET /api/products - filtros de listado", () => {
     expect(where).toBeUndefined();
   });
 
-  it("modo público sin filtros: comportamiento previo intacto", async () => {
+  it("modo público sin filtros: solo visibleEnCatalogo y stock", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products");
 
     const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({ visibleEnCatalogo: true });
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
 });
 

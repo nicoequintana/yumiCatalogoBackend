@@ -7,8 +7,6 @@ import { logError } from "../lib/logError.js";
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
 
-const DISPONIBILIDAD_VALIDA = ["DISPONIBLE", "AGOTADO", "A_PEDIDO"];
-
 const PRODUCT_INCLUDE = {
   caracteristicas: true,
   fotos: { orderBy: { orden: "asc" } },
@@ -44,7 +42,7 @@ function mapProducto(producto) {
     compartidos: producto.compartidos,
     favoritosCount: producto.favoritosCount,
     visibleEnCatalogo: producto.visibleEnCatalogo,
-    disponibilidad: producto.disponibilidad,
+    stock: producto.stock,
     destacado: producto.destacado,
     orden: producto.orden,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
@@ -143,17 +141,20 @@ function coerceDestacado(destacado) {
 
 /**
  * Validates + normalizes the merchandising fields added in Sprint 3
- * (`disponibilidad`, `destacado`, `orden`). Follows the same `esCreacion`
- * pattern as `validarCamposBase`: a field is only validated/applied when the
- * caller explicitly sent it — omitting it on update leaves the existing
- * value untouched, and on create it just falls back to its DB default.
- * Returns the normalized values (booleans/numbers coerced from the raw
- * strings multipart/form-data sends) for the caller to use in the Prisma
- * write.
+ * (`stock`, `destacado`, `orden`). Follows the same `esCreacion` pattern as
+ * `validarCamposBase`: a field is only validated/applied when the caller
+ * explicitly sent it — omitting it on update leaves the existing value
+ * untouched, and on create it just falls back to its DB default. Returns the
+ * normalized values (booleans/numbers coerced from the raw strings
+ * multipart/form-data sends) for the caller to use in the Prisma write.
  */
-function validarCamposMerchandising({ disponibilidad, destacado, orden }) {
-  if (disponibilidad !== undefined && !DISPONIBILIDAD_VALIDA.includes(disponibilidad)) {
-    throw httpError(400, "disponibilidad debe ser DISPONIBLE, AGOTADO o A_PEDIDO.");
+function validarCamposMerchandising({ stock, destacado, orden }) {
+  let stockNormalizado;
+  if (stock !== undefined) {
+    if (stock === null || stock === "" || Number.isNaN(Number(stock)) || !Number.isInteger(Number(stock)) || Number(stock) < 0) {
+      throw httpError(400, "stock debe ser un número entero mayor o igual a 0.");
+    }
+    stockNormalizado = Number(stock);
   }
 
   let destacadoNormalizado;
@@ -172,7 +173,7 @@ function validarCamposMerchandising({ disponibilidad, destacado, orden }) {
     ordenNormalizado = Number(orden);
   }
 
-  return { disponibilidad, destacado: destacadoNormalizado, orden: ordenNormalizado };
+  return { stock: stockNormalizado, destacado: destacadoNormalizado, orden: ordenNormalizado };
 }
 
 function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
@@ -284,21 +285,29 @@ async function limpiarArchivosSubidos({ fotos = [], video = null }) {
 
 /**
  * Builds the `where` clause for `listar()` from optional query-string
- * filters (categoria, search, minPrecio/maxPrecio, disponibilidad).
+ * filters (categoria, search, minPrecio/maxPrecio).
  *
  * Malformed values are never a 400/500 on this browse endpoint — a bad
- * `?minPrecio=abc` or an unknown `?disponibilidad=X` from a stale link or a
- * fumbled UI control just silently drops that one filter instead of failing
- * the whole listing. Each filter is validated independently before being
- * added.
+ * `?minPrecio=abc` from a stale link or a fumbled UI control just silently
+ * drops that one filter instead of failing the whole listing. Each filter is
+ * validated independently before being added.
  *
  * `visibleEnCatalogo: true` (when not in admin mode) is inserted FIRST so it
  * stays the leading key of the `where` object — there's a SQL Server index
  * on `[visibleEnCatalogo, orden]` and this keeps queries aligned with it.
+ *
+ * `stock: { gt: 0 }` (also only outside admin mode): a product that reached
+ * zero stock must stop appearing in the public catalog entirely, not just
+ * show a badge — decisión de producto. The admin listing still needs to see
+ * it (to restock or edit it), so this exclusion is public-only, same as
+ * `visibleEnCatalogo`.
  */
 function construirFiltrosListado(query, { esAdmin }) {
   const where = {};
-  if (!esAdmin) where.visibleEnCatalogo = true;
+  if (!esAdmin) {
+    where.visibleEnCatalogo = true;
+    where.stock = { gt: 0 };
+  }
 
   if (query.categoria !== undefined) {
     const categoriaId = Number(query.categoria);
@@ -325,10 +334,6 @@ function construirFiltrosListado(query, { esAdmin }) {
     if (!Number.isNaN(max)) rangoPrecio.lte = max;
   }
   if (Object.keys(rangoPrecio).length > 0) where.precio = rangoPrecio;
-
-  if (query.disponibilidad !== undefined && DISPONIBILIDAD_VALIDA.includes(query.disponibilidad)) {
-    where.disponibilidad = query.disponibilidad;
-  }
 
   return Object.keys(where).length > 0 ? where : undefined;
 }
@@ -369,7 +374,7 @@ async function obtenerRelacionados(producto, { esAdmin }) {
   const where = {
     id: { not: producto.id },
     OR: or,
-    ...(esAdmin ? {} : { visibleEnCatalogo: true }),
+    ...(esAdmin ? {} : { visibleEnCatalogo: true, stock: { gt: 0 } }),
   };
 
   const relacionados = await prisma.product.findMany({
@@ -394,7 +399,7 @@ export async function obtenerPorId(req, res, next) {
     // increment so an admin editing a product doesn't inflate its own count.
     const esAdmin = req.query.admin !== undefined;
 
-    if (!esAdmin && !existe.visibleEnCatalogo) {
+    if (!esAdmin && (!existe.visibleEnCatalogo || existe.stock <= 0)) {
       throw httpError(404, "Producto no encontrado.");
     }
 
@@ -453,9 +458,9 @@ export async function crear(req, res, next) {
   let subidas = null;
   let producto = null;
   try {
-    const { nombre, descripcion, precio, etiqueta, categoriaId, disponibilidad, destacado, orden } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
-    const merchandising = validarCamposMerchandising({ disponibilidad, destacado, orden });
+    const merchandising = validarCamposMerchandising({ stock, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
     const fotosNuevas = req.files?.fotos ?? [];
@@ -485,7 +490,7 @@ export async function crear(req, res, next) {
             etiqueta: etiqueta?.trim() || null,
             categoriaId: categoriaId ? Number(categoriaId) : null,
             sku: generarSku(nombre.trim()),
-            disponibilidad: merchandising.disponibilidad ?? "DISPONIBLE",
+            stock: merchandising.stock ?? 0,
             destacado: merchandising.destacado ?? false,
             orden: merchandising.orden ?? 0,
             caracteristicas: { create: caracteristicas },
@@ -562,9 +567,9 @@ export async function actualizar(req, res, next) {
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
-    const { nombre, descripcion, precio, etiqueta, categoriaId, disponibilidad, destacado, orden } = req.body;
+    const { nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
-    const merchandising = validarCamposMerchandising({ disponibilidad, destacado, orden });
+    const merchandising = validarCamposMerchandising({ stock, destacado, orden });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
     const fotosExistentesIds = parseFotosExistentes(req.body.fotosExistentes) ?? existente.fotos.map((f) => f.id);
@@ -613,7 +618,7 @@ export async function actualizar(req, res, next) {
             precio: precio !== undefined ? String(precio) : undefined,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
             categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
-            disponibilidad: merchandising.disponibilidad,
+            stock: merchandising.stock,
             destacado: merchandising.destacado,
             orden: merchandising.orden,
             // Cloudinary storage migration: driveFolderId no longer computed for new uploads.

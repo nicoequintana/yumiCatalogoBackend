@@ -20,7 +20,7 @@ model Product {
   etiqueta          String?
   sku               String           @unique
   visibleEnCatalogo Boolean          @default(false)
-  disponibilidad    String           @default("DISPONIBLE") @db.VarChar(20) // valores: DISPONIBLE | AGOTADO | A_PEDIDO
+  stock             Int              @default(0)
   destacado         Boolean          @default(false)
   orden             Int              @default(0) // control manual de merchandising, menor = primero
   driveFolderId     String?

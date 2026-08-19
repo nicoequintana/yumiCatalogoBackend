@@ -1,7 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
 
-const DISPONIBILIDAD_AGOTADO = "AGOTADO";
 const MAX_INTENTOS_DNI = 5;
 const ESTADO_VALIDO = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION", "ENTREGADA", "CANCELADA"];
 const DEFAULT_PAGE_SIZE = 20;
@@ -82,7 +81,7 @@ async function validarYSnapshotearProductos(items) {
     if (!producto.visibleEnCatalogo) {
       throw httpError(400, `El producto "${producto.nombre}" ya no está disponible.`);
     }
-    if (producto.disponibilidad === DISPONIBILIDAD_AGOTADO) {
+    if (producto.stock <= 0) {
       throw httpError(400, `El producto "${producto.nombre}" está agotado.`);
     }
 
@@ -318,14 +317,23 @@ export async function obtenerPorId(req, res, next) {
 
 /**
  * PATCH /api/ordenes/:id/estado — cambia el estado de una orden, protegido
- * con requireAuth. Validación manual contra los 5 valores válidos (mismo
- * estilo `.includes()` que `products.controller.js` usa para
- * `disponibilidad`).
+ * con requireAuth. Validación manual contra los 5 valores válidos.
  *
  * Deliberadamente SIN máquina de estados: cualquier estado válido puede
  * pasar a cualquier otro (incluso ENTREGADA -> PENDIENTE), sin restricciones
  * sobre el estado de origen. Decisión de diseño ya cerrada en el plan del
  * sprint — el admin es humano y puede necesitar corregir errores de carga.
+ *
+ * Descuento de stock: al entrar a CONFIRMADA viniendo de cualquier OTRO
+ * estado, se descuenta `cantidad` del `stock` de cada producto de la orden
+ * (transacción única con el cambio de estado). Solo pasa una vez por orden —
+ * si ya estaba CONFIRMADA y se vuelve a guardar CONFIRMADA (no-op de estado),
+ * o si se pasa a un tercer estado y luego de vuelta a CONFIRMADA, el stock NO
+ * se descuenta de nuevo; ese caso de re-confirmación queda fuera de alcance
+ * (decisión de producto: si hace falta corregir, se ajusta el stock a mano
+ * desde el form del producto). `Math.max(0, ...)` evita que el `decrement`
+ * deje el contador en negativo si el stock ya fue ajustado manualmente por
+ * debajo de lo que la orden pide.
  *
  * Incluye `cliente` e `items` en la respuesta (mismo shape que
  * `obtenerPorId()`), no solo los campos escalares de `Orden`: el frontend
@@ -346,13 +354,29 @@ export async function actualizarEstado(req, res, next) {
       throw httpError(400, `estado debe ser uno de: ${ESTADO_VALIDO.join(", ")}.`);
     }
 
-    const actual = await prisma.orden.findUnique({ where: { id } });
+    const actual = await prisma.orden.findUnique({ where: { id }, include: { items: true } });
     if (!actual) throw httpError(404, "Orden no encontrada.");
 
-    const orden = await prisma.orden.update({
-      where: { id },
-      data: { estado },
-      include: { cliente: true, items: true },
+    const debeDescontarStock = estado === "CONFIRMADA" && actual.estado !== "CONFIRMADA";
+
+    const orden = await prisma.$transaction(async (tx) => {
+      if (debeDescontarStock) {
+        for (const item of actual.items) {
+          const producto = await tx.product.findUnique({ where: { id: item.productId } });
+          if (producto) {
+            await tx.product.update({
+              where: { id: item.productId },
+              data: { stock: Math.max(0, producto.stock - item.cantidad) },
+            });
+          }
+        }
+      }
+
+      return tx.orden.update({
+        where: { id },
+        data: { estado },
+        include: { cliente: true, items: true },
+      });
     });
 
     res.json(orden);

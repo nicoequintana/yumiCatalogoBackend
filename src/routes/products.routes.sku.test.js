@@ -139,7 +139,7 @@ describe("listar() filtra por visibilidad", () => {
     await request(buildApp()).get("/api/products");
 
     expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { visibleEnCatalogo: true } }),
+      expect.objectContaining({ where: { visibleEnCatalogo: true, stock: { gt: 0 } } }),
     );
   });
 

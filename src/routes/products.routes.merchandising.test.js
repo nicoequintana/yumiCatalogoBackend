@@ -60,7 +60,7 @@ const productoBase = {
   vistas: 0,
   compartidos: 0,
   visibleEnCatalogo: true,
-  disponibilidad: "DISPONIBLE",
+  stock: 10,
   destacado: false,
   orden: 0,
   createdAt: new Date(),
@@ -87,7 +87,7 @@ describe("listar() ordena por orden asc, createdAt desc", () => {
   });
 });
 
-describe("POST /api/products valida disponibilidad/destacado/orden", () => {
+describe("POST /api/products valida stock/destacado/orden", () => {
   function post(fields) {
     let req = request(buildApp())
       .post("/api/products")
@@ -110,27 +110,53 @@ describe("POST /api/products valida disponibilidad/destacado/orden", () => {
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ disponibilidad: "DISPONIBLE", destacado: false, orden: 0 }),
+        data: expect.objectContaining({ stock: 0, destacado: false, orden: 0 }),
       }),
     );
   });
 
-  it("acepta disponibilidad, destacado y orden válidos", async () => {
-    createMock.mockResolvedValue({ ...productoBase, disponibilidad: "AGOTADO", destacado: true, orden: 5 });
-    updateMock.mockResolvedValue({ ...productoBase, disponibilidad: "AGOTADO", destacado: true, orden: 5 });
+  it("acepta stock, destacado y orden válidos", async () => {
+    createMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true, orden: 5 });
+    updateMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true, orden: 5 });
 
-    const res = await post({ disponibilidad: "AGOTADO", destacado: "true", orden: "5" });
+    const res = await post({ stock: "5", destacado: "true", orden: "5" });
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ disponibilidad: "AGOTADO", destacado: true, orden: 5 }),
+        data: expect.objectContaining({ stock: 5, destacado: true, orden: 5 }),
       }),
     );
   });
 
-  it("rechaza disponibilidad fuera del set válido", async () => {
-    const res = await post({ disponibilidad: "EN_OFERTA" });
+  it("acepta stock 0 (producto agotado)", async () => {
+    createMock.mockResolvedValue({ ...productoBase, stock: 0 });
+    updateMock.mockResolvedValue({ ...productoBase, stock: 0 });
+
+    const res = await post({ stock: "0" });
+
+    expect(res.status).toBe(201);
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ stock: 0 }),
+      }),
+    );
+  });
+
+  it("rechaza stock negativo", async () => {
+    const res = await post({ stock: "-1" });
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza stock no numérico", async () => {
+    const res = await post({ stock: "abc" });
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza stock con decimales", async () => {
+    const res = await post({ stock: "1.5" });
     expect(res.status).toBe(400);
     expect(createMock).not.toHaveBeenCalled();
   });
@@ -155,7 +181,7 @@ describe("POST /api/products valida disponibilidad/destacado/orden", () => {
 });
 
 describe("PUT /api/products/:id respeta esCreacion:false para merchandising", () => {
-  it("no toca disponibilidad/destacado/orden si no se envían", async () => {
+  it("no toca stock/destacado/orden si no se envían", async () => {
     findUniqueMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
     updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
     findUniqueOrThrowMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
@@ -170,12 +196,12 @@ describe("PUT /api/products/:id respeta esCreacion:false para merchandising", ()
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ disponibilidad: undefined, destacado: undefined, orden: undefined }),
+        data: expect.objectContaining({ stock: undefined, destacado: undefined, orden: undefined }),
       }),
     );
   });
 
-  it("rechaza disponibilidad inválida en edición", async () => {
+  it("rechaza stock inválido en edición", async () => {
     findUniqueMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
 
     const res = await request(buildApp())
@@ -184,7 +210,7 @@ describe("PUT /api/products/:id respeta esCreacion:false para merchandising", ()
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
       .field("precio", "100")
-      .field("disponibilidad", "INVALIDO");
+      .field("stock", "-1");
 
     expect(res.status).toBe(400);
     expect(updateMock).not.toHaveBeenCalled();
