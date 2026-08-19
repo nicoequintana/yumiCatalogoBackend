@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
-import { COLUMNAS } from "./importProductos.js";
+import { COLUMNAS, MARCA_EJEMPLO, leerArchivo } from "./importProductos.js";
 import { ETIQUETAS_SUGERIDAS, generarPlantilla } from "./plantillaProductos.js";
 
 async function abrir(buffer) {
@@ -93,11 +93,23 @@ describe("generarPlantilla", () => {
     expect(wb.getWorksheet("Productos").getCell(2, columna).dataValidation).toBeUndefined();
   });
 
-  it("incluye una fila de ejemplo que el admin pisa o borra", async () => {
+  it("incluye una fila de ejemplo marcada con MARCA_EJEMPLO, que el admin pisa o borra", async () => {
     const wb = await abrir(await generarPlantilla(["Velas"]));
     const ejemplo = wb.getWorksheet("Productos").getRow(2);
 
-    expect(ejemplo.getCell(COLUMNAS.indexOf("nombre") + 1).value).toBeTruthy();
+    const nombre = ejemplo.getCell(COLUMNAS.indexOf("nombre") + 1).value;
+    expect(nombre).toBeTruthy();
+    expect(String(nombre).startsWith(MARCA_EJEMPLO)).toBe(true);
     expect(ejemplo.getCell(COLUMNAS.indexOf("precio") + 1).value).toBeTypeOf("number");
+  });
+
+  it("ROUND-TRIP: la plantilla sin editar no deja ninguna fila de datos al leerla", async () => {
+    // Guarda de regresión del defecto: si esto vuelve a dar 1, la fila de
+    // ejemplo se está colando como producto real en el catálogo.
+    const buffer = await generarPlantilla(["Velas"]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas).toHaveLength(0);
   });
 });

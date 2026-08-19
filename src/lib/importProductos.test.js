@@ -6,6 +6,7 @@ import {
   validarFila,
   COLUMNAS,
   MAX_FILAS,
+  MARCA_EJEMPLO,
   leerArchivo,
   procesarArchivo,
 } from "./importProductos.js";
@@ -250,6 +251,17 @@ describe("leerArchivo", () => {
     const filas = await leerArchivo(buffer);
 
     expect(filas.map((f) => f.valores.nombre)).toEqual(["A", "B"]);
+  });
+
+  it("descarta la fila de ejemplo de la plantilla (nombre con MARCA_EJEMPLO)", async () => {
+    const buffer = await construirXlsx([
+      { nombre: `${MARCA_EJEMPLO} — Vela de soja lavanda`, descripcion: "d", precio: 1500 },
+      { nombre: "Producto real", descripcion: "d", precio: 1000 },
+    ]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas.map((f) => f.valores.nombre)).toEqual(["Producto real"]);
   });
 
   it("lanza si el archivo no tiene la hoja Productos", async () => {

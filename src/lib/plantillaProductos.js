@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { COLUMNAS, MAX_FILAS, NOMBRE_HOJA } from "./importProductos.js";
+import { COLUMNAS, MARCA_EJEMPLO, MAX_FILAS, NOMBRE_HOJA } from "./importProductos.js";
 
 /**
  * Mismas sugerencias que el `<datalist>` del formulario de alta
@@ -14,7 +14,7 @@ const HOJA_LISTAS = "Listas";
 const ULTIMA_FILA = MAX_FILAS + 1;
 
 const FILA_EJEMPLO = {
-  nombre: "Vela de soja lavanda",
+  nombre: `${MARCA_EJEMPLO} — Vela de soja lavanda`,
   descripcion: "Vela artesanal de cera de soja con aroma a lavanda.",
   precio: 1500,
   stock: 10,

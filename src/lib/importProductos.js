@@ -1,6 +1,15 @@
 import ExcelJS from "exceljs";
 
 /**
+ * Marca de la fila de ejemplo que trae la plantilla. `leerArchivo` la
+ * descarta: si el admin sube la plantilla sin tocarla (o se olvida de borrar
+ * el ejemplo antes de cargar sus productos), ese producto de muestra NO tiene
+ * que entrar al catálogo. Es texto visible a propósito — el admin ve por qué
+ * esa fila es distinta.
+ */
+export const MARCA_EJEMPLO = "EJEMPLO (borrar esta fila)";
+
+/**
  * Lógica pura de la importación masiva de productos desde `.xlsx`.
  *
  * No importa Prisma ni Express a propósito: recibe los datos ya leídos y
@@ -245,6 +254,10 @@ export async function leerArchivo(buffer) {
       (columna) => valores[columna] === null || String(valores[columna]).trim() === "",
     );
     if (vacia) return;
+
+    // Fila de ejemplo de la plantilla: se descarta aunque el admin la haya
+    // dejado sin tocar (ver MARCA_EJEMPLO).
+    if (String(valores.nombre ?? "").startsWith(MARCA_EJEMPLO)) return;
 
     filas.push({ numeroFila, valores });
   });
