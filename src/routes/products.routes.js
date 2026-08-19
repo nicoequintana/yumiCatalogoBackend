@@ -48,7 +48,14 @@ const uploadXlsx = multer({
   fileFilter(_req, file, cb) {
     const esXlsx = file.originalname.toLowerCase().endsWith(".xlsx");
     if (!esXlsx || !MIMES_XLSX.includes(file.mimetype)) {
-      return cb(new Error("El archivo debe ser un .xlsx. Descargá la plantilla y completala."));
+      // `status` explícito: el error handler central de `server.js` reemplaza
+      // el mensaje por "Error interno del servidor." en cualquier error sin
+      // status (status 500). Un archivo con la extensión equivocada es un
+      // error del usuario, no una falla del servidor — tiene que llegarle el
+      // mensaje que le dice cómo arreglarlo.
+      const err = new Error("El archivo debe ser un .xlsx. Descargá la plantilla y completala.");
+      err.status = 400;
+      return cb(err);
     }
     cb(null, true);
   },

@@ -27,7 +27,11 @@ function buildApp() {
   const app = express();
   app.use("/api/products", productsRouter);
   app.use((err, _req, res, _next) => {
-    res.status(err.status ?? 500).json({ error: err.message });
+    // Espeja el handler real de `server.js`: en 500 el mensaje se reemplaza,
+    // así un test no puede pasar afirmando un mensaje que en producción el
+    // usuario nunca vería.
+    const status = err.status ?? 500;
+    res.status(status).json({ error: status === 500 ? "Error interno del servidor." : err.message });
   });
   return app;
 }
@@ -173,13 +177,13 @@ describe("POST /api/products/import", () => {
     ]);
   });
 
-  it("rechaza un archivo que no es .xlsx", async () => {
+  it("rechaza un archivo que no es .xlsx con 400 y mensaje util", async () => {
     const res = await request(buildApp())
       .post("/api/products/import")
       .set("Authorization", authHeader)
       .attach("archivo", Buffer.from("nombre,precio"), "productos.csv");
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     expect(res.body.error).toContain(".xlsx");
     expect(transactionMock).not.toHaveBeenCalled();
   });
