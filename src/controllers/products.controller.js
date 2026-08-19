@@ -3,6 +3,7 @@ import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
 import { logError } from "../lib/logError.js";
+import { logAudit } from "../lib/logAudit.js";
 
 const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
@@ -309,20 +310,55 @@ async function subirArchivosNuevos({ fotosNuevas, videoNuevo, folder }) {
 //   return { fotosSubidas, videoSubido };
 // }
 
+/**
+ * Registra una falla de limpieza de media (Cloudinary/Drive) en el ErrorLog
+ * central, en vez del `console.error` suelto que había antes.
+ *
+ * Por qué estas fallas NO son un 500: la mutación de negocio (crear, editar o
+ * borrar el producto) ya se completó y el cliente ya tiene su respuesta. Lo
+ * único que falló es el borrado del archivo remoto, que deja un huérfano en
+ * el storage — molesto y hay que poder verlo, pero no invalida la operación.
+ * Antes ese rastro moría en los logs del contenedor; ahora queda consultable
+ * desde el panel admin igual que cualquier otro error.
+ *
+ * `status: null` a propósito: no hay un status HTTP asociado (la respuesta al
+ * cliente fue exitosa). `req` es opcional porque `limpiarArchivosSubidos` se
+ * llama desde catch blocks que no siempre lo tienen a mano.
+ *
+ * Fire-and-forget, igual que el resto de los usos de `logError`.
+ */
+function logFallaDeLimpieza(mensaje, err, req) {
+  logError({
+    mensaje: `${mensaje}: ${err?.message ?? err}`,
+    stack: err?.stack,
+    ruta: req?.originalUrl,
+    metodo: req?.method,
+    status: null,
+  });
+}
+
 /** Best-effort Cloudinary cleanup — never throws, used in catch blocks. */
-async function limpiarArchivosSubidos({ fotos = [], video = null }) {
+async function limpiarArchivosSubidos({ fotos = [], video = null }, req) {
   for (const foto of fotos) {
     try {
       await cloudinary.eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType);
     } catch (err) {
-      console.error("No se pudo limpiar la foto huérfana en Cloudinary:", foto.cloudinaryPublicId, err);
+      logFallaDeLimpieza(
+        `No se pudo limpiar la foto huérfana en Cloudinary (${foto.cloudinaryPublicId})`,
+        err,
+        req,
+      );
     }
   }
   if (video) {
     try {
       await cloudinary.eliminarArchivo(video.cloudinaryPublicId, video.cloudinaryResourceType);
     } catch (err) {
-      console.error("No se pudo limpiar el video huérfano en Cloudinary:", video.cloudinaryPublicId, err);
+      logFallaDeLimpieza(
+        `No se pudo limpiar el video huérfano en Cloudinary (${video.cloudinaryPublicId})`,
+        err,
+        req,
+      );
     }
   }
 }
@@ -341,10 +377,12 @@ async function limpiarArchivosSubidos({ fotos = [], video = null }) {
  * on `[visibleEnCatalogo, orden]` and this keeps queries aligned with it.
  *
  * `stock: { gt: 0 }` (also only outside admin mode): a product that reached
- * zero stock must stop appearing in the public catalog entirely, not just
- * show a badge — decisión de producto. The admin listing still needs to see
- * it (to restock or edit it), so this exclusion is public-only, same as
- * `visibleEnCatalogo`.
+ * zero stock stops appearing in the public LISTING, so it doesn't take up a
+ * slot in the grid. Its detail page stays reachable though (see
+ * `obtenerPorId`), showing an "Agotado" badge with the buy CTA disabled — a
+ * shared link to an out-of-stock product must not 404. The admin listing
+ * still needs to see it (to restock or edit it), so this exclusion is
+ * public-only, same as `visibleEnCatalogo`.
  */
 function construirFiltrosListado(query, { esAdmin }) {
   const where = {};
@@ -612,13 +650,21 @@ export async function crear(req, res, next) {
       include: PRODUCT_INCLUDE,
     });
 
+    // Fire-and-forget: la respuesta no espera el insert de auditoría.
+    logAudit(req, {
+      accion: "CREAR",
+      entidad: "Producto",
+      entidadId: producto.id,
+      detalle: { nombre: producto.nombre, sku: producto.sku },
+    });
+
     res.status(201).json(mapProducto(producto));
   } catch (err) {
     // Orphan prevention (design D6): clean up any Drive uploads from this
     // batch. The product DB row (if created) is intentionally NOT rolled
     // back — per design item 1, a partially-created product (no media) is
     // an accepted state the admin can fix by editing.
-    if (subidas) await limpiarArchivosSubidos({ fotos: subidas.fotosSubidas, video: subidas.videoSubido });
+    if (subidas) await limpiarArchivosSubidos({ fotos: subidas.fotosSubidas, video: subidas.videoSubido }, req);
     next(err);
   }
 }
@@ -787,7 +833,7 @@ export async function actualizar(req, res, next) {
       });
     } catch (dbErr) {
       // Orphan prevention (design D6): DB write failed after successful Cloudinary upload(s).
-      await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
+      await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido }, req);
       // Cloudinary storage migration: driveFolderId no longer computed here, nothing to clean up.
       // if (driveFolderId && driveFolderId !== existente.driveFolderId) {
       //   await googleDrive.eliminarArchivo(driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
@@ -800,30 +846,50 @@ export async function actualizar(req, res, next) {
     // Cloudinary-backed; a row has exactly one of the two ids set).
     for (const foto of fotosARemover) {
       if (foto.driveFileId) {
-        await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error(err));
+        await googleDrive
+          .eliminarArchivo(foto.driveFileId)
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
       } else if (foto.cloudinaryPublicId) {
         await cloudinary
           .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-          .catch((err) => console.error(err));
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
       }
     }
     if (videoSubido && existente.video) {
       if (existente.video.driveFileId) {
-        await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+        await googleDrive
+          .eliminarArchivo(existente.video.driveFileId)
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video anterior en Drive", err, req));
       } else if (existente.video.cloudinaryPublicId) {
         await cloudinary
           .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
-          .catch((err) => console.error(err));
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video anterior en Cloudinary", err, req));
       }
     } else if (eliminarVideo && existente.video) {
       if (existente.video.driveFileId) {
-        await googleDrive.eliminarArchivo(existente.video.driveFileId).catch((err) => console.error(err));
+        await googleDrive
+          .eliminarArchivo(existente.video.driveFileId)
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Drive", err, req));
       } else if (existente.video.cloudinaryPublicId) {
         await cloudinary
           .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
-          .catch((err) => console.error(err));
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Cloudinary", err, req));
       }
     }
+
+    logAudit(req, {
+      accion: "ACTUALIZAR",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: {
+        nombreAnterior: existente.nombre,
+        nombreNuevo: productoActualizado.nombre,
+        precioAnterior: String(existente.precio),
+        precioNuevo: String(productoActualizado.precio),
+        stockAnterior: existente.stock,
+        stockNuevo: productoActualizado.stock,
+      },
+    });
 
     res.json(mapProducto(productoActualizado));
   } catch (err) {
@@ -848,6 +914,16 @@ export async function actualizarVisibilidad(req, res, next) {
       where: { id },
       data: { visibleEnCatalogo },
       include: PRODUCT_INCLUDE,
+    });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_VISIBILIDAD",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: {
+        visibleAnterior: existente.visibleEnCatalogo,
+        visibleNuevo: producto.visibleEnCatalogo,
+      },
     });
 
     res.json(mapProducto(producto));
@@ -888,6 +964,18 @@ export async function actualizarMerchandising(req, res, next) {
       include: PRODUCT_INCLUDE,
     });
 
+    logAudit(req, {
+      accion: "ACTUALIZAR_MERCHANDISING",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: {
+        destacadoAnterior: existente.destacado,
+        destacadoNuevo: producto.destacado,
+        ordenAnterior: existente.orden,
+        ordenNuevo: producto.orden,
+      },
+    });
+
     res.json(mapProducto(producto));
   } catch (err) {
     next(err);
@@ -905,6 +993,16 @@ export async function eliminar(req, res, next) {
     // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
     await prisma.product.delete({ where: { id } });
 
+    // Se audita apenas la fila se borró, antes de la limpieza de media: el
+    // borrado ya es irreversible en este punto, y la limpieza de Cloudinary/
+    // Drive puede fallar sin invalidar el hecho de que el producto se eliminó.
+    logAudit(req, {
+      accion: "ELIMINAR",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: { nombre: producto.nombre, sku: producto.sku },
+    });
+
     // Always sweep individual files first — a product may have a
     // driveFolderId AND still have some fotos/video whose driveFileId
     // predates that folder (e.g. a legacy product that was edited once
@@ -913,34 +1011,42 @@ export async function eliminar(req, res, next) {
     // folder). Deleting the folder alone would leave those orphaned.
     for (const foto of producto.fotos) {
       if (foto.driveFileId) {
-        await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+        await googleDrive
+          .eliminarArchivo(foto.driveFileId)
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
       } else if (foto.cloudinaryPublicId) {
         await cloudinary
           .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-          .catch((err) => console.error("Cleanup foto:", err));
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
       }
     }
     if (producto.video) {
       if (producto.video.driveFileId) {
-        await googleDrive.eliminarArchivo(producto.video.driveFileId).catch((err) => console.error("Cleanup video:", err));
+        await googleDrive
+          .eliminarArchivo(producto.video.driveFileId)
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Drive", err, req));
       } else if (producto.video.cloudinaryPublicId) {
         await cloudinary
           .eliminarArchivo(producto.video.cloudinaryPublicId, producto.video.cloudinaryResourceType)
-          .catch((err) => console.error("Cleanup video:", err));
+          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Cloudinary", err, req));
       }
     }
     // Then remove the (now-empty, or never-used) per-product Drive folder
     // itself, if one exists (only ever set for legacy Drive-era products —
     // Cloudinary uploads never create one).
     if (producto.driveFolderId) {
-      await googleDrive.eliminarArchivo(producto.driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
+      await googleDrive
+        .eliminarArchivo(producto.driveFolderId)
+        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Drive", err, req));
     }
     // Same idea for the Cloudinary side: remove the per-product folder now
     // that every asset inside it was just deleted above. Uses the same
     // folder name formula as crear/actualizar so it matches regardless of
     // when the product's media was last uploaded.
     const carpetaCloudinary = `productos/${producto.id}-${sanitizarNombreParaCarpeta(producto.nombre.trim())}`;
-    await cloudinary.eliminarCarpeta(carpetaCloudinary).catch((err) => console.error("Cleanup carpeta Cloudinary:", err));
+    await cloudinary
+      .eliminarCarpeta(carpetaCloudinary)
+      .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req));
 
     res.json({ ok: true });
   } catch (err) {
@@ -1118,12 +1224,21 @@ export async function eliminarFoto(req, res, next) {
     });
 
     if (foto.driveFileId) {
-      await googleDrive.eliminarArchivo(foto.driveFileId).catch((err) => console.error("Cleanup foto:", err));
+      await googleDrive
+        .eliminarArchivo(foto.driveFileId)
+        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
     } else if (foto.cloudinaryPublicId) {
       await cloudinary
         .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-        .catch((err) => console.error("Cleanup foto:", err));
+        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
     }
+
+    logAudit(req, {
+      accion: "ELIMINAR_FOTO",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: { fotoId, nombreProducto: producto.nombre },
+    });
 
     const productoActualizado = await prisma.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
     res.json(mapProducto(productoActualizado));
