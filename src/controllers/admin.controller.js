@@ -90,7 +90,7 @@ export async function listarAuditLogs(req, res, next) {
  * descontando mercadería que la métrica todavía no considera vendida, o al
  * revés). PENDIENTE y CANCELADA quedan afuera a propósito.
  */
-const ESTADOS_FACTURABLES = ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"];
+export const ESTADOS_FACTURABLES = ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"];
 
 /** Período por defecto cuando no llega `desde`/`hasta` en la query. */
 const DIAS_PERIODO_POR_DEFECTO = 30;
@@ -111,7 +111,7 @@ const MAX_DIAS_PERIODO = 400;
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /** `Date` -> "YYYY-MM-DD" en UTC, la misma clave que agrupa la serie diaria. */
-function aClaveDia(fecha) {
+export function aClaveDia(fecha) {
   return fecha.toISOString().slice(0, 10);
 }
 
@@ -125,7 +125,7 @@ function aClaveDia(fecha) {
  * corte a medianoche. Si el rango viene invertido (`desde` posterior a
  * `hasta`) se dan vuelta los extremos, que es más útil que devolver vacío.
  */
-function parsearPeriodo(query) {
+export function parsearPeriodo(query) {
   const parsear = (valor) => {
     if (typeof valor !== "string" || valor === "") return null;
     const fecha = new Date(`${valor.slice(0, 10)}T00:00:00.000Z`);
