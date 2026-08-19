@@ -481,7 +481,13 @@ export async function obtenerPorId(req, res, next) {
     // increment so an admin editing a product doesn't inflate its own count.
     const esAdmin = req.query.admin !== undefined;
 
-    if (!esAdmin && (!existe.visibleEnCatalogo || existe.stock <= 0)) {
+    // Un producto agotado (`stock <= 0`) SÍ es visible en su ficha de detalle:
+    // el visitante ve que existe, con el badge "Agotado" y sin poder comprarlo.
+    // Solo se lo excluye del listado público (ver `construirFiltrosListado`),
+    // así no ocupa lugar en la grilla pero su link compartido sigue abriendo.
+    // `visibleEnCatalogo: false` sí sigue siendo 404: eso es el admin ocultando
+    // el producto a propósito, distinto de quedarse sin stock.
+    if (!esAdmin && !existe.visibleEnCatalogo) {
       throw httpError(404, "Producto no encontrado.");
     }
 
