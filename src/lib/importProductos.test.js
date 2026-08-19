@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { parsearLista, parsearEspecificaciones, validarFila } from "./importProductos.js";
+import ExcelJS from "exceljs";
+import {
+  parsearLista,
+  parsearEspecificaciones,
+  validarFila,
+  COLUMNAS,
+  MAX_FILAS,
+  leerArchivo,
+  procesarArchivo,
+} from "./importProductos.js";
 
 describe("parsearLista", () => {
   it("parte un texto multilínea en un ítem por renglón", () => {
@@ -193,5 +202,113 @@ describe("validarFila", () => {
     expect(datos.fraseComercial).toBe("Iluminá tu casa");
     expect(datos.beneficios).toEqual([{ texto: "Dura 40 h" }, { texto: "Sin humo" }]);
     expect(datos.especificaciones).toEqual([{ nombre: "Material", valor: "Soja" }]);
+  });
+});
+
+/** Arma un .xlsx en memoria con las filas dadas, para testear el parseo real. */
+async function construirXlsx(filas) {
+  const wb = new ExcelJS.Workbook();
+  const hoja = wb.addWorksheet("Productos");
+  hoja.addRow(COLUMNAS);
+  for (const fila of filas) hoja.addRow(COLUMNAS.map((c) => fila[c] ?? null));
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+describe("leerArchivo", () => {
+  it("lee las filas indexadas por nombre de columna", async () => {
+    const buffer = await construirXlsx([
+      { nombre: "Vela", descripcion: "Lavanda", precio: 1500, stock: 3 },
+    ]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas).toHaveLength(1);
+    expect(filas[0].numeroFila).toBe(2);
+    expect(filas[0].valores.nombre).toBe("Vela");
+    expect(filas[0].valores.precio).toBe(1500);
+    expect(filas[0].valores.stock).toBe(3);
+  });
+
+  it("numera las filas como se ven en Excel (encabezado = 1)", async () => {
+    const buffer = await construirXlsx([
+      { nombre: "A", descripcion: "d", precio: 1 },
+      { nombre: "B", descripcion: "d", precio: 1 },
+    ]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas.map((f) => f.numeroFila)).toEqual([2, 3]);
+  });
+
+  it("ignora filas totalmente vacías", async () => {
+    const buffer = await construirXlsx([
+      { nombre: "A", descripcion: "d", precio: 1 },
+      {},
+      { nombre: "B", descripcion: "d", precio: 1 },
+    ]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas.map((f) => f.valores.nombre)).toEqual(["A", "B"]);
+  });
+
+  it("lanza si el archivo no tiene la hoja Productos", async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Otra");
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+
+    await expect(leerArchivo(buffer)).rejects.toThrow(
+      'El archivo no tiene una hoja llamada "Productos". Descargá la plantilla y completala.',
+    );
+  });
+});
+
+describe("procesarArchivo", () => {
+  it("devuelve los productos listos cuando todas las filas son válidas", async () => {
+    const buffer = await construirXlsx([
+      { nombre: "Vela", descripcion: "Lavanda", precio: 1500 },
+      { nombre: "Difusor", descripcion: "Cítrico", precio: 2000, categoria: "Velas" },
+    ]);
+
+    const { productos, errores } = await procesarArchivo(buffer, CATEGORIAS);
+
+    expect(errores).toEqual([]);
+    expect(productos).toHaveLength(2);
+    expect(productos[1].categoriaId).toBe(7);
+  });
+
+  it("acumula errores de TODAS las filas malas y no devuelve productos", async () => {
+    const buffer = await construirXlsx([
+      { nombre: "Vela", descripcion: "Lavanda", precio: 1500 },
+      { nombre: "", descripcion: "x", precio: 1 },
+      { nombre: "Difusor", descripcion: "x", precio: "abc" },
+    ]);
+
+    const { productos, errores } = await procesarArchivo(buffer, CATEGORIAS);
+
+    expect(productos).toEqual([]);
+    expect(errores).toHaveLength(2);
+    expect(errores.map((e) => e.fila)).toEqual([3, 4]);
+  });
+
+  it("lanza si el archivo no tiene ninguna fila de datos", async () => {
+    const buffer = await construirXlsx([]);
+
+    await expect(procesarArchivo(buffer, CATEGORIAS)).rejects.toThrow(
+      "El archivo no tiene ninguna fila para importar.",
+    );
+  });
+
+  it(`lanza si el archivo supera las ${MAX_FILAS} filas`, async () => {
+    const muchas = Array.from({ length: MAX_FILAS + 1 }, (_, i) => ({
+      nombre: `P${i}`,
+      descripcion: "d",
+      precio: 1,
+    }));
+    const buffer = await construirXlsx(muchas);
+
+    await expect(procesarArchivo(buffer, CATEGORIAS)).rejects.toThrow(
+      `El archivo tiene más de ${MAX_FILAS} filas. Dividilo en varios archivos.`,
+    );
   });
 });

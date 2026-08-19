@@ -1,3 +1,5 @@
+import ExcelJS from "exceljs";
+
 /**
  * Lógica pura de la importación masiva de productos desde `.xlsx`.
  *
@@ -159,4 +161,126 @@ export function validarFila(fila, numeroFila, categoriasPorNombre) {
     },
     errores: [],
   };
+}
+
+/**
+ * Columnas de la hoja `Productos`, en orden. Espejo del formulario de alta
+ * (`AdminProductoForm.jsx`) salvo multimedia.
+ *
+ * `destacado` y `orden` NO están a propósito: no son parte del formulario, se
+ * manejan por `PATCH /products/:id/merchandising`.
+ *
+ * Es la fuente de verdad compartida entre la generación de la plantilla
+ * (`plantillaProductos.js`) y la lectura del archivo subido.
+ */
+export const COLUMNAS = [
+  "nombre",
+  "descripcion",
+  "precio",
+  "stock",
+  "categoria",
+  "etiqueta",
+  "fraseComercial",
+  "porQueLoVasAQuerer",
+  "tePasaEsto",
+  "caracteristicas",
+  "beneficios",
+  "usos",
+  "idealPara",
+  "incluye",
+  "especificaciones",
+];
+
+export const NOMBRE_HOJA = "Productos";
+
+/**
+ * Tope de filas por archivo. El parseo y la transacción son en memoria en un
+ * único contenedor: un archivo de decenas de miles de filas bloquearía el
+ * proceso. 500 cubre holgadamente el caso real (cargar un catálogo).
+ */
+export const MAX_FILAS = 500;
+
+/** Extrae el valor plano de una celda de ExcelJS (desenvuelve fórmulas y rich text). */
+function valorCelda(celda) {
+  const valor = celda?.value;
+  if (valor === null || valor === undefined) return null;
+  if (typeof valor === "object") {
+    if ("result" in valor) return valor.result ?? null;
+    if ("richText" in valor) return valor.richText.map((t) => t.text).join("");
+    if ("text" in valor) return valor.text;
+  }
+  return valor;
+}
+
+/**
+ * Lee el `.xlsx` y devuelve una entrada por fila de datos, con el número de
+ * fila tal como se ve en Excel (el encabezado es la fila 1) para que los
+ * errores apunten a algo que el admin pueda ubicar en su planilla.
+ *
+ * @param {Buffer} buffer
+ * @returns {Promise<Array<{numeroFila: number, valores: object}>>}
+ */
+export async function leerArchivo(buffer) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+
+  const hoja = wb.getWorksheet(NOMBRE_HOJA);
+  if (!hoja) {
+    throw new Error(
+      `El archivo no tiene una hoja llamada "${NOMBRE_HOJA}". Descargá la plantilla y completala.`,
+    );
+  }
+
+  const filas = [];
+
+  hoja.eachRow((fila, numeroFila) => {
+    if (numeroFila === 1) return; // encabezado
+
+    const valores = {};
+    COLUMNAS.forEach((columna, indice) => {
+      valores[columna] = valorCelda(fila.getCell(indice + 1));
+    });
+
+    const vacia = COLUMNAS.every(
+      (columna) => valores[columna] === null || String(valores[columna]).trim() === "",
+    );
+    if (vacia) return;
+
+    filas.push({ numeroFila, valores });
+  });
+
+  return filas;
+}
+
+/**
+ * Pipeline completo: lee el archivo, valida el archivo como unidad (vacío,
+ * límite de filas) y después valida cada fila acumulando errores.
+ *
+ * Un problema del ARCHIVO lanza (no tiene número de fila al que apuntar); un
+ * problema de FILA se acumula en `errores`. Si hay al menos un error de fila,
+ * `productos` viene vacío: el caller no debe escribir nada (todo o nada).
+ *
+ * @param {Buffer} buffer
+ * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
+ */
+export async function procesarArchivo(buffer, categoriasPorNombre) {
+  const filas = await leerArchivo(buffer);
+
+  if (filas.length === 0) {
+    throw new Error("El archivo no tiene ninguna fila para importar.");
+  }
+  if (filas.length > MAX_FILAS) {
+    throw new Error(`El archivo tiene más de ${MAX_FILAS} filas. Dividilo en varios archivos.`);
+  }
+
+  const productos = [];
+  const errores = [];
+
+  for (const { numeroFila, valores } of filas) {
+    const resultado = validarFila(valores, numeroFila, categoriasPorNombre);
+    if (resultado.errores.length > 0) errores.push(...resultado.errores);
+    else productos.push(resultado.datos);
+  }
+
+  return errores.length > 0 ? { productos: [], errores } : { productos, errores: [] };
 }
