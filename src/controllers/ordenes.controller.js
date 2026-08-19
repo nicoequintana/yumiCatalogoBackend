@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
+import { logAudit } from "../lib/logAudit.js";
 
 const MAX_INTENTOS_DNI = 5;
 const ESTADO_VALIDO = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION", "ENTREGADA", "CANCELADA"];
@@ -377,6 +378,20 @@ export async function actualizarEstado(req, res, next) {
         data: { estado },
         include: { cliente: true, items: true },
       });
+    });
+
+    // Solo se audita el cambio de estado (única mutación admin de órdenes).
+    // `crear()` NO se audita: es el checkout público de invitado, no una
+    // acción de admin — ese flujo ya deja rastro en EventoTrafico.
+    logAudit(req, {
+      accion: "ACTUALIZAR_ESTADO",
+      entidad: "Orden",
+      entidadId: id,
+      detalle: {
+        estadoAnterior: actual.estado,
+        estadoNuevo: estado,
+        stockDescontado: debeDescontarStock,
+      },
     });
 
     res.json(orden);

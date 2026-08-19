@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { logAudit } from "../lib/logAudit.js";
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -38,6 +39,15 @@ export async function crear(req, res, next) {
       data: { nombre },
       include: { _count: { select: { productos: true } } },
     });
+
+    // Fire-and-forget: la respuesta no espera el insert de auditoría.
+    logAudit(req, {
+      accion: "CREAR",
+      entidad: "Categoria",
+      entidadId: categoria.id,
+      detalle: { nombre: categoria.nombre },
+    });
+
     res.status(201).json(mapCategoria(categoria));
   } catch (err) {
     next(err);
@@ -65,6 +75,14 @@ export async function actualizar(req, res, next) {
       data: { nombre },
       include: { _count: { select: { productos: true } } },
     });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR",
+      entidad: "Categoria",
+      entidadId: categoria.id,
+      detalle: { nombreAnterior: actual.nombre, nombreNuevo: categoria.nombre },
+    });
+
     res.json(mapCategoria(categoria));
   } catch (err) {
     next(err);
@@ -88,6 +106,14 @@ export async function eliminar(req, res, next) {
     }
 
     await prisma.categoria.delete({ where: { id } });
+
+    logAudit(req, {
+      accion: "ELIMINAR",
+      entidad: "Categoria",
+      entidadId: id,
+      detalle: { nombre: categoria.nombre },
+    });
+
     res.json({ ok: true });
   } catch (err) {
     next(err);

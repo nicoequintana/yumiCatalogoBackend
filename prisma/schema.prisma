@@ -171,3 +171,29 @@ model ErrorLog {
 
   @@index([createdAt])
 }
+
+// Traza de auditoría de las mutaciones del panel admin (quién hizo qué y
+// cuándo). Solo escrituras — las lecturas no se auditan.
+//
+// `usuarioEmail` es un SNAPSHOT copiado al momento de escribir, NO una
+// relación a `Usuario`: mismo criterio que `ItemOrden.nombreProducto`/
+// `precioUnitario`. Es deliberado — si después se borra el usuario admin, la
+// traza tiene que seguir diciendo quién hizo cada cosa. Una FK con onDelete
+// haría exactamente lo contrario (borraría o anularía la evidencia).
+// `usuarioId` se guarda igual, pero solo como referencia informativa.
+model AuditLog {
+  id           Int      @id @default(autoincrement())
+  usuarioId    Int?
+  usuarioEmail String
+  accion       String   @db.VarChar(50) // valores: CREAR | ACTUALIZAR | ELIMINAR (+ variantes por recurso)
+  entidad      String   @db.VarChar(50) // valores: Producto | Orden | Usuario | Categoria
+  entidadId    Int?
+  detalle      String?  @db.NVarChar(Max) // resumen JSON de lo que cambió
+  ruta         String
+  metodo       String   @db.VarChar(10)
+  ip           String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entidad, createdAt])
+}

@@ -11,6 +11,7 @@ const createMock = vi.fn();
 const updateMock = vi.fn();
 const deleteMock = vi.fn();
 const countMock = vi.fn();
+const auditCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -22,6 +23,7 @@ vi.mock("../lib/prisma.js", () => ({
       delete: (...args) => deleteMock(...args),
       count: (...args) => countMock(...args),
     },
+    auditLog: { create: (...args) => auditCreateMock(...args) },
   },
 }));
 
@@ -37,7 +39,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
@@ -47,6 +49,8 @@ beforeEach(() => {
   updateMock.mockReset();
   deleteMock.mockReset();
   countMock.mockReset();
+  auditCreateMock.mockReset();
+  auditCreateMock.mockResolvedValue({ id: 1 });
 });
 
 describe("GET /api/usuarios", () => {
@@ -135,5 +139,93 @@ describe("DELETE /api/usuarios/:id", () => {
     const res = await request(buildApp()).delete("/api/usuarios/1").set("Authorization", authHeader);
     expect(res.status).toBe(200);
     expect(deleteMock).toHaveBeenCalledWith({ where: { id: 1 } });
+  });
+});
+
+describe("auditoría de usuarios", () => {
+  it("registra en AuditLog al crear, con el email pero NUNCA el passwordHash", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({
+      id: 9,
+      email: "nuevo@test.com",
+      passwordHash: "$2a$10$hash-secreto",
+      createdAt: new Date("2026-01-01"),
+    });
+
+    await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@test.com", password: "clave-secreta" });
+
+    expect(auditCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accion: "CREAR",
+        entidad: "Usuario",
+        entidadId: 9,
+        detalle: JSON.stringify({ email: "nuevo@test.com" }),
+      }),
+    });
+
+    // Ningún secreto puede terminar en la traza: ni el hash ni la clave plana.
+    const serializado = JSON.stringify(auditCreateMock.mock.calls);
+    expect(serializado).not.toContain("$2a$10$hash-secreto");
+    expect(serializado).not.toContain("clave-secreta");
+    expect(serializado).not.toContain("passwordHash");
+  });
+
+  it("registra en AuditLog al actualizar, indicando si cambió la contraseña sin exponerla", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 1, email: "viejo@test.com", passwordHash: "hash-viejo" });
+    updateMock.mockResolvedValue({
+      id: 1,
+      email: "nuevo@test.com",
+      passwordHash: "$2a$10$hash-nuevo",
+      createdAt: new Date("2026-01-01"),
+    });
+
+    await request(buildApp())
+      .put("/api/usuarios/1")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@test.com", password: "clave-nueva" });
+
+    expect(auditCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accion: "ACTUALIZAR",
+        entidad: "Usuario",
+        entidadId: 1,
+        detalle: JSON.stringify({
+          emailAnterior: "viejo@test.com",
+          emailNuevo: "nuevo@test.com",
+          passwordCambiada: true,
+        }),
+      }),
+    });
+
+    const serializado = JSON.stringify(auditCreateMock.mock.calls);
+    expect(serializado).not.toContain("clave-nueva");
+    expect(serializado).not.toContain("$2a$10$hash-nuevo");
+  });
+
+  it("registra en AuditLog al eliminar", async () => {
+    countMock.mockResolvedValue(2);
+    findUniqueMock.mockResolvedValue({ id: 2, email: "borrado@test.com", passwordHash: "hash" });
+    deleteMock.mockResolvedValue({ id: 2 });
+
+    await request(buildApp()).delete("/api/usuarios/2").set("Authorization", authHeader);
+
+    expect(auditCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accion: "ELIMINAR",
+        entidad: "Usuario",
+        entidadId: 2,
+      }),
+    });
+  });
+
+  it("NO registra nada en AuditLog al listar (las lecturas no se auditan)", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/usuarios").set("Authorization", authHeader);
+
+    expect(auditCreateMock).not.toHaveBeenCalled();
   });
 });

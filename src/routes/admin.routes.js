@@ -7,5 +7,6 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/error-logs", adminController.listarErrorLogs);
+router.get("/audit-logs", adminController.listarAuditLogs);
 
 export default router;

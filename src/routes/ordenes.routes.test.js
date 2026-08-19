@@ -17,9 +17,11 @@ const ordenFindUniqueMock = vi.fn();
 const ordenUpdateMock = vi.fn();
 const ordenCountMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
+const auditCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
+    auditLog: { create: (...args) => auditCreateMock(...args) },
     cliente: {
       findUnique: (...args) => clienteFindUniqueMock(...args),
       create: (...args) => clienteCreateMock(...args),
@@ -90,10 +92,12 @@ const ORDEN = {
   items: [{ id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 1 }],
 };
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
+  auditCreateMock.mockReset();
+  auditCreateMock.mockResolvedValue({ id: 1 });
   clienteFindUniqueMock.mockReset();
   clienteCreateMock.mockReset();
   clienteUpdateMock.mockReset();
@@ -243,5 +247,61 @@ describe("PATCH /api/ordenes/:id/estado", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.estado).toBe("PENDIENTE");
+  });
+});
+
+describe("auditoría de órdenes", () => {
+  it("registra en AuditLog el cambio de estado, con el estado anterior y el nuevo", async () => {
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN, estado: "PENDIENTE" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
+    productFindUniqueMock.mockResolvedValue(PRODUCTO_DISPONIBLE);
+    productUpdateMock.mockResolvedValue({});
+
+    await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA" });
+
+    expect(auditCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accion: "ACTUALIZAR_ESTADO",
+        entidad: "Orden",
+        entidadId: 100,
+        usuarioEmail: "admin@yima.test",
+        detalle: JSON.stringify({
+          estadoAnterior: "PENDIENTE",
+          estadoNuevo: "CONFIRMADA",
+          stockDescontado: true,
+        }),
+      }),
+    });
+  });
+
+  it("NO registra nada en AuditLog al crear una orden (checkout público, no es acción de admin)", async () => {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN);
+    eventoTraficoCreateMock.mockResolvedValue({});
+
+    await request(buildApp())
+      .post("/api/ordenes")
+      .send({
+        dni: "12345678",
+        nombre: "Juan Perez",
+        telefono: "1122334455",
+        items: [{ productId: 1, cantidad: 1 }],
+      });
+
+    expect(auditCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("NO registra nada en AuditLog al listar órdenes (las lecturas no se auditan)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    await request(buildApp()).get("/api/ordenes").set("Authorization", authHeader);
+
+    expect(auditCreateMock).not.toHaveBeenCalled();
   });
 });
