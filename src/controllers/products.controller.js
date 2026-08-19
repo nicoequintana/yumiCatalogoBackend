@@ -97,6 +97,32 @@ function parseCaracteristicas(raw) {
   }
 }
 
+export function parseListas(raw, tipo) {
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) throw new Error();
+    return parsed
+      .map((item) => ({ texto: String(item.texto ?? "").trim(), tipo }))
+      .filter((item) => item.texto !== "");
+  } catch {
+    throw httpError(400, `El campo de lista (${tipo}) debe ser un JSON válido (array de {texto}).`);
+  }
+}
+
+export function parseEspecificaciones(raw) {
+  if (raw === undefined) return undefined;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) throw new Error();
+    return parsed
+      .map((item) => ({ nombre: String(item.nombre ?? "").trim(), valor: String(item.valor ?? "").trim() }))
+      .filter((item) => item.nombre !== "" && item.valor !== "");
+  } catch {
+    throw httpError(400, "El campo especificaciones debe ser un JSON válido (array de {nombre, valor}).");
+  }
+}
+
 function parseFotosExistentes(raw) {
   if (raw === undefined) return undefined;
   try {
