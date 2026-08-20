@@ -50,7 +50,22 @@ export function subirArchivo(buffer, resourceType, folder) {
 
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(opciones, (error, result) => {
-      if (error) return reject(error);
+      if (error) {
+        // El SDK rechaza con un OBJETO PLANO ({message, http_code}), no con un
+        // Error: sin stack en el ErrorLog y el handler global cae al 500
+        // genérico "Error interno del servidor" — doble mentira para el
+        // operador, visto en vivo el 2026-08-20 con un upload estancado
+        // ({message: "Request Timeout", http_code: 499}, el timeout de
+        // inactividad de 60s del SDK). Una subida que falla contra un servicio
+        // externo es un problema de gateway, reintentable: 502 con mensaje
+        // claro, y un Error real para que el log tenga stack.
+        const err = new Error(
+          `La subida a Cloudinary falló (${error.message ?? "sin detalle"}). Suele ser un problema transitorio de conexión: probá de nuevo.`,
+        );
+        err.status = 502;
+        err.cause = error;
+        return reject(err);
+      }
       resolve({
         cloudinaryPublicId: result.public_id,
         cloudinaryResourceType: result.resource_type,
