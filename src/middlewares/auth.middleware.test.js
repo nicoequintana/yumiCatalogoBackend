@@ -5,12 +5,13 @@ import jwt from "jsonwebtoken";
 
 process.env.JWT_SECRET = "test-secret";
 
-const { requireAuth } = await import("./auth.middleware.js");
+const { requireAuth, authOpcional } = await import("./auth.middleware.js");
 
 function buildApp() {
   const app = express();
   app.get("/protegido", requireAuth, (_req, res) => res.json({ ok: true }));
   app.get("/quien-soy", requireAuth, (req, res) => res.json({ usuario: req.usuario ?? null }));
+  app.get("/publico", authOpcional, (req, res) => res.json({ usuario: req.usuario ?? null }));
   return app;
 }
 
@@ -76,5 +77,58 @@ describe("requireAuth", () => {
       .set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.usuario).toEqual({ id: null, email: "admin@yima.test" });
+  });
+});
+
+describe("authOpcional", () => {
+  it("deja pasar como anónimo si falta el header Authorization", async () => {
+    const res = await request(buildApp()).get("/publico");
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("expone la identidad del admin cuando el token es válido", async () => {
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test" });
+  });
+
+  it("degrada a anónimo (200, sin req.usuario) si el token es basura", async () => {
+    const res = await request(buildApp()).get("/publico").set("Authorization", "Bearer token-invalido");
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("degrada a anónimo si el token está expirado, en vez de responder 401", async () => {
+    const tokenExpirado = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: -10 });
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${tokenExpirado}`);
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("degrada a anónimo si el header no usa el esquema Bearer", async () => {
+    const res = await request(buildApp()).get("/publico").set("Authorization", "Basic YWRtaW46MTIzNA==");
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("no acepta un token firmado con otro algoritmo (alg confusion)", async () => {
+    // Mismo `algorithms: ["HS256"]` que `requireAuth`: los dos middlewares
+    // comparten la verificación, así que esta guarda no puede divergir.
+    const token = jwt.sign({ sub: 9, email: "admin@yima.test" }, "test-secret", {
+      algorithm: "HS512",
+      expiresIn: "7d",
+    });
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("normaliza el payload igual que requireAuth (sub no numérico -> null, sin email -> null)", async () => {
+    const token = jwt.sign({ sub: "no-numerico" }, "test-secret", { expiresIn: "7d" });
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toEqual({ id: null, email: null });
   });
 });

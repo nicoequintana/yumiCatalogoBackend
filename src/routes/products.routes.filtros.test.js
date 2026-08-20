@@ -1,9 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express from "express";
+import jwt from "jsonwebtoken";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
+
+// La vista admin de estos endpoints públicos la habilita el JWT verificado, no
+// `?admin=1` (ver products.routes.autorizacion.test.js).
+const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
 
 const findManyMock = vi.fn();
 const countMock = vi.fn().mockResolvedValue(0);
@@ -160,10 +165,12 @@ describe("GET /api/products - filtros de listado", () => {
     });
   });
 
-  it("modo admin: sin visibleEnCatalogo ni stock, filtros igual aplican", async () => {
+  it("modo admin (autenticado): sin visibleEnCatalogo ni stock, filtros igual aplican", async () => {
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp()).get("/api/products?admin=1&categoria=3");
+    await request(buildApp())
+      .get("/api/products?admin=1&categoria=3")
+      .set("Authorization", authHeader);
 
     const { where } = findManyMock.mock.calls[0][0];
     expect(where).toEqual({ categoriaId: 3 });
@@ -171,10 +178,10 @@ describe("GET /api/products - filtros de listado", () => {
     expect(where.stock).toBeUndefined();
   });
 
-  it("modo admin sin filtros: where undefined (comportamiento previo intacto)", async () => {
+  it("modo admin (autenticado) sin filtros: where undefined", async () => {
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp()).get("/api/products?admin=1");
+    await request(buildApp()).get("/api/products?admin=1").set("Authorization", authHeader);
 
     const { where } = findManyMock.mock.calls[0][0];
     expect(where).toBeUndefined();
@@ -263,13 +270,13 @@ describe("GET /api/products/:id - relacionados", () => {
     expect(args.where.visibleEnCatalogo).toBe(true);
   });
 
-  it("modo admin: relacionados NO filtran por visibleEnCatalogo", async () => {
+  it("modo admin (autenticado): relacionados NO filtran por visibleEnCatalogo", async () => {
     const principal = { ...productoBase, id: 1, categoriaId: 5 };
     findUniqueMock.mockResolvedValueOnce(principal); // existencia
     findUniqueMock.mockResolvedValueOnce({ ...principal }); // fetch admin (sin increment)
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp()).get("/api/products/1?admin=1");
+    await request(buildApp()).get("/api/products/1?admin=1").set("Authorization", authHeader);
 
     const args = findManyMock.mock.calls[0][0];
     expect(args.where.visibleEnCatalogo).toBeUndefined();

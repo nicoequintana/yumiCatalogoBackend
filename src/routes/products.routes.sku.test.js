@@ -144,13 +144,26 @@ describe("listar() filtra por visibilidad", () => {
     );
   });
 
-  it("GET /api/products?admin=1 trae todos los productos, visibles y ocultos", async () => {
+  it("GET /api/products autenticado trae todos los productos, visibles y ocultos", async () => {
+    // Antes este test pasaba con solo `?admin=1` y SIN token — encodeaba el
+    // agujero: cualquiera podía listar los productos ocultos agregando un
+    // parámetro a la URL. Ahora la vista admin la habilita el JWT verificado.
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?admin=1").set("Authorization", authHeader);
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: undefined }),
+    );
+  });
+
+  it("GET /api/products?admin=1 SIN token sigue filtrando por visibilidad y stock", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products?admin=1");
 
     expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: undefined }),
+      expect.objectContaining({ where: { visibleEnCatalogo: true, stock: { gt: 0 } } }),
     );
   });
 });

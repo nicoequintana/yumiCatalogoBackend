@@ -3,7 +3,7 @@ import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
 import * as productsMediaController from "../controllers/productsMedia.controller.js";
 import * as productsImportController from "../controllers/productsImport.controller.js";
-import { requireAuth } from "../middlewares/auth.middleware.js";
+import { authOpcional, requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTOS, MAX_VIDEOS } from "../lib/limitesMedios.js";
 
@@ -84,11 +84,15 @@ const limitadorInteraccionesPublicas = crearLimitadorDeVelocidad({
 
 const router = Router();
 
-router.get("/", productsController.listar);
+// `authOpcional` en los dos GET públicos: siguen sirviendo a visitantes
+// anónimos, pero cuando el llamador presenta un JWT válido el controller lo ve
+// en `req.usuario` y habilita la vista admin (ocultos + agotados). Es lo que
+// reemplaza al viejo `?admin=1`, que otorgaba esa vista a cualquiera.
+router.get("/", authOpcional, productsController.listar);
 router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
 router.get("/:id/video", productsMediaController.streamVideo);
 router.get("/:id/fotos/:fotoId", productsMediaController.streamFoto);
-router.get("/:id", productsController.obtenerPorId);
+router.get("/:id", authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 router.post("/:id/compartir", limitadorInteraccionesPublicas, productsController.compartir);

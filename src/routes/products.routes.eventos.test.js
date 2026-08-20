@@ -1,7 +1,14 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express from "express";
+import jwt from "jsonwebtoken";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
+
+process.env.JWT_SECRET = "test-secret";
+
+// El camino admin (sin contar la vista ni emitir el evento) lo habilita el JWT
+// verificado, no `?admin=1` (ver products.routes.autorizacion.test.js).
+const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
 
 const findUniqueMock = vi.fn();
 const updateMock = vi.fn();
@@ -108,15 +115,30 @@ describe("GET /api/products/:id — evento VISTA_PRODUCTO", () => {
     });
   });
 
-  it("NO emite evento en el camino admin (?admin=1), igual que el contador de vistas", async () => {
+  it("NO emite evento en el camino admin (autenticado), igual que el contador de vistas", async () => {
     findUniqueMock.mockResolvedValue(productoBase);
 
-    const res = await request(buildApp()).get("/api/products/42?admin=1");
+    const res = await request(buildApp())
+      .get("/api/products/42?admin=1")
+      .set("Authorization", authHeader);
     await esperarEmision();
 
     expect(res.status).toBe(200);
     expect(updateMock).not.toHaveBeenCalled();
     expect(eventoCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("SÍ emite evento con ?admin=1 pero sin token: un anónimo no puede evadir el registro", async () => {
+    // El parámetro ya no habilita el camino admin. Si lo hiciera, cualquiera
+    // podría navegar el catálogo sin quedar registrado en analytics.
+    findUniqueMock.mockResolvedValue(productoBase);
+    updateMock.mockResolvedValue({ ...productoBase, vistas: 1 });
+
+    const res = await request(buildApp()).get("/api/products/42?admin=1");
+    await esperarEmision();
+
+    expect(res.status).toBe(200);
+    expect(eventoCreateMock).toHaveBeenCalled();
   });
 
   it("no emite evento si el producto no existe", async () => {

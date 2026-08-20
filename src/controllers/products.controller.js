@@ -179,9 +179,31 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   return Object.keys(where).length > 0 ? where : undefined;
 }
 
+/**
+ * ¿Esta request habla en nombre de un admin?
+ *
+ * Sale de `req.usuario`, que solo puebla `authOpcional` tras VERIFICAR el JWT
+ * (firma + expiración + `algorithms: ["HS256"]`). Nunca de la querystring.
+ *
+ * Antes era `req.query.admin !== undefined`, y eso convertía `?admin=1` en una
+ * llave maestra: alcanzaba con agregarlo a la URL para listar productos ocultos
+ * y agotados, y para saltear el 404 de la ficha de un producto oculto. El
+ * parámetro ni siquiera había que adivinarlo — lo escribe
+ * `frontend/src/api/products.js`, que viaja en el bundle público.
+ *
+ * `?admin=1` sigue viajando desde el frontend, pero YA NO DECIDE NADA sobre qué
+ * datos se devuelven: queda como señal de intención, útil para leer los logs y
+ * —sobre todo— para que la respuesta admin y la pública no compartan URL, así
+ * ningún intermediario que cachee por URL puede servirle a un visitante una
+ * respuesta que se armó para un admin.
+ */
+function esRequestDeAdmin(req) {
+  return Boolean(req.usuario);
+}
+
 export async function listar(req, res, next) {
   try {
-    const esAdmin = req.query.admin !== undefined;
+    const esAdmin = esRequestDeAdmin(req);
     const ids = parsearIdsListado(req.query.ids);
 
     // Cortocircuito: se pidieron ids y ninguno quedó en pie. No hay nada que
@@ -272,17 +294,24 @@ export async function obtenerPorId(req, res, next) {
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
 
-    // Admin edit-form prefills also hit this endpoint but aren't a real
-    // visitor view — ?admin=1 (set by AdminProductoForm.jsx) skips the
-    // increment so an admin editing a product doesn't inflate its own count.
-    const esAdmin = req.query.admin !== undefined;
+    // La precarga del form de edición del admin también pega acá, pero no es
+    // la visita de un visitante: con un token válido no se incrementa `vistas`
+    // ni se emite `VISTA_PRODUCTO`, así que un admin editando un producto no
+    // infla su propio contador.
+    //
+    // Esa supresión también pasó a depender del token, no de `?admin=1`: si
+    // dependiera del parámetro, cualquiera podría no ser contado (y evitar el
+    // evento de tráfico) con solo agregarlo a la URL. La visita de un anónimo
+    // que escribe `?admin=1` es una visita real y se cuenta como tal.
+    const esAdmin = esRequestDeAdmin(req);
 
     // Un producto agotado (`stock <= 0`) SÍ es visible en su ficha de detalle:
     // el visitante ve que existe, con el badge "Agotado" y sin poder comprarlo.
     // Solo se lo excluye del listado público (ver `construirFiltrosListado`),
     // así no ocupa lugar en la grilla pero su link compartido sigue abriendo.
     // `visibleEnCatalogo: false` sí sigue siendo 404: eso es el admin ocultando
-    // el producto a propósito, distinto de quedarse sin stock.
+    // el producto a propósito, distinto de quedarse sin stock. Solo un token
+    // verificado levanta este 404 — es la guarda que `?admin=1` derrotaba.
     if (!esAdmin && !existe.visibleEnCatalogo) {
       throw httpError(404, "Producto no encontrado.");
     }
