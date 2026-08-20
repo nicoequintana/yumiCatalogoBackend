@@ -68,10 +68,13 @@ function mapProducto(producto) {
     idealPara: agruparListasPorTipo(producto.listas ?? []).IDEAL_PARA,
     incluye: agruparListasPorTipo(producto.listas ?? []).INCLUYE,
     especificaciones: (producto.especificaciones ?? []).map((e) => ({ id: e.id, nombre: e.nombre, valor: e.valor })),
+    // `driveFileId` NO se expone: la URL de arriba ya resuelve el storage del
+    // lado del servidor (Cloudinary directo, o el proxy propio para las filas
+    // legado de Drive), así que mandarlo solo filtraría un identificador
+    // interno de storage en un endpoint público. Ningún cliente lo lee.
     fotos: producto.fotos.map((f) => ({
       id: f.id,
       url: f.cloudinaryPublicId ? f.url : f.driveFileId ? `/api/products/${producto.id}/fotos/${f.id}` : f.url,
-      driveFileId: f.driveFileId,
       orden: f.orden,
     })),
     video: producto.video
@@ -80,7 +83,6 @@ function mapProducto(producto) {
           url: producto.video.cloudinaryPublicId
             ? producto.video.url
             : `/api/products/${producto.id}/video`,
-          driveFileId: producto.video.driveFileId,
         }
       : null,
     createdAt: producto.createdAt,
@@ -297,80 +299,71 @@ function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
   }
 }
 
-/**
- * Uploads new photos + optional video to Cloudinary. Returns their
- * Cloudinary metadata for DB writes.
- *
- * MIGRATION NOTE (Cloudinary storage migration): this function used to
- * upload to Google Drive — see the commented-out version immediately below
- * for the original implementation, kept (not deleted) per an explicit
- * decision to preserve that work rather than lose it. New uploads go to
- * Cloudinary exclusively; existing Drive-backed products are untouched and
- * keep being served via the existing Drive proxy routes.
- */
-async function subirArchivosNuevos({ fotosNuevas, videoNuevo, folder }) {
-  const fotosSubidas = [];
-  let videoSubido = null;
-
-  try {
-    for (const foto of fotosNuevas) {
-      const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
-        foto.buffer,
-        "image",
-        folder,
-      );
-      fotosSubidas.push({ cloudinaryPublicId, cloudinaryResourceType, url });
-    }
-
-    if (videoNuevo) {
-      const { cloudinaryPublicId, cloudinaryResourceType, url } = await cloudinary.subirArchivo(
-        videoNuevo.buffer,
-        "video",
-        folder,
-      );
-      videoSubido = { cloudinaryPublicId, cloudinaryResourceType, url };
-    }
-  } catch (err) {
-    // Orphan prevention (design D6, carried over from the Drive-era code):
-    // if any upload after the first succeeded and a later one failed, clean
-    // up everything already uploaded in this batch.
-    await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
-    throw err;
-  }
-
-  return { fotosSubidas, videoSubido };
+/** Normaliza la respuesta de `cloudinary.subirArchivo` a lo que guarda la DB. */
+function aArchivoSubido({ cloudinaryPublicId, cloudinaryResourceType, url }) {
+  return { cloudinaryPublicId, cloudinaryResourceType, url };
 }
 
-// --- Cloudinary storage migration: original Drive-uploading implementation, kept for reference ---
-// async function subirArchivosNuevosDrive({ fotosNuevas, videoNuevo, parents }) {
-//   const fotosSubidas = [];
-//   let videoSubido = null;
-//
-//   try {
-//     for (const foto of fotosNuevas) {
-//       const { driveFileId, url } = await googleDrive.subirArchivo(foto.buffer, foto.mimetype, foto.originalname, {
-//         makePublic: true,
-//         parents,
-//       });
-//       fotosSubidas.push({ driveFileId, url });
-//     }
-//
-//     if (videoNuevo) {
-//       const { driveFileId, url } = await googleDrive.subirArchivo(
-//         videoNuevo.buffer,
-//         videoNuevo.mimetype,
-//         videoNuevo.originalname,
-//         { makePublic: false, parents },
-//       );
-//       videoSubido = { driveFileId, url };
-//     }
-//   } catch (err) {
-//     await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido });
-//     throw err;
-//   }
-//
-//   return { fotosSubidas, videoSubido };
-// }
+/**
+ * Sube a Cloudinary las fotos nuevas y el video opcional, TODOS EN PARALELO,
+ * y devuelve sus metadatos para las escrituras en la base.
+ *
+ * Por qué en paralelo: antes era un `for` con `await` adentro, así que diez
+ * fotos de ~2s cada una eran un request de ~20s. Además, cuanto más larga la
+ * subida, más expuesta queda al timeout de inactividad de 60s del SDK
+ * (`cloudinary.service.js`) que ya nos mordió en producción.
+ *
+ * Sin límite de concurrencia a propósito: `validarArchivos` ya acota la tanda
+ * a `MAX_FOTOS` fotos + 1 video (11 requests como techo absoluto), y multer
+ * guarda los buffers en memoria antes de llegar acá, así que serializar no
+ * ahorraría ni una sola conexión en vuelo *menos* memoria — solo tiempo de
+ * pared. Un tope artificial acá volvería a serializar sin beneficio.
+ *
+ * CONTRATO ANTI-HUÉRFANOS (design D6, heredado del código de la era Drive):
+ * si alguna subida falla, las que sí terminaron bien se borran de Cloudinary
+ * para no dejar archivos sueltos que ya nadie referencia.
+ *
+ * Es `Promise.allSettled` y NO `Promise.all` por ese contrato: `Promise.all`
+ * rechaza apenas falla una y devuelve el control mientras las otras SIGUEN EN
+ * VUELO — esas terminarían después de la limpieza y quedarían huérfanas justo
+ * en el caso que el contrato existe para cubrir. `allSettled` espera a que
+ * todas se asienten, así la limpieza ve la lista completa de subidas
+ * exitosas. Es también el motivo por el que el paralelo es MÁS expuesto que
+ * el bucle secuencial, donde una falla simplemente impedía que arrancaran las
+ * siguientes.
+ *
+ * El orden de `fotosSubidas` es el orden de entrada, nunca el de finalización:
+ * la posición de una foto es contenido (`fotos[0]` es la portada, `fotos[1]`
+ * es la imagen de "¿qué problema resuelve?"), y `ordenFotos` indexa este array
+ * por posición. Por eso se arma con `map` sobre los resultados —que
+ * `allSettled` devuelve en el orden en que se pasaron las promesas— y nunca
+ * con `push` desde un callback.
+ */
+async function subirArchivosNuevos({ fotosNuevas, videoNuevo, folder }) {
+  const resultados = await Promise.allSettled([
+    ...fotosNuevas.map((foto) => cloudinary.subirArchivo(foto.buffer, "image", folder)),
+    ...(videoNuevo ? [cloudinary.subirArchivo(videoNuevo.buffer, "video", folder)] : []),
+  ]);
+
+  const resultadosFotos = resultados.slice(0, fotosNuevas.length);
+  const resultadoVideo = videoNuevo ? resultados[fotosNuevas.length] : null;
+
+  const fallo = resultados.find((r) => r.status === "rejected");
+  if (fallo) {
+    await limpiarArchivosSubidos({
+      fotos: resultadosFotos.filter((r) => r.status === "fulfilled").map((r) => aArchivoSubido(r.value)),
+      video: resultadoVideo?.status === "fulfilled" ? aArchivoSubido(resultadoVideo.value) : null,
+    });
+    // Se propaga el primer rechazo en orden de entrada, no el primero en el
+    // tiempo: el mensaje que ve el admin queda estable ante el azar de la red.
+    throw fallo.reason;
+  }
+
+  return {
+    fotosSubidas: resultadosFotos.map((r) => aArchivoSubido(r.value)),
+    videoSubido: resultadoVideo ? aArchivoSubido(resultadoVideo.value) : null,
+  };
+}
 
 /**
  * Registra una falla de limpieza de media (Cloudinary/Drive) en el ErrorLog
@@ -399,30 +392,60 @@ function logFallaDeLimpieza(mensaje, err, req) {
   });
 }
 
-/** Best-effort Cloudinary cleanup — never throws, used in catch blocks. */
+/**
+ * Limpieza best-effort de una tanda recién subida a Cloudinary — nunca lanza,
+ * se usa desde catch blocks. Los borrados van en paralelo por el mismo motivo
+ * que las subidas: son N round trips independientes contra un servicio
+ * externo, y acá el cliente ya está esperando la respuesta de un request que
+ * además falló.
+ *
+ * Cada borrado lleva su propio `catch`, así que `Promise.all` no puede
+ * rechazar; igual se usa `allSettled` para que un fallo imprevisto (por
+ * ejemplo un throw sincrónico del SDK) no corte la limpieza de los demás.
+ */
 async function limpiarArchivosSubidos({ fotos = [], video = null }, req) {
-  for (const foto of fotos) {
-    try {
-      await cloudinary.eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType);
-    } catch (err) {
-      logFallaDeLimpieza(
-        `No se pudo limpiar la foto huérfana en Cloudinary (${foto.cloudinaryPublicId})`,
-        err,
-        req,
+  const borrarConAviso = (archivo, descripcion) =>
+    cloudinary
+      .eliminarArchivo(archivo.cloudinaryPublicId, archivo.cloudinaryResourceType)
+      .catch((err) =>
+        logFallaDeLimpieza(`${descripcion} (${archivo.cloudinaryPublicId})`, err, req),
       );
-    }
+
+  await Promise.allSettled([
+    ...fotos.map((foto) => borrarConAviso(foto, "No se pudo limpiar la foto huérfana en Cloudinary")),
+    ...(video ? [borrarConAviso(video, "No se pudo limpiar el video huérfano en Cloudinary")] : []),
+  ]);
+}
+
+/**
+ * Borra el archivo remoto de una foto o video YA eliminado de la base,
+ * contra el storage que esa fila usaba: Drive para las filas legado,
+ * Cloudinary para todo lo posterior a la migración (una fila tiene
+ * exactamente uno de los dos ids seteado, nunca ambos).
+ *
+ * Devuelve una promesa que nunca rechaza — la falla se registra en el
+ * ErrorLog y se traga, porque la mutación de negocio ya se completó y el
+ * único daño posible es un archivo huérfano en el storage. Devolver la
+ * promesa (en vez de esperarla adentro) es lo que deja a los llamadores
+ * juntar varias limpiezas en un solo `Promise.allSettled`.
+ *
+ * @param {{driveFileId?: string|null, cloudinaryPublicId?: string|null, cloudinaryResourceType?: string|null}|null} media
+ * @param {string} que - sujeto del mensaje de error, ej. "la foto".
+ * @param {import("express").Request} [req]
+ * @returns {Promise<void>}
+ */
+function limpiarMediaRemota(media, que, req) {
+  if (media?.driveFileId) {
+    return googleDrive
+      .eliminarArchivo(media.driveFileId)
+      .catch((err) => logFallaDeLimpieza(`No se pudo eliminar ${que} en Drive`, err, req));
   }
-  if (video) {
-    try {
-      await cloudinary.eliminarArchivo(video.cloudinaryPublicId, video.cloudinaryResourceType);
-    } catch (err) {
-      logFallaDeLimpieza(
-        `No se pudo limpiar el video huérfano en Cloudinary (${video.cloudinaryPublicId})`,
-        err,
-        req,
-      );
-    }
+  if (media?.cloudinaryPublicId) {
+    return cloudinary
+      .eliminarArchivo(media.cloudinaryPublicId, media.cloudinaryResourceType)
+      .catch((err) => logFallaDeLimpieza(`No se pudo eliminar ${que} en Cloudinary`, err, req));
   }
+  return Promise.resolve();
 }
 
 /**
@@ -686,19 +709,9 @@ export async function crear(req, res, next) {
       }
     }
 
-    // Cloudinary storage migration: Drive per-product folder creation
-    // removed here (see commented block below) — Cloudinary doesn't need a
-    // separate "create folder" call like Drive did; passing `folder` at
-    // upload time (see just below) creates it implicitly.
-    // let driveFolderId = null;
-    // if (fotosNuevas.length > 0 || videoArr.length > 0) {
-    //   const carpeta = await googleDrive.crearCarpeta(
-    //     `${producto.id}-${nombre.trim()}`,
-    //     process.env.GOOGLE_DRIVE_FOLDER_ID,
-    //   );
-    //   driveFolderId = carpeta.driveFolderId;
-    // }
-
+    // No hay un paso previo de "crear carpeta" como tenía Drive: Cloudinary
+    // la crea implícitamente al recibir `folder` en la subida.
+    //
     // Cloudinary organizes uploads by product, mirroring Drive's old
     // per-product subfolder — see cloudinary.service.js's subirArchivo doc.
     const folder = `productos/${producto.id}-${sanitizarNombreParaCarpeta(nombre.trim())}`;
@@ -740,8 +753,8 @@ export async function crear(req, res, next) {
 
     res.status(201).json(mapProducto(producto));
   } catch (err) {
-    // Orphan prevention (design D6): clean up any Drive uploads from this
-    // batch. The product DB row (if created) is intentionally NOT rolled
+    // Orphan prevention (design D6): clean up any Cloudinary uploads from
+    // this batch. The product DB row (if created) is intentionally NOT rolled
     // back — per design item 1, a partially-created product (no media) is
     // an accepted state the admin can fix by editing.
     if (subidas) await limpiarArchivosSubidos({ fotos: subidas.fotosSubidas, video: subidas.videoSubido }, req);
@@ -788,21 +801,11 @@ export async function actualizar(req, res, next) {
       cantidadNuevas: fotosNuevas.length,
     });
 
-    // Cloudinary storage migration: Drive lazy-folder-creation removed here
-    // (see commented block below) — new uploads on ANY product (new or
-    // legacy Drive-backed) now go to Cloudinary instead, grouped into the
-    // product's own Cloudinary folder (see the `folder` line just below —
-    // same per-product grouping idea as Drive's old subfolder, different
-    // storage backend). A legacy product's EXISTING Drive-hosted photos are
-    // untouched either way — this only affects where a NEW upload lands.
-    // let driveFolderId = existente.driveFolderId;
-    // if (!driveFolderId && (fotosNuevas.length > 0 || videoArr.length > 0)) {
-    //   const carpeta = await googleDrive.crearCarpeta(
-    //     `${existente.id}-${(nombre ?? existente.nombre).trim()}`,
-    //     process.env.GOOGLE_DRIVE_FOLDER_ID,
-    //   );
-    //   driveFolderId = carpeta.driveFolderId;
-    // }
+    // Toda subida nueva, sobre CUALQUIER producto (nuevo o legado con media
+    // en Drive), va a Cloudinary, agrupada en la carpeta propia del producto
+    // — misma idea de agrupación por producto que la subcarpeta de Drive,
+    // otro storage. Las fotos que un producto legado YA tiene en Drive quedan
+    // intactas: esto solo decide dónde aterriza una subida NUEVA.
     const folder = `productos/${existente.id}-${sanitizarNombreParaCarpeta((nombre ?? existente.nombre).trim())}`;
 
     const subidas = await subirArchivosNuevos({
@@ -830,8 +833,6 @@ export async function actualizar(req, res, next) {
             fraseComercial: fraseComercial !== undefined ? fraseComercial?.trim() || null : undefined,
             porQueLoVasAQuerer: porQueLoVasAQuerer !== undefined ? porQueLoVasAQuerer?.trim() || null : undefined,
             tePasaEsto: tePasaEsto !== undefined ? tePasaEsto?.trim() || null : undefined,
-            // Cloudinary storage migration: driveFolderId no longer computed for new uploads.
-            // driveFolderId: driveFolderId !== existente.driveFolderId ? driveFolderId : undefined,
           },
         });
 
@@ -952,48 +953,22 @@ export async function actualizar(req, res, next) {
     } catch (dbErr) {
       // Orphan prevention (design D6): DB write failed after successful Cloudinary upload(s).
       await limpiarArchivosSubidos({ fotos: fotosSubidas, video: videoSubido }, req);
-      // Cloudinary storage migration: driveFolderId no longer computed here, nothing to clean up.
-      // if (driveFolderId && driveFolderId !== existente.driveFolderId) {
-      //   await googleDrive.eliminarArchivo(driveFolderId).catch((err) => console.error("Cleanup carpeta:", err));
-      // }
       throw dbErr;
     }
 
     // DB writes succeeded — now clean up whichever storage backend each
-    // removed photo/video actually used (existing rows may be Drive- or
-    // Cloudinary-backed; a row has exactly one of the two ids set).
-    for (const foto of fotosARemover) {
-      if (foto.driveFileId) {
-        await googleDrive
-          .eliminarArchivo(foto.driveFileId)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
-      } else if (foto.cloudinaryPublicId) {
-        await cloudinary
-          .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
-      }
-    }
+    // removed photo/video actually used. Van todas en paralelo: son hasta 11
+    // round trips independientes contra Cloudinary/Drive y el cliente está
+    // esperando la respuesta detrás de ellos. Ninguna puede rechazar
+    // (`limpiarMediaRemota` traga y registra), así que el `allSettled` solo
+    // cubre un throw imprevisto del SDK.
+    const limpiezas = fotosARemover.map((foto) => limpiarMediaRemota(foto, "la foto", req));
     if (videoSubido && existente.video) {
-      if (existente.video.driveFileId) {
-        await googleDrive
-          .eliminarArchivo(existente.video.driveFileId)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video anterior en Drive", err, req));
-      } else if (existente.video.cloudinaryPublicId) {
-        await cloudinary
-          .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video anterior en Cloudinary", err, req));
-      }
+      limpiezas.push(limpiarMediaRemota(existente.video, "el video anterior", req));
     } else if (eliminarVideo && existente.video) {
-      if (existente.video.driveFileId) {
-        await googleDrive
-          .eliminarArchivo(existente.video.driveFileId)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Drive", err, req));
-      } else if (existente.video.cloudinaryPublicId) {
-        await cloudinary
-          .eliminarArchivo(existente.video.cloudinaryPublicId, existente.video.cloudinaryResourceType)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Cloudinary", err, req));
-      }
+      limpiezas.push(limpiarMediaRemota(existente.video, "el video", req));
     }
+    await Promise.allSettled(limpiezas);
 
     logAudit(req, {
       accion: "ACTUALIZAR",
@@ -1147,44 +1122,35 @@ export async function eliminar(req, res, next) {
     // after this feature shipped: the new upload went into a fresh
     // subfolder, but its original photos are still in the flat root
     // folder). Deleting the folder alone would leave those orphaned.
-    for (const foto of producto.fotos) {
-      if (foto.driveFileId) {
-        await googleDrive
-          .eliminarArchivo(foto.driveFileId)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
-      } else if (foto.cloudinaryPublicId) {
-        await cloudinary
-          .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
-      }
-    }
-    if (producto.video) {
-      if (producto.video.driveFileId) {
-        await googleDrive
-          .eliminarArchivo(producto.video.driveFileId)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Drive", err, req));
-      } else if (producto.video.cloudinaryPublicId) {
-        await cloudinary
-          .eliminarArchivo(producto.video.cloudinaryPublicId, producto.video.cloudinaryResourceType)
-          .catch((err) => logFallaDeLimpieza("No se pudo eliminar el video en Cloudinary", err, req));
-      }
-    }
-    // Then remove the (now-empty, or never-used) per-product Drive folder
-    // itself, if one exists (only ever set for legacy Drive-era products —
-    // Cloudinary uploads never create one).
-    if (producto.driveFolderId) {
-      await googleDrive
-        .eliminarArchivo(producto.driveFolderId)
-        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Drive", err, req));
-    }
-    // Same idea for the Cloudinary side: remove the per-product folder now
-    // that every asset inside it was just deleted above. Uses the same
-    // folder name formula as crear/actualizar so it matches regardless of
-    // when the product's media was last uploaded.
+    //
+    // Los archivos se barren en paralelo (hasta 10 fotos + 1 video), pero el
+    // borrado de las carpetas SIGUE SIENDO POSTERIOR y no se puede meter en
+    // la misma tanda: `delete_folder` de la Admin API de Cloudinary solo
+    // funciona sobre una carpeta vacía, así que adelantarlo la dejaría viva
+    // para siempre.
+    await Promise.allSettled([
+      ...producto.fotos.map((foto) => limpiarMediaRemota(foto, "la foto", req)),
+      ...(producto.video ? [limpiarMediaRemota(producto.video, "el video", req)] : []),
+    ]);
+
+    // Then remove the (now-empty, or never-used) per-product folders. The
+    // Drive one only ever exists for legacy Drive-era products — Cloudinary
+    // uploads never create one. La carpeta de Cloudinary usa la misma
+    // fórmula de nombre que crear/actualizar, así coincide sin importar
+    // cuándo se subió por última vez la media del producto.
     const carpetaCloudinary = `productos/${producto.id}-${sanitizarNombreParaCarpeta(producto.nombre.trim())}`;
-    await cloudinary
-      .eliminarCarpeta(carpetaCloudinary)
-      .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req));
+    await Promise.allSettled([
+      ...(producto.driveFolderId
+        ? [
+            googleDrive
+              .eliminarArchivo(producto.driveFolderId)
+              .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Drive", err, req)),
+          ]
+        : []),
+      cloudinary
+        .eliminarCarpeta(carpetaCloudinary)
+        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req)),
+    ]);
 
     res.json({ ok: true });
   } catch (err) {
@@ -1361,15 +1327,7 @@ export async function eliminarFoto(req, res, next) {
       }
     });
 
-    if (foto.driveFileId) {
-      await googleDrive
-        .eliminarArchivo(foto.driveFileId)
-        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Drive", err, req));
-    } else if (foto.cloudinaryPublicId) {
-      await cloudinary
-        .eliminarArchivo(foto.cloudinaryPublicId, foto.cloudinaryResourceType)
-        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la foto en Cloudinary", err, req));
-    }
+    await limpiarMediaRemota(foto, "la foto", req);
 
     logAudit(req, {
       accion: "ELIMINAR_FOTO",
