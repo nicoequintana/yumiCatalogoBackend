@@ -44,6 +44,7 @@ model Product {
 
   @@index([visibleEnCatalogo, orden])
   @@index([destacado])
+  @@index([categoriaId])
 }
 
 model Caracteristica {
@@ -51,6 +52,8 @@ model Caracteristica {
   texto     String
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
 }
 
 model ProductoLista {
@@ -71,6 +74,8 @@ model Especificacion {
   orden     Int     @default(0)
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, orden])
 }
 
 model Foto {
@@ -82,6 +87,8 @@ model Foto {
   orden                  Int
   productId              Int
   product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, orden])
 }
 
 model Video {
@@ -122,6 +129,7 @@ model EventoTrafico {
 
   @@index([tipo, createdAt])
   @@index([productId, tipo])
+  @@index([createdAt])
 }
 
 model Cliente {
@@ -147,6 +155,7 @@ model Orden {
 
   @@index([clienteId])
   @@index([estado, createdAt])
+  @@index([createdAt])
 }
 
 model ItemOrden {
