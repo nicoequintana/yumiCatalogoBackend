@@ -39,10 +39,31 @@ let productoId;
 const NOMBRE_MIXED_CASE = "ZzIntegrationCollationTestXyZ";
 const SKU_TEST = `TEST-COLLATION-INTEGRATION-${Date.now()}`;
 
+/**
+ * El sondeo de disponibilidad corre contra su PROPIO timeout, mucho más corto
+ * que el del hook de Vitest (10s). Sin esto, una DB lenta bajo la carga de la
+ * suite completa colgaba el beforeAll más allá del límite del hook — y ese
+ * timeout NO pasa por el catch de abajo: el archivo fallaba entero en vez de
+ * auto-skipearse (visto dos veces el 2026-08-19/20). Lento = no disponible.
+ */
+function conTimeout(promesa, ms, mensaje) {
+  let timer;
+  return Promise.race([
+    promesa.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(mensaje)), ms);
+    }),
+  ]);
+}
+
 beforeAll(async () => {
   try {
     ({ prisma } = await import("../lib/prisma.js"));
-    await prisma.$queryRawUnsafe("SELECT 1 AS ok");
+    await conTimeout(
+      prisma.$queryRawUnsafe("SELECT 1 AS ok"),
+      4000,
+      "El sondeo de disponibilidad de la DB tardó más de 4s.",
+    );
     dbDisponible = true;
 
     const producto = await prisma.product.create({
