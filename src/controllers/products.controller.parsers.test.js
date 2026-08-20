@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseListas, parseEspecificaciones } from "./products.controller.js";
+import { parseListas, parseEspecificaciones } from "./products.input.js";
 
 describe("parseListas", () => {
   it("retorna undefined si raw es undefined (campo omitido)", () => {

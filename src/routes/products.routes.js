@@ -1,6 +1,8 @@
 import { Router } from "express";
 import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
+import * as productsMediaController from "../controllers/productsMedia.controller.js";
+import * as productsImportController from "../controllers/productsImport.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTOS } from "../lib/limitesMedios.js";
@@ -83,11 +85,11 @@ const limitadorInteraccionesPublicas = crearLimitadorDeVelocidad({
 const router = Router();
 
 router.get("/", productsController.listar);
-router.get("/import/template", requireAuth, productsController.descargarPlantilla);
-router.get("/:id/video", productsController.streamVideo);
-router.get("/:id/fotos/:fotoId", productsController.streamFoto);
+router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
+router.get("/:id/video", productsMediaController.streamVideo);
+router.get("/:id/fotos/:fotoId", productsMediaController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
-router.post("/import", requireAuth, uploadXlsx, productsController.importar);
+router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 router.post("/:id/compartir", limitadorInteraccionesPublicas, productsController.compartir);
 router.post("/:id/favorito", limitadorInteraccionesPublicas, productsController.favorito);
