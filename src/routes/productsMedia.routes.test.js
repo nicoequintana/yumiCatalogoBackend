@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express from "express";
+import jwt from "jsonwebtoken";
 import { Readable } from "node:stream";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
@@ -122,6 +123,20 @@ async function esperarA(condicion, descripcion) {
   throw new Error(`Se agotó la espera de: ${descripcion}`);
 }
 
+/**
+ * Token de admin firmado con el mismo secreto que lee `auth.middleware.js`.
+ *
+ * Se firma de verdad en vez de mockear el middleware: lo que se está probando
+ * es justamente que el modo admin salga de un JWT VERIFICADO y de ningún otro
+ * lado, así que un middleware mockeado probaría lo contrario de lo que importa.
+ */
+function tokenAdmin() {
+  return jwt.sign({ sub: "1", email: "admin@test.com" }, process.env.JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "1h",
+  });
+}
+
 const CUERPO = "0123456789"; // 10 bytes exactos: el Content-Length tiene que coincidir.
 
 beforeEach(() => {
@@ -130,8 +145,13 @@ beforeEach(() => {
 });
 
 describe("GET /api/products/:id/video — proxy de streaming", () => {
+  // `visibleEnCatalogo: true` es parte del fixture porque el controller ahora
+  // lo mira: un producto sin ese campo no es "un producto cualquiera", es un
+  // producto oculto. La fila real siempre lo trae — la columna no es nullable.
   const productoConVideoDrive = {
     id: 1,
+    visibleEnCatalogo: true,
+    stock: 3,
     video: { id: 5, driveFileId: "drive-video-1", cloudinaryPublicId: null },
   };
 
@@ -299,7 +319,7 @@ describe("GET /api/products/:id/video — proxy de streaming", () => {
     });
 
     it("producto sin video", async () => {
-      productFindUniqueMock.mockResolvedValue({ id: 1, video: null });
+      productFindUniqueMock.mockResolvedValue({ id: 1, visibleEnCatalogo: true, video: null });
 
       const res = await request(buildApp()).get("/api/products/1/video");
 
@@ -313,6 +333,7 @@ describe("GET /api/products/:id/video — proxy de streaming", () => {
       // siquiera apunta acá), así que pedirlo por esta ruta es un 404.
       productFindUniqueMock.mockResolvedValue({
         id: 1,
+        visibleEnCatalogo: true,
         video: { id: 5, driveFileId: null, cloudinaryPublicId: "yima/1/video", url: "https://cdn.test/v.mp4" },
       });
 
@@ -440,10 +461,98 @@ describe("GET /api/products/:id/video — proxy de streaming", () => {
     // Sin esto el stream de Drive quedaría vivo por cada seek del reproductor.
     await esperarA(() => stream.destroyed === true, "que se aborte el stream de Drive");
   });
+
+  describe("visibilidad — la media de un producto oculto no se sirve al público", () => {
+    const productoOculto = { ...productoConVideoDrive, visibleEnCatalogo: false };
+
+    it("anónimo + producto oculto: 404 y ni se le pide el archivo a Drive", async () => {
+      productFindUniqueMock.mockResolvedValue(productoOculto);
+
+      const res = await request(buildApp()).get("/api/products/1/video");
+
+      // Mismo mensaje que un producto inexistente, a propósito: un 403 (o un
+      // mensaje distinto) confirmaría que el id existe, que es exactamente lo
+      // que se está ocultando. Los ids son secuenciales: enumerar es trivial.
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("Producto no encontrado.");
+      expect(obtenerStreamVideoMock).not.toHaveBeenCalled();
+    });
+
+    it("anónimo + producto oculto SIN video: tampoco delata que no tiene video", async () => {
+      // La guarda va antes de la de `video`, si no el mensaje "Este producto no
+      // tiene video." serviría para distinguir un id oculto de un id libre.
+      productFindUniqueMock.mockResolvedValue({ id: 1, visibleEnCatalogo: false, video: null });
+
+      const res = await request(buildApp()).get("/api/products/1/video");
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("Producto no encontrado.");
+    });
+
+    it("token válido + producto oculto: transmite normalmente", async () => {
+      productFindUniqueMock.mockResolvedValue(productoOculto);
+      obtenerStreamVideoMock.mockResolvedValue({
+        stream: streamDeTexto(CUERPO),
+        status: 200,
+        headers: cabecerasDrive({ "content-type": "video/mp4" }),
+      });
+
+      const res = await request(buildApp())
+        .get("/api/products/1/video")
+        .set("Authorization", `Bearer ${tokenAdmin()}`)
+        .buffer();
+
+      expect(res.status).toBe(200);
+      expect(cuerpoDe(res)).toBe(CUERPO);
+    });
+
+    it("token inválido + producto oculto: degrada a anónimo y da 404, no 401", async () => {
+      // Mismo criterio que `authOpcional` en el resto del catálogo público: un
+      // token que no verifica no otorga NADA, pero tampoco rompe la request.
+      productFindUniqueMock.mockResolvedValue(productoOculto);
+
+      const res = await request(buildApp())
+        .get("/api/products/1/video")
+        .set("Authorization", "Bearer no-es-un-token");
+
+      expect(res.status).toBe(404);
+      expect(obtenerStreamVideoMock).not.toHaveBeenCalled();
+    });
+
+    it("anónimo + producto AGOTADO pero visible: transmite igual", async () => {
+      // `stock <= 0` NO es un motivo para cortar la media, misma decisión que
+      // `obtenerPorId`, que devuelve 200 para un producto agotado: la ficha
+      // sigue siendo alcanzable con el badge "Agotado" y el CTA deshabilitado.
+      // Si la media 404eara, cada link compartido a un producto que se quedó
+      // sin stock mostraría la galería rota — se rompería justo lo que ese 200
+      // existe para preservar. Quedarse sin stock es un estado comercial;
+      // `visibleEnCatalogo: false` es el admin ocultando algo a propósito.
+      productFindUniqueMock.mockResolvedValue({ ...productoConVideoDrive, stock: 0 });
+      obtenerStreamVideoMock.mockResolvedValue({
+        stream: streamDeTexto(CUERPO),
+        status: 200,
+        headers: cabecerasDrive({ "content-type": "video/mp4" }),
+      });
+
+      const res = await request(buildApp()).get("/api/products/1/video").buffer();
+
+      expect(res.status).toBe(200);
+      expect(cuerpoDe(res)).toBe(CUERPO);
+    });
+  });
 });
 
 describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
-  const fotoDrive = { id: 7, productId: 1, driveFileId: "drive-foto-7", cloudinaryPublicId: null };
+  // La visibilidad del producto viaja EN la misma fila: el `findFirst` la trae
+  // con un `include`, no con una segunda consulta. Ver el test de forma de la
+  // query más abajo.
+  const fotoDrive = {
+    id: 7,
+    productId: 1,
+    driveFileId: "drive-foto-7",
+    cloudinaryPublicId: null,
+    product: { visibleEnCatalogo: true },
+  };
 
   it("devuelve 200 con el cuerpo y las cabeceras que dio Drive", async () => {
     fotoFindFirstMock.mockResolvedValue(fotoDrive);
@@ -495,7 +604,7 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
     expect(cuerpoDe(res)).toBe(CUERPO);
   });
 
-  it("busca la foto acotada a su producto, no por id suelto", async () => {
+  it("busca la foto acotada a su producto y trae la visibilidad en la MISMA consulta", async () => {
     fotoFindFirstMock.mockResolvedValue(fotoDrive);
     obtenerStreamArchivoMock.mockResolvedValue({
       stream: streamDeTexto(CUERPO),
@@ -505,7 +614,15 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
 
     await request(buildApp()).get("/api/products/1/fotos/7");
 
-    expect(fotoFindFirstMock).toHaveBeenCalledWith({ where: { id: 7, productId: 1 } });
+    // Dos afirmaciones en una: el `where` sigue acotado por `productId` (sin
+    // eso se podrían enumerar fotos ajenas cambiando el id del producto), y la
+    // visibilidad llega por `include` — esta ruta transmite bytes, no puede
+    // pagar un segundo round-trip solo para decidir si tiene derecho a hacerlo.
+    expect(fotoFindFirstMock).toHaveBeenCalledWith({
+      where: { id: 7, productId: 1 },
+      include: { product: { select: { visibleEnCatalogo: true } } },
+    });
+    expect(fotoFindFirstMock).toHaveBeenCalledTimes(1);
   });
 
   describe("404 — la foto no se puede servir", () => {
@@ -543,7 +660,10 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
 
       const res = await request(buildApp()).get("/api/products/99/fotos/7");
 
-      expect(fotoFindFirstMock).toHaveBeenCalledWith({ where: { id: 7, productId: 99 } });
+      expect(fotoFindFirstMock).toHaveBeenCalledWith({
+        where: { id: 7, productId: 99 },
+        include: { product: { select: { visibleEnCatalogo: true } } },
+      });
       expect(res.status).toBe(404);
       expect(res.body.error).toBe("Foto no encontrada.");
     });
@@ -554,6 +674,7 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
         productId: 1,
         driveFileId: null,
         cloudinaryPublicId: "yima/1/foto",
+        product: { visibleEnCatalogo: true },
       });
 
       const res = await request(buildApp()).get("/api/products/1/fotos/7");
@@ -663,5 +784,69 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
     pendiente.abort();
 
     await esperarA(() => stream.destroyed === true, "que se aborte el stream de Drive");
+  });
+
+  describe("visibilidad — la foto de un producto oculto no se sirve al público", () => {
+    const fotoDeProductoOculto = { ...fotoDrive, product: { visibleEnCatalogo: false } };
+
+    it("anónimo + producto oculto: 404 y ni se le pide el archivo a Drive", async () => {
+      fotoFindFirstMock.mockResolvedValue(fotoDeProductoOculto);
+
+      const res = await request(buildApp()).get("/api/products/1/fotos/7");
+
+      // Exactamente el mismo cuerpo que una foto inexistente: desde afuera, un
+      // producto oculto y un id que nunca existió son indistinguibles.
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe("Foto no encontrada.");
+      expect(obtenerStreamArchivoMock).not.toHaveBeenCalled();
+    });
+
+    it("token válido + producto oculto: transmite normalmente", async () => {
+      fotoFindFirstMock.mockResolvedValue(fotoDeProductoOculto);
+      obtenerStreamArchivoMock.mockResolvedValue({
+        stream: streamDeTexto(CUERPO),
+        status: 200,
+        headers: cabecerasDrive({ "content-type": "image/png" }),
+      });
+
+      const res = await request(buildApp())
+        .get("/api/products/1/fotos/7")
+        .set("Authorization", `Bearer ${tokenAdmin()}`)
+        .buffer();
+
+      expect(res.status).toBe(200);
+      expect(cuerpoDe(res)).toBe(CUERPO);
+    });
+
+    it("token inválido + producto oculto: degrada a anónimo y da 404, no 401", async () => {
+      fotoFindFirstMock.mockResolvedValue(fotoDeProductoOculto);
+
+      const res = await request(buildApp())
+        .get("/api/products/1/fotos/7")
+        .set("Authorization", "Bearer no-es-un-token");
+
+      expect(res.status).toBe(404);
+      expect(obtenerStreamArchivoMock).not.toHaveBeenCalled();
+    });
+
+    it("anónimo + producto AGOTADO pero visible: transmite igual", async () => {
+      // Mismo razonamiento que en el video: `stock <= 0` no oculta nada. La
+      // ficha de un producto agotado sigue devolviendo 200 a propósito y sus
+      // fotos son parte de esa ficha; cortarlas dejaría la galería rota en cada
+      // link compartido de un producto que se quedó sin stock.
+      fotoFindFirstMock.mockResolvedValue({
+        ...fotoDrive,
+        product: { visibleEnCatalogo: true, stock: 0 },
+      });
+      obtenerStreamArchivoMock.mockResolvedValue({
+        stream: streamDeTexto(CUERPO),
+        status: 200,
+        headers: cabecerasDrive({ "content-type": "image/png" }),
+      });
+
+      const res = await request(buildApp()).get("/api/products/1/fotos/7");
+
+      expect(res.status).toBe(200);
+    });
   });
 });

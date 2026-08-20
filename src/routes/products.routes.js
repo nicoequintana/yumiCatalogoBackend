@@ -90,8 +90,14 @@ const router = Router();
 // reemplaza al viejo `?admin=1`, que otorgaba esa vista a cualquiera.
 router.get("/", authOpcional, productsController.listar);
 router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
-router.get("/:id/video", productsMediaController.streamVideo);
-router.get("/:id/fotos/:fotoId", productsMediaController.streamFoto);
+// Los dos proxies de media también llevan `authOpcional`: la media de un
+// producto oculto no puede seguir siendo pública solo porque se la pida por
+// otra URL. Siguen sirviendo a visitantes anónimos —las fotos de un producto
+// publicado nunca fueron secretas—, pero un producto con
+// `visibleEnCatalogo: false` responde 404 salvo que el llamador presente un
+// JWT válido.
+router.get("/:id/video", authOpcional, productsMediaController.streamVideo);
+router.get("/:id/fotos/:fotoId", authOpcional, productsMediaController.streamFoto);
 router.get("/:id", authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);

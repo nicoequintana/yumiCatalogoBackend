@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
@@ -177,28 +178,6 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   if (Object.keys(rangoPrecio).length > 0) where.precio = rangoPrecio;
 
   return Object.keys(where).length > 0 ? where : undefined;
-}
-
-/**
- * ¿Esta request habla en nombre de un admin?
- *
- * Sale de `req.usuario`, que solo puebla `authOpcional` tras VERIFICAR el JWT
- * (firma + expiración + `algorithms: ["HS256"]`). Nunca de la querystring.
- *
- * Antes era `req.query.admin !== undefined`, y eso convertía `?admin=1` en una
- * llave maestra: alcanzaba con agregarlo a la URL para listar productos ocultos
- * y agotados, y para saltear el 404 de la ficha de un producto oculto. El
- * parámetro ni siquiera había que adivinarlo — lo escribe
- * `frontend/src/api/products.js`, que viaja en el bundle público.
- *
- * `?admin=1` sigue viajando desde el frontend, pero YA NO DECIDE NADA sobre qué
- * datos se devuelven: queda como señal de intención, útil para leer los logs y
- * —sobre todo— para que la respuesta admin y la pública no compartan URL, así
- * ningún intermediario que cachee por URL puede servirle a un visitante una
- * respuesta que se armó para un admin.
- */
-function esRequestDeAdmin(req) {
-  return Boolean(req.usuario);
 }
 
 export async function listar(req, res, next) {

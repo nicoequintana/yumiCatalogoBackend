@@ -12,6 +12,31 @@ import { prisma } from "../lib/prisma.js";
 import * as googleDrive from "../services/googleDrive.service.js";
 import { logError } from "../lib/logError.js";
 import { httpError } from "../lib/httpError.js";
+import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
+
+/**
+ * Regla de acceso compartida por los dos proxies de media.
+ *
+ * Un producto con `visibleEnCatalogo: false` es el admin ocultándolo a
+ * propósito (un lanzamiento sin anunciar, un borrador, algo discontinuado), y
+ * su media no puede seguir siendo alcanzable: los ids son secuenciales, así que
+ * pedir `/api/products/42/fotos/7` no requiere adivinar nada. Es la misma
+ * guarda que ya aplica `obtenerPorId` sobre la ficha; hasta ahora la media
+ * quedaba afuera.
+ *
+ * `stock <= 0` NO entra en esta guarda, a propósito. `obtenerPorId` devuelve
+ * 200 para un producto agotado justamente para que un link compartido no se
+ * rompa cuando se acaba el stock; si la media 404eara, esa ficha abriría con la
+ * galería vacía y se perdería lo único que ese 200 protege. Agotado es un
+ * estado comercial, no una decisión de ocultamiento.
+ *
+ * Devuelve SIEMPRE 404, nunca 403: un 403 confirmaría que el id existe, que es
+ * exactamente lo que se está ocultando.
+ */
+function puedeVerMediaDe({ req, visibleEnCatalogo }) {
+  return esRequestDeAdmin(req) || visibleEnCatalogo === true;
+}
+
 const DEFAULT_VIDEO_MIME = "video/mp4";
 
 /**
@@ -37,8 +62,18 @@ export async function streamVideo(req, res, next) {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
 
+    // `findUnique` ya devuelve la fila entera de `Product`, así que
+    // `visibleEnCatalogo` viene sin consultas extra: esta ruta transmite bytes
+    // y no puede pagar un round-trip solo para decidir si le corresponde.
     const producto = await prisma.product.findUnique({ where: { id }, include: { video: true } });
     if (!producto) throw httpError(404, "Producto no encontrado.");
+
+    // Va ANTES de la comprobación del video: si fuera después, el mensaje
+    // "Este producto no tiene video." distinguiría un id oculto de uno libre.
+    if (!puedeVerMediaDe({ req, visibleEnCatalogo: producto.visibleEnCatalogo })) {
+      throw httpError(404, "Producto no encontrado.");
+    }
+
     if (!producto.video) throw httpError(404, "Este producto no tiene video.");
     if (!producto.video.driveFileId) throw httpError(404, "El video de este producto no está disponible.");
 
@@ -123,8 +158,21 @@ export async function streamFoto(req, res, next) {
     const fotoId = Number(req.params.fotoId);
     if (Number.isNaN(id) || Number.isNaN(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
 
-    const foto = await prisma.foto.findFirst({ where: { id: fotoId, productId: id } });
+    // El `include` trae la visibilidad del producto en la MISMA consulta (es un
+    // join, no un segundo viaje): la guarda de acceso no le cuesta latencia a
+    // una ruta que después se pone a transmitir una imagen.
+    const foto = await prisma.foto.findFirst({
+      where: { id: fotoId, productId: id },
+      include: { product: { select: { visibleEnCatalogo: true } } },
+    });
     if (!foto) throw httpError(404, "Foto no encontrada.");
+
+    // Mismo cuerpo que la foto inexistente: desde afuera, un producto oculto y
+    // un id que nunca existió tienen que ser indistinguibles.
+    if (!puedeVerMediaDe({ req, visibleEnCatalogo: foto.product?.visibleEnCatalogo })) {
+      throw httpError(404, "Foto no encontrada.");
+    }
+
     if (!foto.driveFileId) throw httpError(404, "Esta foto no está disponible.");
 
     let driveResponse;

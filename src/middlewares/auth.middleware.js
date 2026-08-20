@@ -93,3 +93,31 @@ export function authOpcional(req, _res, next) {
   if (usuario) req.usuario = usuario;
   next();
 }
+
+/**
+ * ¿Esta request habla en nombre de un admin?
+ *
+ * Sale de `req.usuario`, que solo puebla `authOpcional` (o `requireAuth`) tras
+ * VERIFICAR el JWT (firma + expiración + `algorithms: ["HS256"]`). Nunca de la
+ * querystring.
+ *
+ * Antes era `req.query.admin !== undefined`, y eso convertía `?admin=1` en una
+ * llave maestra: alcanzaba con agregarlo a la URL para listar productos ocultos
+ * y agotados, y para saltear el 404 de la ficha de un producto oculto. El
+ * parámetro ni siquiera había que adivinarlo — lo escribe
+ * `frontend/src/api/products.js`, que viaja en el bundle público.
+ *
+ * `?admin=1` sigue viajando desde el frontend, pero YA NO DECIDE NADA sobre qué
+ * datos se devuelven: queda como señal de intención, útil para leer los logs y
+ * —sobre todo— para que la respuesta admin y la pública no compartan URL, así
+ * ningún intermediario que cachee por URL puede servirle a un visitante una
+ * respuesta que se armó para un admin.
+ *
+ * Vive acá, junto al middleware que ESCRIBE `req.usuario`, y no dentro de un
+ * controller: lo consultan tanto el CRUD público de producto como el proxy de
+ * media, y una regla de acceso duplicada en dos módulos es una regla que en
+ * algún momento va a divergir en uno solo de los dos.
+ */
+export function esRequestDeAdmin(req) {
+  return Boolean(req.usuario);
+}
