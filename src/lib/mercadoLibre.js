@@ -21,7 +21,18 @@
 export function extraerIdML(url) {
   if (!url) return null;
 
-  const match = String(url).match(/\b(ML[A-Z])-?(\d+)\b/);
+  const texto = String(url);
+
+  // Las URLs de catálogo (/p/MLA..., /up/MLAU...) llevan en el path el id del
+  // PRODUCTO de catálogo, que no sirve (la API de catálogo está cerrada para
+  // apps comunes). La publicación concreta viaja en parámetros: `wid=` o
+  // `item_id:` (a veces con los dos puntos URL-encodeados como %3A). Si están,
+  // mandan sobre cualquier id del path — si no, un /p/MLA<numérico> haría
+  // matchear primero el id equivocado.
+  const explicito = texto.match(/(?:wid=|item_id(?::|%3[Aa]))(ML[A-Z])-?(\d+)\b/);
+  if (explicito) return `${explicito[1]}${explicito[2]}`;
+
+  const match = texto.match(/\b(ML[A-Z])-?(\d+)\b/);
   return match ? `${match[1]}${match[2]}` : null;
 }
 

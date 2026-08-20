@@ -30,6 +30,24 @@ describe("extraerIdML", () => {
     expect(extraerIdML("")).toBeNull();
     expect(extraerIdML(null)).toBeNull();
   });
+
+  it("prefiere el wid= sobre el id de catálogo del path", () => {
+    // URL real de catálogo /p/: el id del path es el del PRODUCTO de catálogo
+    // (API cerrada, no sirve); la publicación concreta viaja en wid=.
+    expect(
+      extraerIdML("https://www.mercadolibre.com.ar/juego-basta/p/MLA2077999692#polycard=x&wid=MLA3421332254&sid=search"),
+    ).toBe("MLA3421332254");
+  });
+
+  it("prefiere el item_id: de pdp_filters sobre el id MLAU del path", () => {
+    expect(
+      extraerIdML("https://www.mercadolibre.com.ar/soplador/up/MLAU4015427860?pdp_filters=item_id:MLA1803584447#pos=2"),
+    ).toBe("MLA1803584447");
+  });
+
+  it("entiende item_id con los dos puntos URL-encodeados", () => {
+    expect(extraerIdML("https://www.mercadolibre.com.ar/x/up/MLAU1?pdp_filters=item_id%3AMLA777")).toBe("MLA777");
+  });
 });
 
 describe("crearClienteML — token", () => {
