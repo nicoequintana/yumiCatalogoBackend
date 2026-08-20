@@ -74,3 +74,92 @@ describe("crearClienteML — token", () => {
     await expect(cliente.obtenerToken()).rejects.toThrow(/credenciales/i);
   });
 });
+
+describe("crearClienteML — dossier", () => {
+  function clienteCon(fetchMock) {
+    return crearClienteML({ clientId: "id", clientSecret: "sec", fetch: fetchMock });
+  }
+
+  const TOKEN_OK = { ok: true, status: 200, json: async () => ({ access_token: "t", expires_in: 21600 }) };
+
+  it("arma el dossier completo cuando /items responde (caso futuro)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: "MLA1",
+          title: "Lámpara Nómade",
+          price: 48900,
+          attributes: [
+            { name: "Material", value_name: "Aluminio" },
+            { name: "Color", value_name: null },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "Texto libre." }) });
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+
+    expect(dossier).toEqual({
+      titulo: "Lámpara Nómade",
+      precioML: 48900,
+      atributos: [{ nombre: "Material", valor: "Aluminio" }],
+      descripcionML: "Texto libre.",
+    });
+  });
+
+  it("degrada con gracia cuando /items da 403 pero la descripción responde (caso real hoy)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({ error: "access_denied" }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "Solo la descripción." }) });
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+
+    expect(dossier).toEqual({
+      titulo: null,
+      precioML: null,
+      atributos: [],
+      descripcionML: "Solo la descripción.",
+    });
+  });
+
+  it("tolera que la descripción no exista si el ítem respondió", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ title: "X", price: 1, attributes: [] }) })
+      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) });
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+    expect(dossier.descripcionML).toBe("");
+    expect(dossier.titulo).toBe("X");
+  });
+
+  it("lanza un error legible cuando NINGUNA de las dos fuentes responde", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({ error: "access_denied" }) })
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({ error: "access_denied" }) });
+
+    await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/MLA1/);
+  });
+
+  it("reintenta UNA vez con token nuevo ante un 401 inesperado", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK) // token 1
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) }) // items con token viejo
+      .mockResolvedValueOnce(TOKEN_OK) // token 2 (renovado)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ title: "X", price: 1, attributes: [] }) }) // items reintentado
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "d" }) }); // descripción
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+    expect(dossier.titulo).toBe("X");
+  });
+});

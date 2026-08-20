@@ -70,5 +70,56 @@ export function crearClienteML({ clientId, clientSecret, fetch: fetchFn = global
     return token;
   }
 
-  return { obtenerToken };
+  /**
+   * Un 401 a mitad de lote significa que el token se invalidó antes de su
+   * vencimiento declarado. Se descarta el cacheado y se reintenta UNA vez, en
+   * vez de marcar la fila como fallada por algo que se arregla solo.
+   */
+  async function pedir(ruta) {
+    const conToken = async () =>
+      fetchFn(`${URL_BASE}${ruta}`, {
+        headers: { Authorization: `Bearer ${await obtenerToken()}` },
+      });
+
+    const respuesta = await conToken();
+    if (respuesta.status !== 401) return respuesta;
+
+    token = null;
+    return conToken();
+  }
+
+  /**
+   * Trae los HECHOS de una publicación.
+   *
+   * Verificado 2026-08-19 con credenciales reales: ML devuelve 403 en
+   * /items/{id} de publicaciones de terceros con cualquier tipo de token; la
+   * única fuente abierta es /items/{id}/description. Por eso el dossier es
+   * descripción-primero: /items se intenta igual (si ML habilita permisos a
+   * la app, esto se enriquece solo) pero su falla NO es un error de fila.
+   * La fila falla únicamente cuando ninguna de las dos fuentes responde.
+   */
+  async function traerDossier(id) {
+    const respuestaItem = await pedir(`/items/${id}`);
+    const item = respuestaItem.ok ? await respuestaItem.json() : null;
+
+    const respuestaDesc = await pedir(`/items/${id}/description`);
+    const descripcionML = respuestaDesc.ok ? ((await respuestaDesc.json()).plain_text ?? "") : "";
+
+    if (!item && !respuestaDesc.ok) {
+      throw new Error(
+        `No se pudo traer nada de ${id}: /items dio HTTP ${respuestaItem.status} y /description dio HTTP ${respuestaDesc.status}.`,
+      );
+    }
+
+    return {
+      titulo: item?.title ?? null,
+      precioML: item?.price ?? null,
+      atributos: (item?.attributes ?? [])
+        .filter((atributo) => atributo.value_name)
+        .map((atributo) => ({ nombre: atributo.name, valor: atributo.value_name })),
+      descripcionML,
+    };
+  }
+
+  return { obtenerToken, traerDossier };
 }
