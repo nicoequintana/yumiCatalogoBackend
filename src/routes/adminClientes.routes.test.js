@@ -22,6 +22,7 @@ vi.mock("../lib/prisma.js", () => ({
 }));
 
 const { default: adminRouter } = await import("./admin.routes.js");
+const { MAX_ORDENES_HISTORICO } = await import("../controllers/adminClientes.controller.js");
 
 function buildApp() {
   const app = express();
@@ -505,6 +506,66 @@ describe("GET /api/admin/clientes-resumen", () => {
     expect(args.where?.createdAt).toBeUndefined();
     // Y solo trae los estados que cuentan como venta, filtrado en la base.
     expect(args.where.estado).toEqual({ in: ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"] });
+  });
+
+  it("acota el histórico con un take y trae primero las órdenes más recientes", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/admin/clientes-resumen")
+      .set("Authorization", authHeader);
+
+    const args = ordenFindManyMock.mock.calls[0][0];
+    // Una fila de más que el tope: es lo que permite distinguir "justo entra"
+    // de "quedó afuera" sin adivinar.
+    expect(args.take).toBe(MAX_ORDENES_HISTORICO + 1);
+    // Descendente: si hay que resignar historia, se resigna la más vieja.
+    expect(args.orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  it("informa histórico completo cuando no hubo recorte", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 1,
+        estado: "CONFIRMADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        cliente: ANA,
+        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+      }),
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/clientes-resumen?desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+
+    expect(res.body.historico).toEqual({
+      ordenesAnalizadas: 1,
+      tope: MAX_ORDENES_HISTORICO,
+      recortado: false,
+    });
+  });
+
+  it("avisa con historico.recortado cuando el histórico no entra en el tope", async () => {
+    // Se repite la MISMA fila por referencia: al controller le alcanza con
+    // leerla y así el test no materializa 20.001 objetos distintos.
+    const unaOrden = orden({
+      id: 1,
+      estado: "CONFIRMADA",
+      createdAt: "2026-08-10T12:00:00Z",
+      cliente: ANA,
+      items: [{ precioUnitario: "100.00", cantidad: 1 }],
+    });
+    ordenFindManyMock.mockResolvedValue(new Array(MAX_ORDENES_HISTORICO + 1).fill(unaOrden));
+
+    const res = await request(buildApp())
+      .get("/api/admin/clientes-resumen?desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.historico.recortado).toBe(true);
+    // La fila extra solo sirve para detectar el corte: no entra en el cálculo.
+    expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
+    expect(res.body.ingresosPeriodo).toBe((100 * MAX_ORDENES_HISTORICO).toFixed(2));
   });
 
   it("cae al período por defecto si las fechas son inválidas, sin tirar 500", async () => {

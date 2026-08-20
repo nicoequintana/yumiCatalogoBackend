@@ -40,6 +40,13 @@ function agruparListasPorTipo(listas) {
 }
 
 export function mapProducto(producto) {
+  // Una sola pasada por `listas` para las cuatro claves. Antes se llamaba a
+  // `agruparListasPorTipo` una vez por clave y se descartaban las otras tres
+  // agrupaciones, o sea cuatro recorridos completos por producto — y `GET
+  // /products` no está paginado, así que eso se multiplicaba por todo el
+  // catálogo en cada respuesta.
+  const listasPorTipo = agruparListasPorTipo(producto.listas ?? []);
+
   return {
     id: producto.id,
     sku: producto.sku,
@@ -59,10 +66,10 @@ export function mapProducto(producto) {
     fraseComercial: producto.fraseComercial,
     porQueLoVasAQuerer: producto.porQueLoVasAQuerer,
     tePasaEsto: producto.tePasaEsto,
-    beneficios: agruparListasPorTipo(producto.listas ?? []).BENEFICIO,
-    usos: agruparListasPorTipo(producto.listas ?? []).USO,
-    idealPara: agruparListasPorTipo(producto.listas ?? []).IDEAL_PARA,
-    incluye: agruparListasPorTipo(producto.listas ?? []).INCLUYE,
+    beneficios: listasPorTipo.BENEFICIO,
+    usos: listasPorTipo.USO,
+    idealPara: listasPorTipo.IDEAL_PARA,
+    incluye: listasPorTipo.INCLUYE,
     especificaciones: (producto.especificaciones ?? []).map((e) => ({ id: e.id, nombre: e.nombre, valor: e.valor })),
     // `driveFileId` NO se expone: la URL de arriba ya resuelve el storage del
     // lado del servidor (Cloudinary directo, o el proxy propio para las filas

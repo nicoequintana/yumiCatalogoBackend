@@ -5,7 +5,7 @@ import * as productsMediaController from "../controllers/productsMedia.controlle
 import * as productsImportController from "../controllers/productsImport.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
-import { MAX_FOTOS } from "../lib/limitesMedios.js";
+import { MAX_FOTOS, MAX_VIDEOS } from "../lib/limitesMedios.js";
 
 const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
@@ -35,7 +35,7 @@ const upload = multer({
 
 const uploadFields = upload.fields([
   { name: "fotos", maxCount: MAX_FOTOS },
-  { name: "video", maxCount: 1 },
+  { name: "video", maxCount: MAX_VIDEOS },
 ]);
 
 const MIMES_XLSX = [

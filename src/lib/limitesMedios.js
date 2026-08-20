@@ -19,3 +19,19 @@
  * `fileSize` distinto por campo) y viven donde están, documentados.
  */
 export const MAX_FOTOS = 10;
+
+/**
+ * Máximo de videos por producto.
+ *
+ * Mismo problema de sincronización que `MAX_FOTOS`, en dos capas:
+ *
+ * 1. `routes/products.routes.js` — el `maxCount` del campo `video` de multer.
+ * 2. `middlewares/errorHandler.js` — el mensaje que ve el admin cuando multer
+ *    rechaza ese campo con `LIMIT_UNEXPECTED_FILE`.
+ *
+ * No hay una tercera capa de validación de negocio como en las fotos porque el
+ * tope está además garantizado por el schema: `Video.productId` es `@unique`,
+ * o sea una relación 1:1 con el producto. Multer es la primera barrera y la
+ * base es la última.
+ */
+export const MAX_VIDEOS = 1;

@@ -12,7 +12,7 @@ vi.mock("../lib/prisma.js", () => ({
 }));
 
 const { manejadorDeErrores } = await import("./errorHandler.js");
-const { MAX_FOTOS } = await import("../lib/limitesMedios.js");
+const { MAX_FOTOS, MAX_VIDEOS } = await import("../lib/limitesMedios.js");
 
 /**
  * Monta una app mínima cuya única ruta lanza el error que se le pase, para
@@ -117,7 +117,7 @@ describe("manejadorDeErrores — MulterError", () => {
     const res = await request(appQueLanza(err)).get("/boom");
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Se permite máximo 1 video por producto.");
+    expect(res.body.error).toBe(`Se permite máximo ${MAX_VIDEOS} video por producto.`);
   });
 
   it("mapea LIMIT_UNEXPECTED_FILE de un campo desconocido al mensaje genérico", async () => {

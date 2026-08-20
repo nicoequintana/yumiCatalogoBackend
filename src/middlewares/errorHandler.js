@@ -1,5 +1,5 @@
 import { logError } from "../lib/logError.js";
-import { MAX_FOTOS } from "../lib/limitesMedios.js";
+import { MAX_FOTOS, MAX_VIDEOS } from "../lib/limitesMedios.js";
 
 /**
  * Manejador central de errores de Express — la ÚNICA respuesta de error del
@@ -33,7 +33,7 @@ export function mapMulterError(err) {
     // desconocido como para haber excedido el `maxCount` del campo — `err.field`
     // los distingue.
     if (err.field === "fotos") return `Se permiten máximo ${MAX_FOTOS} fotos por producto.`;
-    if (err.field === "video") return "Se permite máximo 1 video por producto.";
+    if (err.field === "video") return `Se permite máximo ${MAX_VIDEOS} video por producto.`;
     return "Campo de archivo inesperado.";
   }
   return "Error al procesar el archivo subido.";
