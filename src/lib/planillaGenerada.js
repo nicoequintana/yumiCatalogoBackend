@@ -50,3 +50,51 @@ export function validarRedacciones(redacciones) {
 
   return errores;
 }
+
+/** Las listas del importador se leen con un ítem por renglón (parsearLista). */
+const unirLista = (items = []) => items.map((item) => String(item).trim()).filter(Boolean).join("\n");
+
+/** Las especificaciones se leen como "Nombre: Valor" por renglón. */
+const unirEspecificaciones = (items = []) =>
+  items.map(({ nombre, valor }) => `${nombre}: ${valor}`).join("\n");
+
+/**
+ * Arma el workbook importable. El precio y el stock quedan VACÍOS a propósito:
+ * son decisión comercial del dueño del catálogo, y como el importador exige
+ * precio, la revisión humana queda forzada por el sistema en vez de sugerida.
+ */
+export async function construirPlanilla(redacciones) {
+  const wb = new ExcelJS.Workbook();
+
+  const hoja = wb.addWorksheet(NOMBRE_HOJA);
+  hoja.addRow(COLUMNAS);
+  hoja.columns = COLUMNAS.map((columna) => ({ width: columna.length + 14 }));
+
+  for (const redaccion of redacciones) {
+    hoja.addRow(
+      COLUMNAS.map((columna) => {
+        if (columna === "precio" || columna === "stock") return null;
+        if (columna === "especificaciones") return unirEspecificaciones(redaccion.especificaciones);
+        if (LISTAS.includes(columna)) return unirLista(redaccion[columna]);
+        return redaccion[columna] ?? null;
+      }),
+    );
+  }
+
+  const referencia = wb.addWorksheet("Referencia");
+  referencia.addRow(["nombre", "precioML", "camposFaltantes", "fotosSugeridas", "revisar", "url"]);
+  referencia.columns = [{ width: 30 }, { width: 12 }, { width: 30 }, { width: 40 }, { width: 40 }, { width: 50 }];
+
+  for (const redaccion of redacciones) {
+    referencia.addRow([
+      redaccion.nombre ?? "",
+      redaccion.precioMLReferencia ?? "",
+      unirLista(redaccion.camposFaltantes),
+      unirLista(redaccion.fotosSugeridas),
+      redaccion.revisar ?? "",
+      redaccion.url ?? "",
+    ]);
+  }
+
+  return wb;
+}
