@@ -372,13 +372,11 @@ describe("GET /api/products/:id/video — proxy de streaming", () => {
     expect(JSON.parse(cuerpoDe(res))).toEqual({
       error: "No se pudo transmitir el video desde Google Drive.",
     });
-    // COMPORTAMIENTO ACTUAL, NO DESEABLE: el Content-Type ya se fijó en
-    // `video/mp4` antes de piper y `res.json()` de Express no pisa un
-    // Content-Type ya seteado, así que este JSON de error viaja rotulado como
-    // video (con `Accept-Ranges: bytes` colgado de arriba). El test describe lo
-    // que el código HACE hoy; el arreglo se decide aparte.
-    expect(res.headers["content-type"]).toMatch(/^video\/mp4/);
-    expect(res.headers["accept-ranges"]).toBe("bytes");
+    // El cuerpo de error va rotulado como JSON, no con el Content-Type del medio:
+    // un cliente que despacha por Content-Type debe poder leer el mensaje. Y
+    // Accept-Ranges se limpia, porque no significa nada en una respuesta de error.
+    expect(res.headers["content-type"]).toMatch(/^application\/json/);
+    expect(res.headers["accept-ranges"]).toBeUndefined();
     expect(logErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 502,
@@ -603,7 +601,10 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
     // Mismo comportamiento actual que en el video: el JSON de error sale con el
     // Content-Type de la imagen, porque ya estaba seteado cuando se llamó a
     // `res.json()`.
-    expect(res.headers["content-type"]).toMatch(/^image\/png/);
+    // El cuerpo de error va rotulado como JSON, no con el Content-Type del medio:
+    // un cliente que despacha por Content-Type debe poder leer el mensaje. Y
+    // Accept-Ranges se limpia, porque no significa nada en una respuesta de error.
+    expect(res.headers["content-type"]).toMatch(/^application\/json/);
     expect(logErrorMock).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 502,

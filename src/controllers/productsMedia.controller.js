@@ -84,6 +84,14 @@ export async function streamVideo(req, res, next) {
         status: 502,
       });
       if (!res.headersSent) {
+        // El Content-Type del medio ya se seteo antes de empezar a transmitir, y
+        // res.json() no lo pisa: solo lo define si todavia no hay uno. Sin este
+        // reemplazo el cuerpo del error sale rotulado como video/mp4 o image/png,
+        // asi que un cliente que despacha por Content-Type falla al parsear en vez
+        // de leer el mensaje. Se limpia tambien Accept-Ranges, que no tiene sentido
+        // en una respuesta de error.
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.removeHeader("Accept-Ranges");
         res.status(502).json({ error: "No se pudo transmitir el video desde Google Drive." });
       } else {
         res.destroy();
@@ -148,6 +156,14 @@ export async function streamFoto(req, res, next) {
         status: 502,
       });
       if (!res.headersSent) {
+        // El Content-Type del medio ya se seteo antes de empezar a transmitir, y
+        // res.json() no lo pisa: solo lo define si todavia no hay uno. Sin este
+        // reemplazo el cuerpo del error sale rotulado como video/mp4 o image/png,
+        // asi que un cliente que despacha por Content-Type falla al parsear en vez
+        // de leer el mensaje. Se limpia tambien Accept-Ranges, que no tiene sentido
+        // en una respuesta de error.
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.removeHeader("Accept-Ranges");
         res.status(502).json({ error: "No se pudo transmitir la foto desde Google Drive." });
       } else {
         res.destroy();
