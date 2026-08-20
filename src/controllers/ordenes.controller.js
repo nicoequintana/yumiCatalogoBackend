@@ -319,9 +319,23 @@ export async function obtenerPorId(req, res, next) {
  * o si se pasa a un tercer estado y luego de vuelta a CONFIRMADA, el stock NO
  * se descuenta de nuevo; ese caso de re-confirmación queda fuera de alcance
  * (decisión de producto: si hace falta corregir, se ajusta el stock a mano
- * desde el form del producto). `Math.max(0, ...)` evita que el `decrement`
- * deje el contador en negativo si el stock ya fue ajustado manualmente por
- * debajo de lo que la orden pide.
+ * desde el form del producto).
+ *
+ * Todo el descuento es a prueba de concurrencia, y eso pide dos cosas:
+ *
+ *   1. El estado de la orden se relee DENTRO de la transacción. La lectura
+ *      previa solo existe para responder 404 temprano; decidir con ella si
+ *      hay que descontar hacía que dos PATCH simultáneos leyeran PENDIENTE
+ *      los dos y descontaran el stock dos veces.
+ *   2. La resta la hace la base con `decrement` sobre el valor vigente de la
+ *      fila, no el proceso sobre un valor leído antes. SQL Server corre en
+ *      READ COMMITTED: un leer-restar-escribir pierde el descuento de la
+ *      transacción que haya escrito en el medio.
+ *
+ * El `gte` del `where` es el que impide dejar el stock en negativo: si no
+ * alcanza, no descuenta. Ese caso no se ignora — un segundo `updateMany`,
+ * también guardado, apoya la fila en 0, que es el mismo resultado observable
+ * que daba el viejo `Math.max(0, ...)`.
  *
  * Incluye `cliente` e `items` en la respuesta (mismo shape que
  * `obtenerPorId()`), no solo los campos escalares de `Orden`: el frontend
@@ -345,16 +359,34 @@ export async function actualizarEstado(req, res, next) {
     const actual = await prisma.orden.findUnique({ where: { id }, include: { items: true } });
     if (!actual) throw httpError(404, "Orden no encontrada.");
 
-    const debeDescontarStock = estado === "CONFIRMADA" && actual.estado !== "CONFIRMADA";
+    let estadoAnterior = actual.estado;
+    let descontoStock = false;
 
     const orden = await prisma.$transaction(async (tx) => {
-      if (debeDescontarStock) {
-        for (const item of actual.items) {
-          const producto = await tx.product.findUnique({ where: { id: item.productId } });
-          if (producto) {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { stock: Math.max(0, producto.stock - item.cantidad) },
+      // Relectura dentro de la transacción: es la única lectura sobre la que
+      // se puede decidir el descuento (ver el comentario del bloque de arriba).
+      const vigente = await tx.orden.findUnique({ where: { id }, include: { items: true } });
+      if (!vigente) throw httpError(404, "Orden no encontrada.");
+
+      estadoAnterior = vigente.estado;
+      descontoStock = estado === "CONFIRMADA" && vigente.estado !== "CONFIRMADA";
+
+      if (descontoStock) {
+        for (const item of vigente.items) {
+          const { count } = await tx.product.updateMany({
+            where: { id: item.productId, stock: { gte: item.cantidad } },
+            data: { stock: { decrement: item.cantidad } },
+          });
+
+          // Ninguna fila alcanzó el `gte`: o el producto ya no existe, o su
+          // stock quedó por debajo de lo pedido (ajuste manual, otra orden).
+          // En el segundo caso se apoya en 0 en vez de saltearlo en silencio;
+          // el `lt` mantiene el guardado, así que una confirmación concurrente
+          // que haya repuesto stock en el medio no se pisa con un cero.
+          if (count === 0) {
+            await tx.product.updateMany({
+              where: { id: item.productId, stock: { lt: item.cantidad } },
+              data: { stock: 0 },
             });
           }
         }
@@ -375,9 +407,9 @@ export async function actualizarEstado(req, res, next) {
       entidad: "Orden",
       entidadId: id,
       detalle: {
-        estadoAnterior: actual.estado,
+        estadoAnterior,
         estadoNuevo: estado,
-        stockDescontado: debeDescontarStock,
+        stockDescontado: descontoStock,
       },
     });
 

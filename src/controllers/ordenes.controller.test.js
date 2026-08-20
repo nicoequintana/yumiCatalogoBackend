@@ -6,6 +6,7 @@ const clienteUpdateMock = vi.fn();
 const productFindManyMock = vi.fn();
 const productFindUniqueMock = vi.fn();
 const productUpdateMock = vi.fn();
+const productUpdateManyMock = vi.fn();
 const ordenCreateMock = vi.fn();
 const ordenFindManyMock = vi.fn();
 const ordenFindUniqueMock = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => productFindManyMock(...args),
       findUnique: (...args) => productFindUniqueMock(...args),
       update: (...args) => productUpdateMock(...args),
+      updateMany: (...args) => productUpdateManyMock(...args),
     },
     orden: {
       create: (...args) => ordenCreateMock(...args),
@@ -128,6 +130,7 @@ beforeEach(() => {
   productFindManyMock.mockReset();
   productFindUniqueMock.mockReset();
   productUpdateMock.mockReset();
+  productUpdateManyMock.mockReset();
   ordenCreateMock.mockReset();
   ordenFindManyMock.mockReset();
   ordenFindUniqueMock.mockReset();
@@ -149,15 +152,20 @@ beforeEach(() => {
       product: {
         findUnique: (...args) => productFindUniqueMock(...args),
         update: (...args) => productUpdateMock(...args),
+        updateMany: (...args) => productUpdateManyMock(...args),
       },
       orden: {
         create: (...args) => ordenCreateMock(...args),
+        findUnique: (...args) => ordenFindUniqueMock(...args),
         update: (...args) => ordenUpdateMock(...args),
       },
     };
     return cb(tx);
   });
 
+  // Por defecto el descuento guardado encuentra la fila y la actualiza; los
+  // tests que simulan stock insuficiente devuelven `{ count: 0 }` a propósito.
+  productUpdateManyMock.mockResolvedValue({ count: 1 });
   eventoTraficoCreateMock.mockResolvedValue({});
 });
 
@@ -746,15 +754,23 @@ describe("actualizarEstado()", () => {
       productFindUniqueMock.mockImplementation(({ where: { id } }) =>
         Promise.resolve(id === 1 ? { ...PRODUCTO_DISPONIBLE, stock: 10 } : { ...PRODUCTO_2_DISPONIBLE, stock: 10 }),
       );
-      productUpdateMock.mockResolvedValue({});
       ordenUpdateMock.mockResolvedValue({ ...ordenDosItems, estado: "CONFIRMADA" });
 
       const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
       await actualizarEstado(req, res, next);
 
       expect(next).not.toHaveBeenCalled();
-      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 1 }, data: { stock: 8 } });
-      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 2 }, data: { stock: 7 } });
+      // Descuento atómico: la resta la hace la base sobre el valor vigente de
+      // la fila, no el proceso sobre un valor leído antes. Un leer-restar-
+      // escribir pierde el descuento de una confirmación concurrente.
+      expect(productUpdateManyMock).toHaveBeenCalledWith({
+        where: { id: 1, stock: { gte: 2 } },
+        data: { stock: { decrement: 2 } },
+      });
+      expect(productUpdateManyMock).toHaveBeenCalledWith({
+        where: { id: 2, stock: { gte: 3 } },
+        data: { stock: { decrement: 3 } },
+      });
       expect(res.statusCode).toBe(200);
     });
 
@@ -768,6 +784,7 @@ describe("actualizarEstado()", () => {
       expect(next).not.toHaveBeenCalled();
       expect(productFindUniqueMock).not.toHaveBeenCalled();
       expect(productUpdateMock).not.toHaveBeenCalled();
+      expect(productUpdateManyMock).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(200);
     });
 
@@ -778,15 +795,39 @@ describe("actualizarEstado()", () => {
         items: [{ id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 50 }],
       };
       ordenFindUniqueMock.mockResolvedValue(ordenCantidadAlta);
-      productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 3 });
-      productUpdateMock.mockResolvedValue({});
+      // El descuento guardado no encuentra fila: el stock quedó por debajo de
+      // lo pedido (ajuste manual o una orden anterior).
+      productUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
       ordenUpdateMock.mockResolvedValue({ ...ordenCantidadAlta, estado: "CONFIRMADA" });
 
       const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
       await actualizarEstado(req, res, next);
 
       expect(next).not.toHaveBeenCalled();
-      expect(productUpdateMock).toHaveBeenCalledWith({ where: { id: 1 }, data: { stock: 0 } });
+      expect(productUpdateManyMock).toHaveBeenNthCalledWith(2, {
+        where: { id: 1, stock: { lt: 50 } },
+        data: { stock: 0 },
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("no descuenta si otra confirmación concurrente ya dejó la orden en CONFIRMADA", async () => {
+      // La lectura previa al `$transaction` solo sirve para el 404 temprano.
+      // Si entre esa lectura y la transacción otro PATCH confirmó la misma
+      // orden, la relectura de adentro ve CONFIRMADA y el stock no se toca:
+      // sin eso, dos confirmaciones simultáneas descuentan dos veces.
+      ordenFindUniqueMock
+        .mockResolvedValueOnce({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" })
+        .mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+      productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 10 });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(productUpdateManyMock).not.toHaveBeenCalled();
+      expect(productUpdateMock).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(200);
     });
   });

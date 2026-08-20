@@ -11,6 +11,7 @@ const clienteUpdateMock = vi.fn();
 const productFindManyMock = vi.fn();
 const productFindUniqueMock = vi.fn();
 const productUpdateMock = vi.fn();
+const productUpdateManyMock = vi.fn();
 const ordenCreateMock = vi.fn();
 const ordenFindManyMock = vi.fn();
 const ordenFindUniqueMock = vi.fn();
@@ -31,6 +32,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => productFindManyMock(...args),
       findUnique: (...args) => productFindUniqueMock(...args),
       update: (...args) => productUpdateMock(...args),
+      updateMany: (...args) => productUpdateManyMock(...args),
     },
     orden: {
       create: (...args) => ordenCreateMock(...args),
@@ -52,9 +54,11 @@ vi.mock("../lib/prisma.js", () => ({
         product: {
           findUnique: (...args) => productFindUniqueMock(...args),
           update: (...args) => productUpdateMock(...args),
+          updateMany: (...args) => productUpdateManyMock(...args),
         },
         orden: {
           create: (...args) => ordenCreateMock(...args),
+          findUnique: (...args) => ordenFindUniqueMock(...args),
           update: (...args) => ordenUpdateMock(...args),
         },
       }),
@@ -104,6 +108,9 @@ beforeEach(() => {
   productFindManyMock.mockReset();
   productFindUniqueMock.mockReset();
   productUpdateMock.mockReset();
+  productUpdateManyMock.mockReset();
+  // Por defecto el descuento guardado encuentra la fila y la actualiza.
+  productUpdateManyMock.mockResolvedValue({ count: 1 });
   ordenCreateMock.mockReset();
   ordenFindManyMock.mockReset();
   ordenFindUniqueMock.mockReset();
@@ -206,8 +213,7 @@ describe("PATCH /api/ordenes/:id/estado", () => {
 
   it("responde 200 con token y actualiza el estado", async () => {
     ordenFindUniqueMock.mockResolvedValue(ORDEN);
-    productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 10 });
-    productUpdateMock.mockResolvedValue({});
+    productUpdateManyMock.mockResolvedValue({ count: 1 });
     ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
 
     const res = await request(buildApp())
@@ -217,10 +223,11 @@ describe("PATCH /api/ordenes/:id/estado", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.estado).toBe("CONFIRMADA");
-    expect(productUpdateMock).toHaveBeenCalledWith(
+    // El descuento lo resuelve la base sobre el valor vigente de la fila.
+    expect(productUpdateManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 1 },
-        data: { stock: 9 },
+        where: { id: 1, stock: { gte: 1 } },
+        data: { stock: { decrement: 1 } },
       }),
     );
   });
