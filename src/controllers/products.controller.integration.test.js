@@ -40,12 +40,22 @@ const NOMBRE_MIXED_CASE = "ZzIntegrationCollationTestXyZ";
 const SKU_TEST = `TEST-COLLATION-INTEGRATION-${Date.now()}`;
 
 /**
- * El sondeo de disponibilidad corre contra su PROPIO timeout, mucho más corto
- * que el del hook de Vitest (10s). Sin esto, una DB lenta bajo la carga de la
- * suite completa colgaba el beforeAll más allá del límite del hook — y ese
- * timeout NO pasa por el catch de abajo: el archivo fallaba entero en vez de
- * auto-skipearse (visto dos veces el 2026-08-19/20). Lento = no disponible.
+ * TODA la preparación corre contra un timeout PROPIO, más corto que el del
+ * hook de Vitest. Un timeout del hook no pasa por el `catch` de abajo: aborta
+ * el archivo entero en vez de dejarlo auto-skipearse, que es justo lo que este
+ * test promete hacer cuando no hay DB.
+ *
+ * Cubre las tres operaciones, no solo el sondeo: acotar únicamente el
+ * `SELECT 1` no alcanzó — en un arranque en frío (primer `vitest run` después
+ * de `npm install` + `prisma generate`, con el disco saturado) el que se pasa
+ * de tiempo es el `create`, y el archivo volvía a fallar. Visto el 2026-08-20
+ * al verificar el snapshot de publicación.
+ *
+ * El margen es holgado a propósito: 8s alcanza para una DB real bajo carga y
+ * sigue por debajo de los 10s del hook. Lento o ausente = no disponible.
  */
+const TIMEOUT_PREPARACION_MS = 8000;
+
 function conTimeout(promesa, ms, mensaje) {
   let timer;
   return Promise.race([
@@ -58,24 +68,28 @@ function conTimeout(promesa, ms, mensaje) {
 
 beforeAll(async () => {
   try {
-    ({ prisma } = await import("../lib/prisma.js"));
     await conTimeout(
-      prisma.$queryRawUnsafe("SELECT 1 AS ok"),
-      4000,
-      "El sondeo de disponibilidad de la DB tardó más de 4s.",
-    );
-    dbDisponible = true;
+      (async () => {
+        ({ prisma } = await import("../lib/prisma.js"));
+        await prisma.$queryRawUnsafe("SELECT 1 AS ok");
 
-    const producto = await prisma.product.create({
-      data: {
-        nombre: NOMBRE_MIXED_CASE,
-        descripcion: "Producto de prueba para el test de integración de collation.",
-        precio: "1.00",
-        sku: SKU_TEST,
-        visibleEnCatalogo: true,
-      },
-    });
-    productoId = producto.id;
+        const producto = await prisma.product.create({
+          data: {
+            nombre: NOMBRE_MIXED_CASE,
+            descripcion: "Producto de prueba para el test de integración de collation.",
+            precio: "1.00",
+            sku: SKU_TEST,
+            visibleEnCatalogo: true,
+          },
+        });
+        productoId = producto.id;
+      })(),
+      TIMEOUT_PREPARACION_MS,
+      `La preparación contra la DB real tardó más de ${TIMEOUT_PREPARACION_MS}ms.`,
+    );
+
+    // Solo acá: si algo de lo de arriba falló o tardó, el test se omite.
+    dbDisponible = true;
   } catch {
     // No real DB reachable (e.g. CI without the dev SQL Server container) —
     // tests below skip via `dbDisponible` instead of failing the suite.
