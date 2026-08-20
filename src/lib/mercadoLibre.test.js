@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { extraerIdML } from "./mercadoLibre.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { crearClienteML, extraerIdML } from "./mercadoLibre.js";
 
 describe("extraerIdML", () => {
   it("extrae el id de una URL de artículo con guion", () => {
@@ -29,5 +29,48 @@ describe("extraerIdML", () => {
   it("devuelve null ante entrada vacía", () => {
     expect(extraerIdML("")).toBeNull();
     expect(extraerIdML(null)).toBeNull();
+  });
+});
+
+describe("crearClienteML — token", () => {
+  let fetchMock;
+
+  function respuestaToken(token, expiresIn = 21600) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: token, expires_in: expiresIn }),
+    };
+  }
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+  });
+
+  it("pide el token una sola vez y lo reusa", async () => {
+    fetchMock.mockResolvedValue(respuestaToken("tok-1"));
+    const cliente = crearClienteML({ clientId: "id", clientSecret: "sec", fetch: fetchMock });
+
+    expect(await cliente.obtenerToken()).toBe("tok-1");
+    expect(await cliente.obtenerToken()).toBe("tok-1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("renueva el token cuando expiró", async () => {
+    fetchMock
+      .mockResolvedValueOnce(respuestaToken("tok-1", 0))
+      .mockResolvedValueOnce(respuestaToken("tok-2"));
+    const cliente = crearClienteML({ clientId: "id", clientSecret: "sec", fetch: fetchMock });
+
+    expect(await cliente.obtenerToken()).toBe("tok-1");
+    expect(await cliente.obtenerToken()).toBe("tok-2");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("falla con mensaje claro si las credenciales no sirven", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({ message: "invalid_client" }) });
+    const cliente = crearClienteML({ clientId: "malo", clientSecret: "malo", fetch: fetchMock });
+
+    await expect(cliente.obtenerToken()).rejects.toThrow(/credenciales/i);
   });
 });
