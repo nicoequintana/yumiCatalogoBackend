@@ -42,6 +42,33 @@ describe("validarRedacciones", () => {
   it("rechaza que la entrada no sea un array", () => {
     expect(() => validarRedacciones({})).toThrow(/array/i);
   });
+
+  it("rechaza especificaciones/camposFaltantes/fotosSugeridas cuando son null", () => {
+    const errores = validarRedacciones([
+      { ...VALIDA, especificaciones: null, camposFaltantes: null, fotosSugeridas: null },
+    ]);
+    expect(errores.some((error) => /especificaciones/.test(error))).toBe(true);
+    expect(errores.some((error) => /camposFaltantes/.test(error))).toBe(true);
+    expect(errores.some((error) => /fotosSugeridas/.test(error))).toBe(true);
+  });
+
+  it("rechaza una categoría que no existe cuando se pasan las vigentes", () => {
+    const errores = validarRedacciones([{ ...VALIDA, categoria: "Iluminación y Lámparas" }], {
+      categoriasVigentes: ["Iluminación", "Deco"],
+    });
+    expect(errores.some((error) => /Iluminación y Lámparas/.test(error))).toBe(true);
+  });
+
+  it("acepta la categoría sin importar mayúsculas, igual que el importador", () => {
+    const errores = validarRedacciones([{ ...VALIDA, categoria: "iluminación" }], {
+      categoriasVigentes: ["Iluminación"],
+    });
+    expect(errores).toEqual([]);
+  });
+
+  it("sin categoriasVigentes no valida categoría (compatibilidad hacia atrás)", () => {
+    expect(validarRedacciones([{ ...VALIDA, categoria: "Lo que sea" }])).toEqual([]);
+  });
 });
 
 async function aBuffer(workbook) {
@@ -95,5 +122,23 @@ describe("construirPlanilla", () => {
     // El importador selecciona por nombre, así que la hoja extra no lo afecta.
     const filas = await leerArchivo(await aBuffer(wb));
     expect(filas).toHaveLength(1);
+  });
+
+  it("construirPlanilla tolera null en las listas aunque el validador ya lo rechace", async () => {
+    // Defensa en profundidad: si un caller futuro saltea la validación, la
+    // planilla degrada a celdas vacías en vez de reventar el lote entero.
+    const wb = await construirPlanilla([
+      { ...VALIDA, especificaciones: null, camposFaltantes: null, fotosSugeridas: null },
+    ]);
+    expect(wb.getWorksheet("Productos")).toBeDefined();
+  });
+
+  it("la hoja Referencia lleva url y revisar cuando vienen en la redacción", async () => {
+    const wb = await construirPlanilla([
+      { ...VALIDA, url: "https://articulo.mercadolibre.com.ar/MLA-1", revisar: "sin id de ML" },
+    ]);
+    const fila = wb.getWorksheet("Referencia").getRow(2).values;
+    expect(fila).toContain("https://articulo.mercadolibre.com.ar/MLA-1");
+    expect(fila).toContain("sin id de ML");
   });
 });

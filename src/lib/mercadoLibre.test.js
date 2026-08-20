@@ -162,4 +162,73 @@ describe("crearClienteML — dossier", () => {
     const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
     expect(dossier.titulo).toBe("X");
   });
+
+  it("contextualiza un fallo de red en vez de tirar el error crudo", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/No se pudo conectar con MercadoLibre/);
+  });
+
+  it("un 200 con JSON roto en /items degrada igual que un 403", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "d" }) });
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+    expect(dossier.titulo).toBeNull();
+    expect(dossier.descripcionML).toBe("d");
+  });
+
+  it("lanza error legible si la descripción responde 200 pero con basura y /items está cerrado", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("basura");
+        },
+      });
+
+    await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/MLA1/);
+  });
+
+  it("si el reintento también da 401, devuelve esa respuesta sin reintentar de nuevo", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK) // token inicial
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) }) // items, 1er intento
+      .mockResolvedValueOnce(TOKEN_OK) // token renovado
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) }) // items, reintento: también 401
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "d" }) }); // descripción
+
+    const dossier = await clienteCon(fetchMock).traerDossier("MLA1");
+    // El ítem quedó inaccesible pero la descripción alcanza: degrada, no revienta.
+    expect(dossier.titulo).toBeNull();
+    expect(dossier.descripcionML).toBe("d");
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("si la renovación del token falla durante el reintento, el error es el de credenciales", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ message: "invalid_client" }) }); // renovación falla
+
+    await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/credenciales/i);
+  });
 });

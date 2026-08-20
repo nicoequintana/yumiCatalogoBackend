@@ -2,21 +2,31 @@
  * Fase 3 de la generación de fichas desde MercadoLibre: toma el JSON que
  * produjo la redacción y escribe el .xlsx que consume el importador del admin.
  *
- * Uso: node src/scripts/ml-generar-planilla.js <redacciones.json> <salida.xlsx>
+ * Uso: node src/scripts/ml-generar-planilla.js <redacciones.json> <salida.xlsx> [dossiers.json]
  */
 import fs from "node:fs/promises";
 import { construirPlanilla, validarRedacciones } from "../lib/planillaGenerada.js";
 
 async function main() {
-  const [, , rutaEntrada, rutaSalida] = process.argv;
+  const [, , rutaEntrada, rutaSalida, rutaDossiers] = process.argv;
 
   if (!rutaEntrada || !rutaSalida) {
-    console.error("Uso: node src/scripts/ml-generar-planilla.js <redacciones.json> <salida.xlsx>");
+    console.error("Uso: node src/scripts/ml-generar-planilla.js <redacciones.json> <salida.xlsx> [dossiers.json]");
     process.exit(1);
   }
 
   const redacciones = JSON.parse(await fs.readFile(rutaEntrada, "utf8"));
-  const errores = validarRedacciones(redacciones);
+
+  // dossiers.json es OPCIONAL a propósito: trae categoriasVigentes sin que
+  // este script tenga que importar Prisma (se mantiene DB-free). Sin este
+  // tercer argumento, la categoría no se valida (mismo comportamiento que antes).
+  let categoriasVigentes;
+  if (rutaDossiers) {
+    const dossiers = JSON.parse(await fs.readFile(rutaDossiers, "utf8"));
+    categoriasVigentes = dossiers.categoriasVigentes;
+  }
+
+  const errores = validarRedacciones(redacciones, { categoriasVigentes });
 
   if (errores.length > 0) {
     console.error("El archivo de redacciones tiene problemas:\n");

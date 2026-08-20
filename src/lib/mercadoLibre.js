@@ -64,7 +64,9 @@ export function crearClienteML({ clientId, clientSecret, fetch: fetchFn = global
       );
     }
 
-    const datos = await respuesta.json();
+    const datos = await respuesta.json().catch(() => {
+      throw new Error("MercadoLibre devolvió una respuesta inválida al pedir el token.");
+    });
     token = datos.access_token;
     expiraEn = Date.now() + datos.expires_in * 1000 - MARGEN_EXPIRACION_MS;
     return token;
@@ -76,10 +78,21 @@ export function crearClienteML({ clientId, clientSecret, fetch: fetchFn = global
    * vez de marcar la fila como fallada por algo que se arregla solo.
    */
   async function pedir(ruta) {
-    const conToken = async () =>
-      fetchFn(`${URL_BASE}${ruta}`, {
-        headers: { Authorization: `Bearer ${await obtenerToken()}` },
-      });
+    // El token se pide ANTES del try/catch a propósito: si obtenerToken()
+    // falla (credenciales, respuesta inválida), ese error ya viene con
+    // contexto propio y no debe disfrazarse de fallo de red.
+    const conToken = async () => {
+      const tok = await obtenerToken();
+      try {
+        return await fetchFn(`${URL_BASE}${ruta}`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        });
+      } catch (err) {
+        // fetch rechazado (sin conexión, DNS, timeout...): un TypeError crudo
+        // no le sirve al operador para entender qué pasó con la fila.
+        throw new Error(`No se pudo conectar con MercadoLibre (${ruta}): ${err.message}`);
+      }
+    };
 
     const respuesta = await conToken();
     if (respuesta.status !== 401) return respuesta;
@@ -100,14 +113,20 @@ export function crearClienteML({ clientId, clientSecret, fetch: fetchFn = global
    */
   async function traerDossier(id) {
     const respuestaItem = await pedir(`/items/${id}`);
-    const item = respuestaItem.ok ? await respuestaItem.json() : null;
+    // Un 200 con JSON malformado se trata igual que un 403: se degrada a
+    // "sin ítem" en vez de tirar el SyntaxError crudo del .json().
+    const item = respuestaItem.ok ? await respuestaItem.json().catch(() => null) : null;
 
     const respuestaDesc = await pedir(`/items/${id}/description`);
-    const descripcionML = respuestaDesc.ok ? ((await respuestaDesc.json()).plain_text ?? "") : "";
+    const cuerpoDesc = respuestaDesc.ok ? await respuestaDesc.json().catch(() => ({})) : {};
+    const descripcionML = cuerpoDesc.plain_text ?? "";
 
-    if (!item && !respuestaDesc.ok) {
+    // La condición mira el HECHO (¿hay título o descripción utilizable?), no
+    // el HTTP crudo: una descripción 200 con JSON roto no es "utilizable"
+    // aunque respuestaDesc.ok sea true.
+    if (!item && descripcionML === "") {
       throw new Error(
-        `No se pudo traer nada de ${id}: /items dio HTTP ${respuestaItem.status} y /description dio HTTP ${respuestaDesc.status}.`,
+        `No se pudo leer nada útil de ${id}: /items dio HTTP ${respuestaItem.status} y /description dio HTTP ${respuestaDesc.status}.`,
       );
     }
 

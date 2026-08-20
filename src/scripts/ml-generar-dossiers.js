@@ -25,6 +25,16 @@ async function leerEntrada(ruta) {
   const hoja = wb.worksheets[0];
   if (!hoja) throw new Error(`El archivo ${ruta} no tiene ninguna hoja.`);
 
+  // Encabezado corrido (ej. alguien insertó una columna a la izquierda) da
+  // filas con nombre/url pisados en silencio si no se valida acá.
+  const encabezadoNombre = String(hoja.getCell(1, 1).value ?? "").trim().toLowerCase();
+  const encabezadoUrl = String(hoja.getCell(1, 2).value ?? "").trim().toLowerCase();
+  if (encabezadoNombre !== "nombre" || encabezadoUrl !== "url") {
+    throw new Error(
+      'La primera fila debe tener los encabezados "nombre" y "url" — así se detecta un archivo con columnas corridas.',
+    );
+  }
+
   const filas = [];
   hoja.eachRow((fila, numero) => {
     if (numero === 1) return; // encabezado
@@ -67,6 +77,10 @@ async function main() {
 
   const cliente = crearClienteML({ clientId: ML_CLIENT_ID, clientSecret: ML_CLIENT_SECRET });
   const productos = [];
+  // Detecta dos filas que apuntan al mismo ítem de ML (mismo producto pegado
+  // dos veces en el Excel de entrada): sin esto se pagan dos requests y se
+  // generan dos productos duplicados aguas abajo.
+  const idsVistos = new Set();
 
   for (const [indice, fila] of filas.entries()) {
     const etiqueta = `[${indice + 1}/${filas.length}] ${fila.nombre || fila.url}`;
@@ -77,6 +91,17 @@ async function main() {
       productos.push({ ...fila, estado: "error", motivoError: "La URL no contiene un id de MercadoLibre." });
       continue;
     }
+
+    if (idsVistos.has(id)) {
+      console.warn(`${etiqueta} — URL repetida (${id}), se marca y se sigue.`);
+      productos.push({
+        ...fila,
+        estado: "error",
+        motivoError: "URL repetida: es el mismo ítem de ML que una fila anterior.",
+      });
+      continue;
+    }
+    idsVistos.add(id);
 
     try {
       const hechos = await cliente.traerDossier(id);
