@@ -172,3 +172,33 @@ describe("POST /api/eventos", () => {
     expect(res.status).not.toBe(401);
   });
 });
+
+describe("rate limit de POST /api/eventos", () => {
+  // El endpoint es público, sin auth, y cada request inserta una fila en
+  // `EventoTrafico` — la tabla que más rápido crece del modelo. Sin limitador
+  // cualquiera puede inflarla indefinidamente.
+  //
+  // Lo que se verifica acá es el CABLEADO del limitador en la ruta (headers
+  // `RateLimit-*` presentes y con el máximo esperado) y que una ráfaga de
+  // navegación normal no se bloquea. El comportamiento del 429 en sí ya está
+  // cubierto por `middlewares/rateLimit.middleware.test.js`; repetirlo acá
+  // costaría cientos de requests por el límite alto que necesita analytics.
+  it("expone los headers RateLimit-* con el máximo elegido para tráfico de analytics", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+
+    const res = await request(buildApp()).post("/api/eventos").send({ tipo: "CLICK_WHATSAPP" });
+
+    expect(res.status).toBe(201);
+    expect(res.headers["ratelimit-limit"]).toBe("300");
+  });
+
+  it("no bloquea una ráfaga de navegación normal (30 eventos seguidos)", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+    const app = buildApp();
+
+    for (let i = 0; i < 30; i++) {
+      const res = await request(app).post("/api/eventos").send({ tipo: "AGREGADO_CARRITO" });
+      expect(res.status).toBe(201);
+    }
+  });
+});

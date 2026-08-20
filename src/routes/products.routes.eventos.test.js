@@ -293,3 +293,44 @@ describe("POST /api/products/:id/favorito — evento FAVORITO_AGREGADO", () => {
     expect(eventoCreateMock).not.toHaveBeenCalled();
   });
 });
+
+describe("rate limit de las interacciones públicas de producto", () => {
+  // `POST /:id/compartir` y `POST /:id/favorito` son públicos, sin auth, y
+  // además de insertar una fila en `EventoTrafico` incrementan contadores en
+  // `Product` (`compartidos` / `favoritosCount`). Sin limitador cualquiera
+  // puede inflar esas métricas a voluntad.
+  //
+  // Igual que en eventos, acá se verifica el CABLEADO (headers `RateLimit-*`)
+  // y que un uso humano normal no se bloquee; el 429 en sí ya está cubierto
+  // por `middlewares/rateLimit.middleware.test.js`.
+  it("expone los headers RateLimit-* en POST /:id/compartir", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase });
+    updateMock.mockResolvedValue({ ...productoBase, compartidos: 1 });
+
+    const res = await request(buildApp()).post("/api/products/42/compartir");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["ratelimit-limit"]).toBe("100");
+  });
+
+  it("expone los headers RateLimit-* en POST /:id/favorito", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase });
+    updateMock.mockResolvedValue({ ...productoBase, favoritosCount: 1 });
+
+    const res = await request(buildApp()).post("/api/products/42/favorito");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["ratelimit-limit"]).toBe("100");
+  });
+
+  it("no bloquea a alguien marcando 20 favoritos seguidos", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase });
+    updateMock.mockResolvedValue({ ...productoBase, favoritosCount: 1 });
+    const app = buildApp();
+
+    for (let i = 0; i < 20; i++) {
+      const res = await request(app).post("/api/products/42/favorito");
+      expect(res.status).toBe(200);
+    }
+  });
+});

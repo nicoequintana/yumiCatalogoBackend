@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
+import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 
 const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
@@ -61,6 +62,23 @@ const uploadXlsx = multer({
   },
 }).single("archivo");
 
+// `POST /:id/compartir` y `POST /:id/favorito` son públicos, sin auth, y
+// además de insertar en `EventoTrafico` incrementan contadores persistidos en
+// `Product` (`compartidos` / `favoritosCount`). Sin limitador, cualquiera
+// puede inflar esas métricas y ensuciar las pantallas de analytics del admin.
+//
+// Ambas comparten un mismo bucket: son las dos interacciones públicas de
+// producto y no tiene sentido presupuestarlas por separado. 100 cada 5
+// minutos por IP es holgado para una persona real (compartir y marcar
+// favoritos son clicks deliberados; recorrer la colección entera marcando
+// corazones no llega ni cerca) y sigue siendo mucho más laxo que login u
+// órdenes, donde el riesgo es takeover de cuenta o spam de pedidos.
+const limitadorInteraccionesPublicas = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 100,
+  message: "Demasiadas interacciones seguidas. Probá de nuevo en unos minutos.",
+});
+
 const router = Router();
 
 router.get("/", productsController.listar);
@@ -70,8 +88,8 @@ router.get("/:id/fotos/:fotoId", productsController.streamFoto);
 router.get("/:id", productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);
-router.post("/:id/compartir", productsController.compartir);
-router.post("/:id/favorito", productsController.favorito);
+router.post("/:id/compartir", limitadorInteraccionesPublicas, productsController.compartir);
+router.post("/:id/favorito", limitadorInteraccionesPublicas, productsController.favorito);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);

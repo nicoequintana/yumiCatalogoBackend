@@ -11,6 +11,7 @@ const findManyMock = vi.fn();
 const findUniqueOrThrowMock = vi.fn();
 const deleteMock = vi.fn();
 const fotoFindUniqueMock = vi.fn();
+const itemOrdenCountMock = vi.fn();
 const auditCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
@@ -23,6 +24,8 @@ vi.mock("../lib/prisma.js", () => ({
       delete: (...args) => deleteMock(...args),
     },
     foto: { findUnique: (...args) => fotoFindUniqueMock(...args) },
+    // `eliminar` pre-chequea el historial de ventas antes de borrar.
+    itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
     $transaction: async (fn) =>
       fn({
@@ -81,6 +84,7 @@ const productoBase = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  itemOrdenCountMock.mockResolvedValue(0);
   auditCreateMock.mockResolvedValue({ id: 1 });
 });
 

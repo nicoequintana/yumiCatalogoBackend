@@ -1108,6 +1108,26 @@ export async function eliminar(req, res, next) {
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
 
+    // Pre-chequeo del historial de ventas, mismo criterio que
+    // `categorias.controller.js` con los productos de una categoría.
+    //
+    // `ItemOrden.product` es `onDelete: NoAction`, así que borrar un producto
+    // vendido explota con el error P2003 de Prisma (violación de FK), que el
+    // error handler central de `server.js` no mapea: al admin le llegaba un
+    // 500 con "Error interno del servidor." y ninguna pista de qué hacer.
+    // Preguntando primero se responde un 400 que explica el problema y ofrece
+    // la salida correcta (ocultarlo del catálogo en vez de borrarlo).
+    //
+    // El conteo es barato: `ItemOrden.productId` está indexado.
+    const cantidadVentas = await prisma.itemOrden.count({ where: { productId: id } });
+    if (cantidadVentas > 0) {
+      throw httpError(
+        400,
+        `No se puede eliminar: el producto aparece en ${cantidadVentas} ${cantidadVentas === 1 ? "orden" : "órdenes"} de compra. ` +
+          "Para sacarlo del catálogo sin perder el historial de ventas, ocultalo desde el listado de productos.",
+      );
+    }
+
     // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
     await prisma.product.delete({ where: { id } });
 
