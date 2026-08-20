@@ -2,9 +2,9 @@ import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
+import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 
 const MAX_INTENTOS_DNI = 5;
-const ESTADO_VALIDO = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION", "ENTREGADA", "CANCELADA"];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 
@@ -206,7 +206,7 @@ export async function crear(req, res, next) {
 function construirFiltrosOrdenes(query) {
   const where = {};
 
-  if (query.estado !== undefined && ESTADO_VALIDO.includes(query.estado)) {
+  if (query.estado !== undefined && ESTADOS_ORDEN.includes(query.estado)) {
     where.estado = query.estado;
   }
 
@@ -352,8 +352,8 @@ export async function actualizarEstado(req, res, next) {
     if (!Number.isInteger(id)) throw httpError(404, "Orden no encontrada.");
 
     const { estado } = req.body;
-    if (!ESTADO_VALIDO.includes(estado)) {
-      throw httpError(400, `estado debe ser uno de: ${ESTADO_VALIDO.join(", ")}.`);
+    if (!ESTADOS_ORDEN.includes(estado)) {
+      throw httpError(400, `estado debe ser uno de: ${ESTADOS_ORDEN.join(", ")}.`);
     }
 
     const actual = await prisma.orden.findUnique({ where: { id }, include: { items: true } });

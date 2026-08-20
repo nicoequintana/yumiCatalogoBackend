@@ -1,17 +1,10 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { aClaveDia, parsearPeriodo } from "./admin.controller.js";
-
-/**
- * Estados en los que una orden todavía requiere trabajo de alguien. Son el
- * complemento exacto de los terminales (ENTREGADA / CANCELADA): una orden
- * terminal no puede estar "frenada", ya terminó su recorrido. Todo el tablero
- * de estancamiento se limita a estos tres.
- */
-const ESTADOS_NO_TERMINALES = ["PENDIENTE", "CONFIRMADA", "EN_PREPARACION"];
-
-/** Los 5 estados del modelo, en orden de flujo. Fija las claves de la respuesta. */
-const ESTADOS_ORDEN = [...ESTADOS_NO_TERMINALES, "ENTREGADA", "CANCELADA"];
+// Fuente única de los estados de `Orden` (ver lib/estadosOrden.js). Acá el
+// tablero de estancamiento se limita a los no terminales, y `ESTADOS_ORDEN`
+// fija las claves de la respuesta.
+import { ESTADOS_NO_TERMINALES, ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 
 /**
  * Días sin cambios a partir de los cuales una orden se considera estancada.

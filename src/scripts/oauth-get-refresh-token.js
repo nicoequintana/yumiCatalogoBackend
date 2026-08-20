@@ -42,7 +42,12 @@
  */
 import http from "node:http";
 import { URL } from "node:url";
-import { OAuth2Client } from "google-auth-library";
+// Se toma de `googleapis` y no de `google-auth-library` a propósito: es la
+// MISMA clase (googleapis reexporta google-auth-library), pero `googleapis`
+// sí está declarada en package.json. Importarla directo funcionaba solo por
+// hoisting de node_modules — una dependencia fantasma que rompe apenas el
+// árbol de instalación cambia. `googleDrive.service.js` ya la usa así.
+import { google } from "googleapis";
 
 const PORT = 3456;
 const REDIRECT_URI = `http://localhost:${PORT}/oauth2callback`;
@@ -138,7 +143,7 @@ async function main() {
   const clientId = requireEnv("GOOGLE_OAUTH_CLIENT_ID");
   const clientSecret = requireEnv("GOOGLE_OAUTH_CLIENT_SECRET");
 
-  const oAuth2Client = new OAuth2Client(clientId, clientSecret, REDIRECT_URI);
+  const oAuth2Client = new google.auth.OAuth2(clientId, clientSecret, REDIRECT_URI);
 
   const authUrl = oAuth2Client.generateAuthUrl({
     access_type: "offline",

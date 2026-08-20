@@ -1,14 +1,25 @@
 import { PrismaMssql } from "@prisma/adapter-mssql";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { generarSku } from "../src/lib/sku.js";
 
 /**
- * Ports the 9 Spanish mock products from frontend/src/api/seed.js into the
- * real DB via Prisma Client (design D7: reseed is CLI-only, never a UI
- * button). This is DB-only fixture data — it does NOT upload any real
- * photos/video to Drive. Photos get a placeholder image URL with
- * driveFileId: null; the two mock videos also get driveFileId: null with
- * a placeholder public URL, since seeding is for local dev/demo data, not
- * real media (real media always goes through the API's Drive upload path).
+ * Siembra 9 productos de ejemplo en la base, vía Prisma Client (design D7:
+ * el reseed es solo por CLI, nunca un botón de la UI). Se corre con
+ * `npx prisma db seed` (ver prisma.config.ts).
+ *
+ * Es data de fixture, DB-only: no sube ni un archivo real a ningún storage.
+ * Las fotos apuntan a una URL de placeholder y los dos videos de ejemplo a
+ * un MP4 público, con `cloudinaryPublicId` y `driveFileId` en null — la media
+ * real siempre entra por la ruta de subida de la API (hoy Cloudinary).
+ *
+ * Los tres campos que NO son cosméticos y sin los cuales esto no sirve:
+ *   - `sku`: es NOT NULL y único desde la migración
+ *     `20260817194301_sku_not_null`. Se genera con el mismo `generarSku` que
+ *     usa el alta real, así el formato del dato sembrado no miente.
+ *   - `stock`: sin él default 0, y el listado público excluye `stock <= 0`.
+ *   - `visibleEnCatalogo`: sin él default false, y no se ve nada.
+ * Los tres juntos son la diferencia entre sembrar y sembrar 9 productos
+ * invisibles.
  */
 
 const adapter = new PrismaMssql(process.env.DATABASE_URL);
@@ -134,16 +145,48 @@ const productos = [
   },
 ];
 
+/** Cantidad de productos que arrancan destacados, para que la home no quede vacía. */
+const DESTACADOS_INICIALES = 3;
+
+/** Stock de arranque. Cualquier valor > 0 alcanza: el listado público filtra `stock > 0`. */
+const STOCK_INICIAL = 10;
+
+/**
+ * `generarSku` cierra con un sufijo random de 4 dígitos, así que dos productos
+ * pueden colisionar contra el índice único de `sku`. Se reintenta igual que en
+ * el alta real (`products.controller.js`), en vez de abortar la siembra entera
+ * por un choque de azar.
+ */
+const MAX_INTENTOS_SKU = 5;
+
+async function crearConSku(data, nombre) {
+  for (let intento = 1; intento <= MAX_INTENTOS_SKU; intento++) {
+    try {
+      return await prisma.product.create({ data: { ...data, sku: generarSku(nombre) } });
+    } catch (err) {
+      const esColisionSku = err?.code === "P2002" && err.meta?.target?.includes?.("sku");
+      if (!esColisionSku || intento === MAX_INTENTOS_SKU) throw err;
+    }
+  }
+}
+
 async function main() {
   console.log("Sembrando productos...");
 
-  for (const p of productos) {
-    const producto = await prisma.product.create({
-      data: {
+  for (const [indice, p] of productos.entries()) {
+    const producto = await crearConSku(
+      {
         nombre: p.nombre,
         descripcion: p.descripcion,
         precio: p.precio,
         etiqueta: p.etiqueta,
+        // Sin estos tres la siembra o explota (sku es NOT NULL) o deja 9
+        // productos invisibles y agotados: `visibleEnCatalogo` y `stock`
+        // tienen defaults (false / 0) que esconden el producto del catálogo.
+        visibleEnCatalogo: true,
+        stock: STOCK_INICIAL,
+        destacado: indice < DESTACADOS_INICIALES,
+        orden: indice,
         fraseComercial: p.fraseComercial ?? null,
         porQueLoVasAQuerer: p.porQueLoVasAQuerer ?? null,
         tePasaEsto: p.tePasaEsto ?? null,
@@ -168,8 +211,9 @@ async function main() {
         },
         video: p.video ? { create: { url: p.video, driveFileId: null } } : undefined,
       },
-    });
-    console.log(`  ✓ ${producto.nombre} (id=${producto.id})`);
+      p.nombre,
+    );
+    console.log(`  ✓ ${producto.nombre} (sku=${producto.sku}, id=${producto.id})`);
   }
 
   const total = await prisma.product.count();
