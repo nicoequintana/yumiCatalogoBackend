@@ -73,6 +73,13 @@ describe("crearClienteML — token", () => {
 
     await expect(cliente.obtenerToken()).rejects.toThrow(/credenciales/i);
   });
+
+  it("contextualiza un fallo de red al pedir el token, igual que en los demás endpoints", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    const cliente = crearClienteML({ clientId: "id", clientSecret: "sec", fetch: fetchMock });
+
+    await expect(cliente.obtenerToken()).rejects.toThrow(/No se pudo conectar con MercadoLibre/);
+  });
 });
 
 describe("crearClienteML — dossier", () => {
@@ -202,6 +209,18 @@ describe("crearClienteML — dossier", () => {
           throw new SyntaxError("basura");
         },
       });
+
+    await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/MLA1/);
+  });
+
+  it("falla la fila cuando /items está cerrado y la descripción viene vacía de verdad", async () => {
+    // Candado del comportamiento: un 200 bien formado pero sin texto no es un
+    // dossier usable — mejor fila fallada y visible que un "ok" sin nada.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(TOKEN_OK)
+      .mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ plain_text: "" }) });
 
     await expect(clienteCon(fetchMock).traerDossier("MLA1")).rejects.toThrow(/MLA1/);
   });

@@ -44,18 +44,25 @@ export function crearClienteML({ clientId, clientSecret, fetch: fetchFn = global
   async function obtenerToken() {
     if (token && Date.now() < expiraEn) return token;
 
-    const respuesta = await fetchFn(`${URL_BASE}/oauth/token`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }).toString(),
-    });
+    // Mismo contrato de errores que `pedir`: un fetch rechazado acá salía como
+    // TypeError crudo — el único endpoint que quedaba sin contextualizar.
+    let respuesta;
+    try {
+      respuesta = await fetchFn(`${URL_BASE}/oauth/token`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+    } catch (err) {
+      throw new Error(`No se pudo conectar con MercadoLibre (/oauth/token): ${err.message}`);
+    }
 
     if (!respuesta.ok) {
       const cuerpo = await respuesta.json().catch(() => ({}));
