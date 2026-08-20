@@ -7,8 +7,9 @@ import { generarPlantilla } from "../lib/plantillaProductos.js";
 import { logError } from "../lib/logError.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
+import { httpError } from "../lib/httpError.js";
+import { MAX_FOTOS } from "../lib/limitesMedios.js";
 
-const MAX_FOTOS = 10;
 const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
 
 const PRODUCT_INCLUDE = {
@@ -88,12 +89,6 @@ function mapProducto(producto) {
     createdAt: producto.createdAt,
     updatedAt: producto.updatedAt,
   };
-}
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
 }
 
 /**

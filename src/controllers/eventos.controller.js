@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { httpError } from "../lib/httpError.js";
 
 // `EventoTrafico.tipo` es `VarChar(30)`, no un enum de Prisma: agregar un tipo
 // acá no requiere migración de base de datos. Esta lista es la única fuente de
@@ -12,12 +13,6 @@ const TIPOS_VALIDOS = [
   "ORDEN_CREADA",
   "COMPARTIDO",
 ];
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
 
 export async function crear(req, res, next) {
   try {

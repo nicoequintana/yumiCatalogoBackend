@@ -20,7 +20,7 @@ import configRouter from "./routes/config.routes.js";
 import eventosRouter from "./routes/eventos.routes.js";
 import ordenesRouter from "./routes/ordenes.routes.js";
 import clientesRouter from "./routes/clientes.routes.js";
-import { logError } from "./lib/logError.js";
+import { manejadorDeErrores } from "./middlewares/errorHandler.js";
 import { prisma } from "./lib/prisma.js";
 import { registrarApagadoElegante } from "./lib/apagadoElegante.js";
 import { parsearOrigenesCors } from "./lib/corsOrigen.js";
@@ -93,71 +93,11 @@ app.use((_req, res) => {
   res.status(404).json({ error: "Recurso no encontrado." });
 });
 
-// Central error handler — never leak raw stack traces to the client.
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, _next) => {
-  console.error(err);
-
-  if (err?.name === "MulterError") {
-    const status = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
-    logError({
-      mensaje: err.message,
-      stack: err.stack,
-      ruta: req.originalUrl,
-      metodo: req.method,
-      status,
-    });
-    return res.status(status).json({ error: mapMulterError(err) });
-  }
-
-  if (err?.code === "P2002") {
-    const campo = Array.isArray(err.meta?.target) ? err.meta.target[0] : err.meta?.target;
-    logError({
-      mensaje: err.message,
-      stack: err.stack,
-      ruta: req.originalUrl,
-      metodo: req.method,
-      status: 400,
-    });
-    return res.status(400).json({ error: `Ya existe un registro con ese ${campo ?? "valor"}.` });
-  }
-
-  // P2003 = violación de clave foránea. El pre-chequeo de cada controller
-  // (ver `productsController.eliminar` y `categoriasController.eliminar`) es
-  // la defensa principal y da un mensaje puntual; esto es la red de
-  // seguridad para cualquier relación que todavía no lo tenga, para que al
-  // admin no le llegue un 500 opaco.
-  if (err?.code === "P2003") {
-    logError({
-      mensaje: err.message,
-      stack: err.stack,
-      ruta: req.originalUrl,
-      metodo: req.method,
-      status: 400,
-    });
-    return res
-      .status(400)
-      .json({ error: "No se puede eliminar: otros registros dependen de este. Ocultalo en vez de borrarlo." });
-  }
-
-  const status = err?.status ?? 500;
-  const mensaje = status === 500 ? "Error interno del servidor." : err.message;
-  // Fire-and-forget: the response must not wait on the logging insert.
-  logError({ mensaje: err?.message, stack: err?.stack, ruta: req.originalUrl, metodo: req.method, status });
-  res.status(status).json({ error: mensaje });
-});
-
-function mapMulterError(err) {
-  if (err.code === "LIMIT_FILE_SIZE") return "El archivo supera el tamaño máximo permitido.";
-  if (err.code === "LIMIT_UNEXPECTED_FILE") {
-    // multer reuses this code both for a genuinely unknown field name and
-    // for exceeding a field's maxCount — err.field tells them apart.
-    if (err.field === "fotos") return "Se permiten máximo 10 fotos por producto.";
-    if (err.field === "video") return "Se permite máximo 1 video por producto.";
-    return "Campo de archivo inesperado.";
-  }
-  return "Error al procesar el archivo subido.";
-}
+// Manejador central de errores. La implementación vive en
+// `middlewares/errorHandler.js` para que los `buildApp()` de la suite de tests
+// monten EXACTAMENTE este mismo handler, en vez de una versión simplificada que
+// dejaba pasar aserciones que producción nunca cumpliría.
+app.use(manejadorDeErrores);
 
 const server = app.listen(PORT, () => {
   console.log(`Backend listening on port ${PORT}`);

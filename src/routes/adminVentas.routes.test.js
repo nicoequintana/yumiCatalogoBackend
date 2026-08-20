@@ -3,6 +3,7 @@ import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { Decimal } from "@prisma/client/runtime/client.js";
+import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
@@ -24,9 +25,7 @@ function buildApp() {
   const app = express();
   app.use(express.json());
   app.use("/api/admin", adminRouter);
-  app.use((err, _req, res, _next) => {
-    res.status(err.status ?? 500).json({ error: err.message });
-  });
+  app.use(manejadorDeErrores);
   return app;
 }
 

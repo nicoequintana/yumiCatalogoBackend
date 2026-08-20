@@ -1,27 +1,7 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
-
-const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE_SIZE = 100;
-
-/**
- * Parsea `page`/`pageSize` de la query string con los mismos defaults y tope
- * que ya usaba `listarErrorLogs`: valores fraccionarios, no numéricos,
- * negativos o cero caen al default en vez de tirar 500, y `pageSize` se
- * clampea a MAX_PAGE_SIZE para que nadie pueda pedir la tabla entera.
- */
-function parsearPaginacion(query) {
-  const pageParsed = Math.floor(Number(query.page));
-  const page = Number.isFinite(pageParsed) && pageParsed > 0 ? pageParsed : 1;
-
-  const pageSizeParsed = Math.floor(Number(query.pageSize));
-  const pageSize =
-    Number.isFinite(pageSizeParsed) && pageSizeParsed > 0
-      ? Math.min(pageSizeParsed, MAX_PAGE_SIZE)
-      : DEFAULT_PAGE_SIZE;
-
-  return { page, pageSize };
-}
+import { parsearPaginacion } from "../lib/paginacion.js";
+import { subtotalDeItem, sumarDecimales } from "../lib/dinero.js";
 
 export async function listarErrorLogs(req, res, next) {
   try {
@@ -229,13 +209,12 @@ export async function resumenVentas(req, res, next) {
         continue;
       }
 
-      // `precioUnitario` llega como Decimal desde Prisma, pero se normaliza
-      // igual: en tests o mocks puede venir como string o number, y `Decimal`
-      // acepta las tres formas sin perder precisión.
-      const totalOrden = orden.items.reduce(
-        (acumulado, item) => acumulado.plus(new Decimal(item.precioUnitario).mul(item.cantidad)),
-        new Decimal(0),
-      );
+      // Los subtotales por ítem se calculan UNA sola vez: el total de la orden
+      // es su suma, y el ranking por producto de más abajo los reusa por
+      // índice. Antes se multiplicaba `precioUnitario * cantidad` dos veces
+      // por ítem, una acá y otra en el ranking.
+      const subtotales = orden.items.map(subtotalDeItem);
+      const totalOrden = sumarDecimales(subtotales);
 
       if (orden.estado === "PENDIENTE") {
         // Pipeline: ingreso potencial, todavía no facturado. Se reporta
@@ -254,10 +233,10 @@ export async function resumenVentas(req, res, next) {
       const dia = aClaveDia(orden.createdAt);
       porDia.set(dia, (porDia.get(dia) ?? new Decimal(0)).plus(totalOrden));
 
-      for (const item of orden.items) {
+      for (const [indice, item] of orden.items.entries()) {
         unidadesVendidas += item.cantidad;
 
-        const facturacionItem = new Decimal(item.precioUnitario).mul(item.cantidad);
+        const facturacionItem = subtotales[indice];
         const acumulado = porProducto.get(item.productId);
 
         if (acumulado) {

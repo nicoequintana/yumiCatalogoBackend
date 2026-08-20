@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
+import { httpError } from "../lib/httpError.js";
 
 const JWT_EXPIRES_IN = "7d";
 const SALT_ROUNDS = 10;
@@ -22,12 +23,6 @@ const SALT_ROUNDS = 10;
 // SALT_ROUNDS que los hashes reales (ver `usuarios.controller.js` y
 // `scripts/create-admin.js`) para que el tiempo de comparación coincida.
 const HASH_SENUELO = bcrypt.hashSync(randomBytes(32).toString("hex"), SALT_ROUNDS);
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
 
 export async function login(req, res, next) {
   try {

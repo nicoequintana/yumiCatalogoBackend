@@ -1,11 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
+import { httpError } from "../lib/httpError.js";
 
 function mapCategoria(categoria) {
   return {

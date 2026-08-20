@@ -3,6 +3,7 @@ import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
+import { MAX_FOTOS } from "../lib/limitesMedios.js";
 
 const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
@@ -31,7 +32,7 @@ const upload = multer({
 });
 
 const uploadFields = upload.fields([
-  { name: "fotos", maxCount: 10 },
+  { name: "fotos", maxCount: MAX_FOTOS },
   { name: "video", maxCount: 1 },
 ]);
 

@@ -1,5 +1,5 @@
-import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
+import { totalDeItems } from "../lib/dinero.js";
 import { aClaveDia, parsearPeriodo } from "./admin.controller.js";
 // Fuente única de los estados de `Orden` (ver lib/estadosOrden.js). Acá el
 // tablero de estancamiento se limita a los no terminales, y `ESTADOS_ORDEN`
@@ -51,14 +51,6 @@ const MS_POR_DIA = 24 * 60 * 60 * 1000;
  */
 function diasDesde(fecha, ahora) {
   return Math.floor((ahora.getTime() - new Date(fecha).getTime()) / MS_POR_DIA);
-}
-
-/** Suma `precioUnitario * cantidad` de los items con Decimal, nunca con float. */
-function totalDeItems(items) {
-  return (items ?? []).reduce(
-    (acumulado, item) => acumulado.plus(new Decimal(item.precioUnitario).mul(item.cantidad)),
-    new Decimal(0),
-  );
 }
 
 /**

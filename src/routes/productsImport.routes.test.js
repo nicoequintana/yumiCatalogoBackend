@@ -3,6 +3,7 @@ import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
 import ExcelJS from "exceljs";
+import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
@@ -26,13 +27,7 @@ const { default: productsRouter } = await import("./products.routes.js");
 function buildApp() {
   const app = express();
   app.use("/api/products", productsRouter);
-  app.use((err, _req, res, _next) => {
-    // Espeja el handler real de `server.js`: en 500 el mensaje se reemplaza,
-    // así un test no puede pasar afirmando un mensaje que en producción el
-    // usuario nunca vería.
-    const status = err.status ?? 500;
-    res.status(status).json({ error: status === 500 ? "Error interno del servidor." : err.message });
-  });
+  app.use(manejadorDeErrores);
   return app;
 }
 

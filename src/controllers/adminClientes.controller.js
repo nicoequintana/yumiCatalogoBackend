@@ -1,26 +1,12 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
+import { totalDeItems } from "../lib/dinero.js";
 import { ESTADOS_FACTURABLES, aClaveDia, parsearPeriodo } from "./admin.controller.js";
 
 /** Tope de clientes devueltos en el ranking de facturación. */
 const TOP_RANKING = 10;
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
-
-/**
- * Total facturado de una orden desde los snapshots de sus items
- * (`precioUnitario * cantidad`), acumulado en `Decimal`.
- *
- * `precioUnitario` llega como `Decimal` desde Prisma, pero se normaliza igual:
- * en tests o mocks puede venir como string o number, y `Decimal` acepta las
- * tres formas sin perder precisión.
- */
-function totalDeOrden(orden) {
-  return orden.items.reduce(
-    (acumulado, item) => acumulado.plus(new Decimal(item.precioUnitario).mul(item.cantidad)),
-    new Decimal(0),
-  );
-}
 
 /**
  * GET /api/admin/clientes-resumen — dashboard de clientes del panel admin.
@@ -90,7 +76,7 @@ export async function resumenClientes(req, res, next) {
       if (!orden.cliente) continue;
 
       const { dni, nombre } = orden.cliente;
-      const total = totalDeOrden(orden);
+      const total = totalDeItems(orden.items);
 
       const acumulado = porCliente.get(dni);
       if (acumulado) {

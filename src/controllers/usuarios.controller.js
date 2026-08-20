@@ -1,14 +1,9 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
+import { httpError } from "../lib/httpError.js";
 
 const SALT_ROUNDS = 10;
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
 
 function mapUsuario(usuario) {
   return { id: usuario.id, email: usuario.email, createdAt: usuario.createdAt };

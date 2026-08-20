@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express from "express";
+import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
@@ -26,9 +27,7 @@ function buildApp() {
   const app = express();
   app.use(express.json());
   app.use("/api/products", productsRouter);
-  app.use((err, _req, res, _next) => {
-    res.status(err.status ?? 500).json({ error: err.message });
-  });
+  app.use(manejadorDeErrores);
   return app;
 }
 

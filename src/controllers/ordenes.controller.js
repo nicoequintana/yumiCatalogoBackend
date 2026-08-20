@@ -3,16 +3,10 @@ import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
+import { httpError } from "../lib/httpError.js";
+import { parsearPaginacion } from "../lib/paginacion.js";
 
 const MAX_INTENTOS_DNI = 5;
-const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE_SIZE = 100;
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
 
 /**
  * Valida los campos requeridos del body de creación de orden (checkout de
@@ -242,24 +236,19 @@ function construirFiltrosOrdenes(query) {
  * dni/nombre), orden por createdAt desc (más reciente primero). Incluye
  * `cliente` completo y `_count.items` (NO los items completos): nada en el
  * schema ni en `crear()` limita cuántos items puede tener una orden, así que
- * traer los items completos de hasta `MAX_PAGE_SIZE` órdenes podría inflar
+ * traer los items completos de hasta `MAX_PAGE_SIZE` órdenes (ver
+ * `lib/paginacion.js`) podría inflar
  * el payload del listado sin necesidad real todavía (no hay frontend
  * consumiéndolo en este diff). El detalle línea por línea vive en
  * `obtenerPorId()` — split estándar lista/detalle.
  *
- * Paginación: mismo patrón que `admin.controller.js`'s `listarErrorLogs`
- * (Sprint 1) — page/pageSize floored/clamped con defaults sanos.
+ * Paginación: `parsearPaginacion` de `lib/paginacion.js`, el mismo parser que
+ * usan los listados de logs del admin — page/pageSize floored/clamped con
+ * defaults sanos.
  */
 export async function listar(req, res, next) {
   try {
-    const pageParsed = Math.floor(Number(req.query.page));
-    const page = Number.isFinite(pageParsed) && pageParsed > 0 ? pageParsed : 1;
-
-    const pageSizeParsed = Math.floor(Number(req.query.pageSize));
-    const pageSize =
-      Number.isFinite(pageSizeParsed) && pageSizeParsed > 0
-        ? Math.min(pageSizeParsed, MAX_PAGE_SIZE)
-        : DEFAULT_PAGE_SIZE;
+    const { page, pageSize } = parsearPaginacion(req.query);
 
     const where = construirFiltrosOrdenes(req.query);
 

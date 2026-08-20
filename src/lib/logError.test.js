@@ -39,6 +39,57 @@ describe("logError", () => {
     });
   });
 
+  it("deja el stack intacto cuando el error no trae causa", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+
+    await logError({ mensaje: "Algo falló", stack: "stack original", causa: undefined, status: 500 });
+
+    expect(createMock.mock.calls[0][0].data.stack).toBe("stack original");
+  });
+
+  it("adosa al stack una causa que es objeto plano, con todos sus campos", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+
+    // Caso real: el SDK de Cloudinary rechaza con `{message, http_code}` y
+    // `cloudinary.service.js` lo cuelga de `err.cause` justamente para no
+    // perder el `http_code`. `ErrorLog` no tiene columna para la causa, así
+    // que si no se adosa al stack ese dato no llega nunca a la base.
+    await logError({
+      mensaje: "La subida a Cloudinary falló.",
+      stack: "Error: La subida a Cloudinary falló.\n  at subirArchivo",
+      causa: { message: "Request Timeout", http_code: 499 },
+      status: 502,
+    });
+
+    const { stack } = createMock.mock.calls[0][0].data;
+    expect(stack).toContain("Error: La subida a Cloudinary falló.");
+    expect(stack).toContain("Caused by:");
+    expect(stack).toContain("Request Timeout");
+    expect(stack).toContain("499");
+  });
+
+  it("adosa el stack de la causa cuando la causa es un Error", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+    const causa = new Error("socket hang up");
+
+    await logError({ mensaje: "Falló", stack: "stack externo", causa, status: 500 });
+
+    const { stack } = createMock.mock.calls[0][0].data;
+    expect(stack).toContain("stack externo");
+    expect(stack).toContain("socket hang up");
+  });
+
+  it("no rompe con una causa circular: cae a String() en vez de perder el log", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+    const causa = { http_code: 500 };
+    causa.self = causa;
+
+    await logError({ mensaje: "Falló", stack: "stack externo", causa, status: 500 });
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(createMock.mock.calls[0][0].data.stack).toContain("Caused by:");
+  });
+
   it("no lanza si prisma.errorLog.create rechaza (best-effort)", async () => {
     createMock.mockRejectedValue(new Error("DB caída"));
 
