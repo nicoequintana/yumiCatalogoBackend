@@ -10,6 +10,7 @@ const createMock = vi.fn();
 const updateMock = vi.fn();
 const findUniqueMock = vi.fn();
 const findManyMock = vi.fn();
+const countMock = vi.fn().mockResolvedValue(0);
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -18,6 +19,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => updateMock(...args),
       findUnique: (...args) => findUniqueMock(...args),
       findMany: (...args) => findManyMock(...args),
+      count: (...args) => countMock(...args),
     },
   },
 }));

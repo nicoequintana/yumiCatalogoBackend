@@ -7,7 +7,14 @@ process.env.JWT_SECRET = "test-secret";
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
-    product: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
+    product: {
+      findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+    },
   },
 }));
 vi.mock("../services/googleDrive.service.js", () => ({}));

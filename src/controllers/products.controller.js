@@ -5,7 +5,8 @@ import { generarSku } from "../lib/sku.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { httpError } from "../lib/httpError.js";
-import { PRODUCT_INCLUDE, mapProducto } from "./products.mapper.js";
+import { parsearPaginacion } from "../lib/paginacion.js";
+import { LIST_SELECT, PRODUCT_INCLUDE, mapProducto, mapProductoListado } from "./products.mapper.js";
 import {
   parseCaracteristicas,
   parseEspecificaciones,
@@ -46,17 +47,113 @@ import {
  * still needs to see it (to restock or edit it), so this exclusion is
  * public-only, same as `visibleEnCatalogo`.
  */
-function construirFiltrosListado(query, { esAdmin }) {
+/**
+ * Productos por página del catálogo, distinto del `DEFAULT_PAGE_SIZE` de los
+ * listados del admin.
+ *
+ * 12 porque es el número que le cierra a la grilla: es múltiplo de 1, 2 y 3
+ * (las columnas que `/coleccion` usa en mobile, `md` y `lg`), así que ninguna
+ * página termina con una fila huérfana; y es múltiplo de 4, que es la cadencia
+ * de la card ancha (`index % 4 === 3` en `Coleccion.jsx`), así que el patrón
+ * asimétrico cierra igual en todas las páginas en vez de cortarse distinto en
+ * cada una. Además deja la respuesta en una docena de fichas livianas, que es
+ * más o menos un scroll de pantalla.
+ */
+export const PAGE_SIZE_CATALOGO = 12;
+
+/**
+ * Ordenamientos permitidos del listado.
+ *
+ * `merchandising` es el de siempre: el `orden` manual que el admin edita en el
+ * listado, con los más nuevos primero ante empate. `vistas` existe para la
+ * pantalla de métricas, que necesita "lo más visto primero" a lo largo de TODO
+ * el catálogo — ordenar del lado del cliente solo reordenaría la página que
+ * tocó, que es una respuesta directamente equivocada. El desempate por `id`
+ * mantiene la paginación estable cuando varios productos comparten conteo.
+ *
+ * Un valor desconocido cae al default en vez de tirar 400, mismo criterio que
+ * el resto de los filtros de este endpoint público.
+ */
+const ORDENES_LISTADO = {
+  merchandising: [{ orden: "asc" }, { createdAt: "desc" }],
+  vistas: [{ vistas: "desc" }, { id: "asc" }],
+};
+
+function elegirOrden(valor) {
+  return ORDENES_LISTADO[valor] ?? ORDENES_LISTADO.merchandising;
+}
+
+/**
+ * Tope de ids aceptados en `?ids=`. Existe para que nadie pueda pedir miles de
+ * productos en una sola request: el `IN (...)` resultante va literal al SQL, y
+ * una lista sin límite es un DoS gratis contra la base.
+ *
+ * Coincide con `MAX_PAGE_SIZE` a propósito — es el mismo techo de "cuántas
+ * filas de producto puede devolver una request", pedidas por página o por id.
+ */
+export const MAX_IDS_LISTADO = 100;
+
+/**
+ * Parsea `?ids=1,7,12` a una lista de enteros positivos.
+ *
+ * Devuelve `null` cuando el parámetro no viene (el listado normal), y un array
+ * — posiblemente vacío — cuando sí viene. Esa distinción es la parte
+ * importante: `?ids=` (vacío) o `?ids=abc` significan "ninguno de estos
+ * productos", NO "todo el catálogo". Devolver el catálogo entero ante una
+ * lista vacía sería exactamente el bug que este parámetro viene a evitar en
+ * carrito/checkout/favoritos.
+ *
+ * Los valores basura (no numéricos, negativos, fraccionarios) se descartan en
+ * silencio, igual que el resto de los filtros de este endpoint público. Pero
+ * pasarse del tope NO se trunca en silencio: truncar una lista de carrito
+ * borraría líneas sin avisar, así que se responde 400 y el cliente pagina la
+ * lista en tandas.
+ */
+export function parsearIdsListado(valor) {
+  if (valor === undefined) return null;
+  if (typeof valor !== "string") return [];
+
+  const crudos = valor.split(",");
+  if (crudos.length > MAX_IDS_LISTADO) {
+    throw httpError(400, `No se pueden pedir más de ${MAX_IDS_LISTADO} productos por id en una sola consulta.`);
+  }
+
+  const ids = [];
+  const vistos = new Set();
+  for (const crudo of crudos) {
+    const id = Number(crudo.trim());
+    if (!Number.isInteger(id) || id <= 0 || vistos.has(id)) continue;
+    vistos.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function construirFiltrosListado(query, { esAdmin, ids }) {
   const where = {};
   if (!esAdmin) {
     where.visibleEnCatalogo = true;
     where.stock = { gt: 0 };
   }
 
+  // `ids` se compone con el resto del `where`, no lo reemplaza: las guardas
+  // públicas de visibilidad y stock tienen que seguir aplicando. Es lo que
+  // mantiene intacta la semántica en la que ya se apoyan carrito, checkout y
+  // favoritos — "no vino en la respuesta" siempre quiso decir "no se puede
+  // comprar", y pedir por id no cambia eso.
+  if (ids !== null) where.id = { in: ids };
+
   if (query.categoria !== undefined) {
     const categoriaId = Number(query.categoria);
     if (!Number.isNaN(categoriaId)) where.categoriaId = categoriaId;
   }
+
+  // `destacado=1` alimenta el bento de la home y de `/coleccion`: son cuatro
+  // productos concretos, no los primeros de la página actual. Sin este filtro
+  // el bento tendría que bajarse el catálogo entero para encontrarlos — y con
+  // el listado paginado ni siquiera eso alcanzaría, porque un destacado puede
+  // caer en cualquier página.
+  if (query.destacado !== undefined) where.destacado = true;
 
   if (typeof query.search === "string" && query.search !== "") {
     // No `mode: "insensitive"` here on purpose: this database's default
@@ -85,13 +182,45 @@ function construirFiltrosListado(query, { esAdmin }) {
 export async function listar(req, res, next) {
   try {
     const esAdmin = req.query.admin !== undefined;
+    const ids = parsearIdsListado(req.query.ids);
 
-    const productos = await prisma.product.findMany({
-      where: construirFiltrosListado(req.query, { esAdmin }),
-      include: PRODUCT_INCLUDE,
-      orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
-    });
-    res.json(productos.map(mapProducto));
+    // Cortocircuito: se pidieron ids y ninguno quedó en pie. No hay nada que
+    // consultar, y una consulta con `id: { in: [] }` sería un viaje perdido.
+    if (ids !== null && ids.length === 0) {
+      res.json({ data: [], page: 1, pageSize: MAX_IDS_LISTADO, total: 0 });
+      return;
+    }
+
+    const where = construirFiltrosListado(req.query, { esAdmin, ids });
+    const orderBy = elegirOrden(req.query.orden);
+
+    // Pedir por `ids` saltea la paginación a propósito: el llamador ya enumeró
+    // exactamente qué quiere y la lista ya viene acotada por `MAX_IDS_LISTADO`,
+    // así que el resultado está tan limitado como una página. Recortarlo otra
+    // vez le devolvería al carrito menos líneas de las que pidió, que es
+    // justamente el bug que `ids` viene a evitar. Tampoco se cuenta: el total
+    // es lo que se devuelve.
+    if (ids !== null) {
+      const productos = await prisma.product.findMany({ where, select: LIST_SELECT, orderBy });
+      const data = productos.map(mapProductoListado);
+      res.json({ data, page: 1, pageSize: MAX_IDS_LISTADO, total: data.length });
+      return;
+    }
+
+    const { page, pageSize } = parsearPaginacion(req.query, { porDefecto: PAGE_SIZE_CATALOGO });
+
+    const [total, productos] = await Promise.all([
+      prisma.product.count({ where }),
+      prisma.product.findMany({
+        where,
+        select: LIST_SELECT,
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    res.json({ data: productos.map(mapProductoListado), page, pageSize, total });
   } catch (err) {
     next(err);
   }
@@ -104,8 +233,13 @@ export async function listar(req, res, next) {
  * round-trip when the product has neither field set — that's a normal case
  * (nothing to match on), not an error.
  *
- * Only one level deep: related rows are mapped with plain `mapProducto` and
+ * Only one level deep: related rows are mapped with `mapProductoListado` and
  * never get their own `relacionados` computed, avoiding recursion.
+ *
+ * Usa el mismo payload liviano que el listado (`LIST_SELECT`): estas cuatro
+ * filas se renderizan con `ProductCard`, igual que la grilla de `/coleccion`,
+ * así que traer su contenido comercial completo era peso muerto en CADA
+ * apertura de ficha.
  */
 async function obtenerRelacionados(producto, { esAdmin }) {
   const { categoriaId, etiqueta } = producto;
@@ -123,11 +257,11 @@ async function obtenerRelacionados(producto, { esAdmin }) {
 
   const relacionados = await prisma.product.findMany({
     where,
-    include: PRODUCT_INCLUDE,
+    select: LIST_SELECT,
     take: 4,
   });
 
-  return relacionados.map(mapProducto);
+  return relacionados.map(mapProductoListado);
 }
 
 export async function obtenerPorId(req, res, next) {

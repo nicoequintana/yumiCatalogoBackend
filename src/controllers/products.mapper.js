@@ -17,6 +17,51 @@ export const PRODUCT_INCLUDE = {
 };
 
 /**
+ * Forma de lectura del LISTADO, deliberadamente distinta de `PRODUCT_INCLUDE`.
+ *
+ * `GET /products` alimenta la grilla de `/coleccion`, el bento de destacados,
+ * las tablas del admin y los "relacionados" del detalle. Ninguno de esos
+ * consumidores lee la descripción larga, el contenido comercial, las listas,
+ * las especificaciones, el video ni las fotos 2..10 — pero `PRODUCT_INCLUDE`
+ * los traía igual, incluidas las tres columnas `NVarChar(Max)`
+ * (`descripcion`, `porQueLoVasAQuerer`, `tePasaEsto`) y hasta 10 filas de
+ * `Foto` por producto, multiplicado por todo el catálogo.
+ *
+ * Es un `select` y no un `include` a propósito: `include` trae SIEMPRE todas
+ * las columnas escalares de la tabla, así que no habría forma de dejar afuera
+ * las columnas `Max`.
+ *
+ * `fotos` va con `take: 1` porque la única foto que la grilla muestra es la
+ * portada (`fotos[0]`, ver CLAUDE.md "las dos primeras fotos no son
+ * intercambiables"). `cloudinaryPublicId`/`driveFileId` se seleccionan porque
+ * `urlDeFoto` los necesita para resolver la URL; no se exponen en la
+ * respuesta.
+ *
+ * `_count.fotos` conserva el "N/10" de la tabla del admin, que es lo único
+ * que se perdía al recortar `fotos` a una sola fila.
+ */
+export const LIST_SELECT = {
+  id: true,
+  sku: true,
+  nombre: true,
+  precio: true,
+  etiqueta: true,
+  visibleEnCatalogo: true,
+  stock: true,
+  destacado: true,
+  orden: true,
+  vistas: true,
+  compartidos: true,
+  categoria: { select: { id: true, nombre: true } },
+  fotos: {
+    select: { id: true, url: true, orden: true, cloudinaryPublicId: true, driveFileId: true },
+    orderBy: { orden: "asc" },
+    take: 1,
+  },
+  _count: { select: { fotos: true } },
+};
+
+/**
  * Maps a Prisma Product row (with relations) to the API response shape.
  *
  * Photo URLs (post-archive bugfix, see topic
@@ -31,6 +76,50 @@ export const PRODUCT_INCLUDE = {
  * `placehold.co` URL untouched — there is nothing to proxy and no ORB risk
  * for that host.
  */
+/**
+ * Resuelve la URL pública de una foto según su storage: Cloudinary sirve
+ * directo, Drive (legado) pasa por el proxy propio del backend, y una fila
+ * sin ninguno de los dos (seed/placeholder) conserva su URL original.
+ *
+ * Compartida por `mapProducto` y `mapProductoListado` para que la portada de
+ * la grilla y la galería del detalle no puedan divergir.
+ */
+function urlDeFoto(productoId, foto) {
+  if (foto.cloudinaryPublicId) return foto.url;
+  if (foto.driveFileId) return `/api/products/${productoId}/fotos/${foto.id}`;
+  return foto.url;
+}
+
+/**
+ * Mapea una fila leída con `LIST_SELECT` a la forma que devuelve el listado.
+ *
+ * Es un subconjunto estricto de `mapProducto`: cada clave que emite existe
+ * también en el detalle y con el mismo significado, así que un componente
+ * como `ProductCard` funciona con las dos respuestas sin ramificar.
+ */
+export function mapProductoListado(producto) {
+  return {
+    id: producto.id,
+    sku: producto.sku,
+    nombre: producto.nombre,
+    precio: producto.precio.toString(),
+    etiqueta: producto.etiqueta,
+    categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
+    vistas: producto.vistas,
+    compartidos: producto.compartidos,
+    visibleEnCatalogo: producto.visibleEnCatalogo,
+    stock: producto.stock,
+    destacado: producto.destacado,
+    orden: producto.orden,
+    cantidadFotos: producto._count?.fotos ?? producto.fotos.length,
+    fotos: producto.fotos.map((f) => ({
+      id: f.id,
+      url: urlDeFoto(producto.id, f),
+      orden: f.orden,
+    })),
+  };
+}
+
 function agruparListasPorTipo(listas) {
   const porTipo = { BENEFICIO: [], USO: [], IDEAL_PARA: [], INCLUYE: [] };
   for (const item of listas) {
@@ -42,9 +131,10 @@ function agruparListasPorTipo(listas) {
 export function mapProducto(producto) {
   // Una sola pasada por `listas` para las cuatro claves. Antes se llamaba a
   // `agruparListasPorTipo` una vez por clave y se descartaban las otras tres
-  // agrupaciones, o sea cuatro recorridos completos por producto — y `GET
-  // /products` no está paginado, así que eso se multiplicaba por todo el
-  // catálogo en cada respuesta.
+  // agrupaciones, o sea cuatro recorridos completos por producto. Hoy este
+  // mapper solo corre sobre el detalle (el listado usa `mapProductoListado`,
+  // que ni siquiera trae `listas`), pero la pasada única sigue siendo la
+  // forma correcta de agrupar.
   const listasPorTipo = agruparListasPorTipo(producto.listas ?? []);
 
   return {
@@ -75,9 +165,14 @@ export function mapProducto(producto) {
     // lado del servidor (Cloudinary directo, o el proxy propio para las filas
     // legado de Drive), así que mandarlo solo filtraría un identificador
     // interno de storage en un endpoint público. Ningún cliente lo lee.
+    // Mismo campo que emite `mapProductoListado`. Existe también acá para que
+    // la tabla del admin pueda leer siempre `cantidadFotos`, incluso cuando la
+    // fila del listado se reemplaza por la respuesta de un PATCH de
+    // visibilidad/merchandising (que devuelve el producto completo).
+    cantidadFotos: producto.fotos.length,
     fotos: producto.fotos.map((f) => ({
       id: f.id,
-      url: f.cloudinaryPublicId ? f.url : f.driveFileId ? `/api/products/${producto.id}/fotos/${f.id}` : f.url,
+      url: urlDeFoto(producto.id, f),
       orden: f.orden,
     })),
     video: producto.video

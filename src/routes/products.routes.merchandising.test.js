@@ -10,6 +10,7 @@ const createMock = vi.fn();
 const updateMock = vi.fn();
 const findUniqueMock = vi.fn();
 const findManyMock = vi.fn();
+const countMock = vi.fn().mockResolvedValue(0);
 const findUniqueOrThrowMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
@@ -19,6 +20,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => updateMock(...args),
       findUnique: (...args) => findUniqueMock(...args),
       findMany: (...args) => findManyMock(...args),
+      count: (...args) => countMock(...args),
       findUniqueOrThrow: (...args) => findUniqueOrThrowMock(...args),
     },
     $transaction: async (fn) =>

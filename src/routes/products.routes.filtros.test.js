@@ -6,6 +6,7 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 process.env.JWT_SECRET = "test-secret";
 
 const findManyMock = vi.fn();
+const countMock = vi.fn().mockResolvedValue(0);
 const findUniqueMock = vi.fn();
 const updateMock = vi.fn();
 
@@ -15,6 +16,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => findManyMock(...args),
       findUnique: (...args) => findUniqueMock(...args),
       update: (...args) => updateMock(...args),
+      count: (...args) => countMock(...args),
     },
   },
 }));
