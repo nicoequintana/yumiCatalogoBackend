@@ -1,0 +1,20 @@
+BEGIN TRY
+
+BEGIN TRAN;
+
+-- AlterTable
+ALTER TABLE [dbo].[Product] ADD [compartidos] INT NOT NULL CONSTRAINT [Product_compartidos_df] DEFAULT 0,
+[vistas] INT NOT NULL CONSTRAINT [Product_vistas_df] DEFAULT 0;
+
+COMMIT TRAN;
+
+END TRY
+BEGIN CATCH
+
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRAN;
+END;
+THROW
+
+END CATCH
