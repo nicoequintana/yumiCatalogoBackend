@@ -76,7 +76,7 @@ describe("GET /api/products - filtros de listado", () => {
     expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 }, categoriaId: 3 });
   });
 
-  it("filtra por search (contains, sin mode)", async () => {
+  it("search busca en nombre, sku y categoría (contains, sin mode)", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products?search=bruma");
@@ -85,8 +85,23 @@ describe("GET /api/products - filtros de listado", () => {
     expect(where).toEqual({
       visibleEnCatalogo: true,
       stock: { gt: 0 },
-      nombre: { contains: "bruma" },
+      OR: [
+        { nombre: { contains: "bruma" } },
+        { sku: { contains: "bruma" } },
+        { categoria: { nombre: { contains: "bruma" } } },
+      ],
     });
+  });
+
+  it("search por SKU encuentra el producto aunque no coincida el nombre", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?search=YIM-0042");
+
+    const { where } = findManyMock.mock.calls[0][0];
+    // El SKU es una de las tres ramas del OR: quien lo tipea no tiene que
+    // declarar que está buscando por código.
+    expect(where.OR).toContainEqual({ sku: { contains: "YIM-0042" } });
   });
 
   it("search vacío no filtra nada", async () => {
@@ -96,6 +111,39 @@ describe("GET /api/products - filtros de listado", () => {
 
     const { where } = findManyMock.mock.calls[0][0];
     expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("search con solo espacios no filtra nada", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?search=%20%20%20");
+
+    // Sin el `trim`, un `contains: "   "` devolvería la tabla casi vacía sin
+    // que el usuario entienda por qué.
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("recorta los espacios alrededor del término", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?search=%20bruma%20");
+
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where.OR).toContainEqual({ nombre: { contains: "bruma" } });
+  });
+
+  it("search compone con las guardas públicas, no las reemplaza", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?search=bruma");
+
+    // Un OR mal ubicado se llevaría puestas las guardas de visibilidad/stock
+    // y expondría productos ocultos a un anónimo. Prisma une las claves de
+    // primer nivel con AND, así que el OR queda acotado dentro de ellas.
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where.visibleEnCatalogo).toBe(true);
+    expect(where.stock).toEqual({ gt: 0 });
   });
 
   it("filtra por minPrecio", async () => {
@@ -160,7 +208,11 @@ describe("GET /api/products - filtros de listado", () => {
       visibleEnCatalogo: true,
       stock: { gt: 0 },
       categoriaId: 3,
-      nombre: { contains: "bruma" },
+      OR: [
+        { nombre: { contains: "bruma" } },
+        { sku: { contains: "bruma" } },
+        { categoria: { nombre: { contains: "bruma" } } },
+      ],
       precio: { gte: 50, lte: 200 },
     });
   });

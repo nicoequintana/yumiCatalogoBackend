@@ -156,14 +156,31 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   // caer en cualquier página.
   if (query.destacado !== undefined) where.destacado = true;
 
-  if (typeof query.search === "string" && query.search !== "") {
+  if (typeof query.search === "string" && query.search.trim() !== "") {
+    const termino = query.search.trim();
+
     // No `mode: "insensitive"` here on purpose: this database's default
     // collation is SQL_Latin1_General_CP1_CI_AS (case-insensitive already,
     // confirmed live against the dev SQL Server), and the mssql Prisma
     // connector doesn't support the `mode` option at all — passing it
     // throws "Unknown argument mode" at runtime. Plain `contains` is both
     // correct and the only option here.
-    where.nombre = { contains: query.search };
+    //
+    // The term matches against nombre, SKU, and categoria name. It used to
+    // check `nombre` alone, which made the admin list unsearchable by the
+    // very SKU its own table displays — the admin knows a product by its
+    // code as often as by its name.
+    //
+    // `OR` (not a single field) means the caller doesn't have to declare
+    // WHICH field they're typing into: one box, and whatever they know about
+    // the product finds it. The public catalog gets the same widening, which
+    // is a feature there too — a shopper pasting a SKU from a shared link
+    // lands on the product instead of an empty grid.
+    where.OR = [
+      { nombre: { contains: termino } },
+      { sku: { contains: termino } },
+      { categoria: { nombre: { contains: termino } } },
+    ];
   }
 
   const rangoPrecio = {};
