@@ -235,3 +235,98 @@ describe("GET /api/products/:id — el 404 de producto oculto solo lo levanta el
     expect(findManyMock.mock.calls[0][0].where.visibleEnCatalogo).toBe(true);
   });
 });
+
+describe("POST compartir/favorito — un producto oculto es indistinguible de uno inexistente", () => {
+  // Los dos endpoints son públicos y los ids son secuenciales: si un producto
+  // oculto respondiera `{ ok: true }` mientras uno inexistente da 404,
+  // cualquiera podría enumerar los ocultos probando enteros — el mismo agujero
+  // que `obtenerPorId` y los proxies de media ya cierran. Además, sin la
+  // guarda, un anónimo puede inflar `compartidos`/`favoritosCount` de
+  // productos que el admin sacó del catálogo a propósito.
+
+  it("compartir un producto oculto sin token devuelve el MISMO 404 que un id inexistente y no toca el contador", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, visibleEnCatalogo: false });
+
+    const res = await request(buildApp()).post("/api/products/42/compartir");
+
+    findUniqueMock.mockResolvedValue(null);
+    const resInexistente = await request(buildApp()).post("/api/products/999/compartir");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(resInexistente.body);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("favorito sobre un producto oculto sin token devuelve el MISMO 404 que un id inexistente y no toca el contador", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, visibleEnCatalogo: false });
+
+    const res = await request(buildApp()).post("/api/products/42/favorito");
+
+    findUniqueMock.mockResolvedValue(null);
+    const resInexistente = await request(buildApp()).post("/api/products/999/favorito");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(resInexistente.body);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("un admin autenticado sí puede compartir un producto oculto", async () => {
+    const oculto = { ...productoBase, visibleEnCatalogo: false };
+    findUniqueMock.mockResolvedValue(oculto);
+    updateMock.mockResolvedValue(oculto);
+
+    const res = await request(buildApp())
+      .post("/api/products/42/compartir")
+      .set("Authorization", `Bearer ${tokenValido()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: 42 },
+      data: { compartidos: { increment: 1 } },
+    });
+  });
+
+  it("un admin autenticado sí puede marcar favorito un producto oculto", async () => {
+    const oculto = { ...productoBase, visibleEnCatalogo: false };
+    findUniqueMock.mockResolvedValue(oculto);
+    updateMock.mockResolvedValue(oculto);
+
+    const res = await request(buildApp())
+      .post("/api/products/42/favorito")
+      .set("Authorization", `Bearer ${tokenValido()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: 42 },
+      data: { favoritosCount: { increment: 1 } },
+    });
+  });
+
+  it("un anónimo sobre un producto visible sigue funcionando (compartir y favorito)", async () => {
+    findUniqueMock.mockResolvedValue(productoBase);
+    updateMock.mockResolvedValue(productoBase);
+
+    const compartir = await request(buildApp()).post("/api/products/42/compartir");
+    const favorito = await request(buildApp()).post("/api/products/42/favorito");
+
+    expect(compartir.status).toBe(200);
+    expect(compartir.body).toEqual({ ok: true });
+    expect(favorito.status).toBe(200);
+    expect(favorito.body).toEqual({ ok: true });
+  });
+
+  it("un producto agotado pero visible sigue siendo compartible: el stock NO entra en la guarda", async () => {
+    // La ficha de un agotado devuelve 200 justamente para que un link
+    // compartido no se rompa — compartirlo tiene que seguir funcionando igual.
+    const agotado = { ...productoBase, stock: 0 };
+    findUniqueMock.mockResolvedValue(agotado);
+    updateMock.mockResolvedValue(agotado);
+
+    const res = await request(buildApp()).post("/api/products/42/compartir");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+});

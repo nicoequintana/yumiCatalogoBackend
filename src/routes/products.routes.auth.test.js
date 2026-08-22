@@ -60,7 +60,11 @@ describe("Auth en rutas de escritura de /api/products", () => {
 describe("POST /:id/compartir es público", () => {
   it("responde sin exigir token (contador anónimo, igual que las vistas)", async () => {
     const { prisma } = await import("../lib/prisma.js");
-    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    // `visibleEnCatalogo: true` es parte del fixture (acá y en el resto del
+    // archivo) porque el controller ahora lo mira: la fila real siempre trae
+    // la columna, y sin ella el producto contaría como oculto y la guarda de
+    // paridad de 404 lo taparía.
+    prisma.product.findUnique.mockResolvedValue({ id: 1, visibleEnCatalogo: true });
     prisma.product.update.mockResolvedValue({ id: 1, compartidos: 1 });
 
     const res = await request(buildApp()).post("/api/products/1/compartir");
@@ -77,7 +81,7 @@ describe("POST /:id/favorito es público", () => {
 
   it("responde sin exigir token (contador anónimo, igual que compartir)", async () => {
     const { prisma } = await import("../lib/prisma.js");
-    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.findUnique.mockResolvedValue({ id: 1, visibleEnCatalogo: true });
     prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
 
     const res = await request(buildApp()).post("/api/products/1/favorito");
@@ -88,7 +92,7 @@ describe("POST /:id/favorito es público", () => {
 
   it("incrementa favoritosCount en 1", async () => {
     const { prisma } = await import("../lib/prisma.js");
-    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.findUnique.mockResolvedValue({ id: 1, visibleEnCatalogo: true });
     prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
 
     await request(buildApp()).post("/api/products/1/favorito");
@@ -111,7 +115,7 @@ describe("POST /:id/favorito es público", () => {
 
   it("no revienta ante llamadas dobles (dos incrementos independientes)", async () => {
     const { prisma } = await import("../lib/prisma.js");
-    prisma.product.findUnique.mockResolvedValue({ id: 1 });
+    prisma.product.findUnique.mockResolvedValue({ id: 1, visibleEnCatalogo: true });
     prisma.product.update.mockResolvedValue({ id: 1, favoritosCount: 1 });
 
     const res1 = await request(buildApp()).post("/api/products/1/favorito");

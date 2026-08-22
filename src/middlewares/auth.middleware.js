@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { prisma } from "../lib/prisma.js";
 
 /**
  * Verificación compartida por `requireAuth` y `authOpcional`: lee el JWT de
@@ -31,6 +32,41 @@ function identidadDesdeToken(req) {
 }
 
 /**
+ * ¿El usuario del token fue borrado de la base?
+ *
+ * Existe para que borrar un admin desde `/catalogo/admin/usuarios` le revoque
+ * el acceso YA, no dentro de 7 días cuando expire su JWT — el caso de uso
+ * típico de borrar un usuario es exactamente quitarle el acceso. Sin esto,
+ * `requireAuth` nunca consultaba la base y un admin eliminado seguía operando
+ * con todos los permisos hasta que su token venciera.
+ *
+ * Costo consciente: una consulta por request CON token (`findUnique` por PK
+ * trayendo solo `{ id }` sobre una tabla de un puñado de filas). Las requests
+ * anónimas del catálogo público no pagan nada — sin token no hay nada que
+ * verificar. Se descartó un `tokenVersion` en `Usuario`: exige migración y
+ * más código para el mismo resultado con este volumen de tráfico admin.
+ *
+ * FAIL-OPEN deliberado: solo la respuesta definitiva de Prisma (`null` = la
+ * fila no existe) revoca. Si la consulta falla (base caída, timeout), se deja
+ * pasar: cortar acá convertiría un hipo de DB en un logout masivo, y la
+ * operación real va a fallar igual contra esa misma base con su propio error.
+ * Un `id` no numérico (token viejo con `sub` raro) tampoco revoca — no hay
+ * fila que buscar y el login real siempre firma `sub` con el id numérico.
+ */
+async function usuarioFueBorrado(usuario) {
+  if (!Number.isInteger(usuario.id)) return false;
+  try {
+    const fila = await prisma.usuario.findUnique({
+      where: { id: usuario.id },
+      select: { id: true },
+    });
+    return fila === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Protege las rutas del panel admin: exige un JWT válido en
  * `Authorization: Bearer <token>` y, además de dejar pasar, expone la
  * identidad del admin en `req.usuario` (`{ id, email }`).
@@ -47,12 +83,14 @@ function identidadDesdeToken(req) {
  * normaliza a `null` en vez de propagar un `NaN` hacia la columna `usuarioId`.
  *
  * El comportamiento de 401 no cambia: token ausente, inválido o expirado
- * responde `401` directo, sin llamar a `next()`.
+ * responde `401` directo, sin llamar a `next()`. Un token válido de un usuario
+ * BORRADO también es 401 (ver `usuarioFueBorrado`) — mismo cuerpo que un token
+ * inválido, para no confirmar desde afuera si una cuenta existió.
  */
-export function requireAuth(req, res, next) {
+export async function requireAuth(req, res, next) {
   const usuario = identidadDesdeToken(req);
 
-  if (!usuario) {
+  if (!usuario || (await usuarioFueBorrado(usuario))) {
     return res.status(401).json({ error: "No autorizado." });
   }
 
@@ -88,9 +126,14 @@ export function requireAuth(req, res, next) {
  * hasta que el admin toca cualquier acción autenticada, que sí da 401 y lo
  * manda a login.
  */
-export function authOpcional(req, _res, next) {
+export async function authOpcional(req, _res, next) {
   const usuario = identidadDesdeToken(req);
-  if (usuario) req.usuario = usuario;
+  // El chequeo de existencia también aplica acá: sin él, el token de un admin
+  // BORRADO seguiría marcando la request como admin (`esRequestDeAdmin`) y
+  // mostrando productos ocultos hasta expirar. Pero el resultado nunca corta
+  // la request: "tu usuario ya no existe" degrada a anónimo, igual que un
+  // token vencido — este es el catálogo público.
+  if (usuario && !(await usuarioFueBorrado(usuario))) req.usuario = usuario;
   next();
 }
 

@@ -8,23 +8,40 @@ process.env.JWT_SECRET = "test-secret";
 
 const findManyMock = vi.fn();
 const findUniqueMock = vi.fn();
+const authFindUniqueMock = vi.fn();
 const createMock = vi.fn();
 const updateMock = vi.fn();
-const deleteMock = vi.fn();
+const deleteManyMock = vi.fn();
 const countMock = vi.fn();
 const auditCreateMock = vi.fn();
+
+// `requireAuth` ahora verifica que el usuario del token exista, con un
+// `findUnique` de forma fija (`select: { id: true }`). Se rutea a un mock
+// propio para que los `mockResolvedValueOnce` de los tests del controller no
+// se los consuma el middleware.
+function rutearFindUnique(args) {
+  const esChequeoDeAuth = args?.select && Object.keys(args.select).length === 1 && args.select.id === true;
+  return esChequeoDeAuth ? authFindUniqueMock(args) : findUniqueMock(args);
+}
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     usuario: {
       findMany: (...args) => findManyMock(...args),
-      findUnique: (...args) => findUniqueMock(...args),
+      findUnique: (args) => rutearFindUnique(args),
       create: (...args) => createMock(...args),
+      deleteMany: (...args) => deleteManyMock(...args),
       update: (...args) => updateMock(...args),
-      delete: (...args) => deleteMock(...args),
       count: (...args) => countMock(...args),
     },
     auditLog: { create: (...args) => auditCreateMock(...args) },
+    $transaction: async (fn) =>
+      fn({
+        usuario: {
+          deleteMany: (...args) => deleteManyMock(...args),
+          count: (...args) => countMock(...args),
+        },
+      }),
   },
 }));
 
@@ -44,12 +61,15 @@ const authHeader = `Bearer ${token}`;
 beforeEach(() => {
   findManyMock.mockReset();
   findUniqueMock.mockReset();
+  authFindUniqueMock.mockReset();
   createMock.mockReset();
   updateMock.mockReset();
-  deleteMock.mockReset();
+  deleteManyMock.mockReset();
   countMock.mockReset();
   auditCreateMock.mockReset();
   auditCreateMock.mockResolvedValue({ id: 1 });
+  // El admin del token existe por defecto: es el caso normal de toda la suite.
+  authFindUniqueMock.mockResolvedValue({ id: 1 });
 });
 
 describe("GET /api/usuarios", () => {
@@ -104,6 +124,28 @@ describe("POST /api/usuarios", () => {
       .send({ email: "sin-clave@test.com" });
     expect(res.status).toBe(400);
   });
+
+  it("responde 400 si la contraseña tiene menos de 8 caracteres (misma política que create-admin.js)", async () => {
+    const res = await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@test.com", password: "a" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("La contraseña debe tener al menos 8 caracteres.");
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si el email no tiene formato de email", async () => {
+    const res = await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "no-es-un-email", password: "clave12345" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El email no tiene un formato válido.");
+    expect(createMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("PUT /api/usuarios/:id", () => {
@@ -122,22 +164,79 @@ describe("PUT /api/usuarios/:id", () => {
     expect(dataPasada.email).toBe("nuevo@test.com");
     expect(dataPasada.passwordHash).toBeUndefined();
   });
+
+  it("responde 400 si la contraseña nueva tiene menos de 8 caracteres", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "otro@test.com", passwordHash: "hash" });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ password: "corta" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("La contraseña debe tener al menos 8 caracteres.");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si el email nuevo no tiene formato de email", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "otro@test.com", passwordHash: "hash" });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ email: "sin-arroba" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El email no tiene un formato válido.");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("DELETE /api/usuarios/:id", () => {
-  it("responde 400 si es el único usuario restante", async () => {
+  // El token de la suite es del usuario id 1: los borrados legítimos apuntan
+  // a OTRO id, porque el auto-borrado se rechaza (ver el test de abajo).
+
+  it("borra a otro usuario si después del borrado queda al menos un admin", async () => {
+    deleteManyMock.mockResolvedValue({ count: 1 });
     countMock.mockResolvedValue(1);
-    const res = await request(buildApp()).delete("/api/usuarios/1").set("Authorization", authHeader);
-    expect(res.status).toBe(400);
-    expect(deleteMock).not.toHaveBeenCalled();
+
+    const res = await request(buildApp()).delete("/api/usuarios/2").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: 2 } });
   });
 
-  it("borra si hay más de un usuario", async () => {
-    countMock.mockResolvedValue(2);
-    deleteMock.mockResolvedValue({});
+  it("responde 400 si el borrado dejaría la tabla sin admins (recuento DESPUÉS de borrar, dentro de la transacción)", async () => {
+    // El viejo `count()` previo al `delete()` era un TOCTOU: dos DELETE
+    // concurrentes con 2 usuarios veían count=2 y dejaban la tabla en 0.
+    // Ahora se borra y se recuenta dentro de la misma transacción; si queda
+    // cero, se revierte.
+    deleteManyMock.mockResolvedValue({ count: 1 });
+    countMock.mockResolvedValue(0);
+
+    const res = await request(buildApp()).delete("/api/usuarios/2").set("Authorization", authHeader);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("No se puede eliminar el único usuario admin restante.");
+    // El recuento tiene que ser POSTERIOR al deleteMany: es lo que lo hace atómico.
+    expect(deleteManyMock.mock.invocationCallOrder[0]).toBeLessThan(countMock.mock.invocationCallOrder[0]);
+  });
+
+  it("rechaza con 400 que un admin se borre a sí mismo", async () => {
     const res = await request(buildApp()).delete("/api/usuarios/1").set("Authorization", authHeader);
-    expect(res.status).toBe(200);
-    expect(deleteMock).toHaveBeenCalledWith({ where: { id: 1 } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("propio usuario");
+    expect(deleteManyMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 404 si el usuario no existe, sin tirar un 500 de Prisma", async () => {
+    deleteManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await request(buildApp()).delete("/api/usuarios/99").set("Authorization", authHeader);
+
+    expect(res.status).toBe(404);
+    expect(countMock).not.toHaveBeenCalled();
   });
 });
 
@@ -205,9 +304,9 @@ describe("auditoría de usuarios", () => {
   });
 
   it("registra en AuditLog al eliminar", async () => {
-    countMock.mockResolvedValue(2);
     findUniqueMock.mockResolvedValue({ id: 2, email: "borrado@test.com", passwordHash: "hash" });
-    deleteMock.mockResolvedValue({ id: 2 });
+    deleteManyMock.mockResolvedValue({ count: 1 });
+    countMock.mockResolvedValue(1);
 
     await request(buildApp()).delete("/api/usuarios/2").set("Authorization", authHeader);
 

@@ -1,11 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
 
 process.env.JWT_SECRET = "test-secret";
 
+const usuarioFindUniqueMock = vi.fn();
+
+vi.mock("../lib/prisma.js", () => ({
+  prisma: {
+    usuario: {
+      findUnique: (...args) => usuarioFindUniqueMock(...args),
+    },
+  },
+}));
+
 const { requireAuth, authOpcional } = await import("./auth.middleware.js");
+
+beforeEach(() => {
+  usuarioFindUniqueMock.mockReset();
+  // Por defecto el usuario del token existe: es el caso normal, y así los
+  // tests que no hablan de revocación no tienen que setearlo uno por uno.
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1 });
+});
 
 function buildApp() {
   const app = express();
@@ -130,5 +147,68 @@ describe("authOpcional", () => {
     const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.usuario).toEqual({ id: null, email: null });
+  });
+});
+
+describe("revocación de sesión: el usuario del token tiene que seguir existiendo", () => {
+  // Borrar un admin desde /catalogo/admin/usuarios tiene que revocarle el
+  // acceso YA, no dentro de 7 días cuando expire su JWT. El caso de uso típico
+  // de borrar un usuario es exactamente ese.
+  const token = jwt.sign({ sub: 7, email: "borrado@yima.test" }, "test-secret", { expiresIn: "7d" });
+
+  it("requireAuth responde 401 con un token válido de un usuario que ya no existe", async () => {
+    usuarioFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "No autorizado." });
+  });
+
+  it("requireAuth consulta solo el id (no trae passwordHash ni nada más)", async () => {
+    await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(usuarioFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { id: true },
+    });
+  });
+
+  it("requireAuth deja pasar cuando el usuario del token sigue existiendo", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7 });
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("authOpcional degrada a anónimo (200, sin usuario) si el usuario fue borrado — NUNCA corta la request", async () => {
+    // Es un endpoint público: un 401 acá rompería el catálogo para quien
+    // navega con un token de un admin borrado, en vez de mostrarle lo público.
+    usuarioFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("authOpcional no consulta la base para un visitante anónimo (sin token no hay nada que verificar)", async () => {
+    const res = await request(buildApp()).get("/publico");
+
+    expect(res.status).toBe(200);
+    expect(usuarioFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("si la consulta de existencia falla, NO revoca (fail-open documentado)", async () => {
+    // La revocación solo actúa ante la respuesta definitiva de Prisma (null =
+    // borrado). Si la base no contesta, cortar acá convertiría un hipo de DB
+    // en un logout masivo — y cualquier operación real va a fallar igual
+    // contra esa misma base con su propio error.
+    usuarioFindUniqueMock.mockRejectedValue(new Error("DB caída"));
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
   });
 });
