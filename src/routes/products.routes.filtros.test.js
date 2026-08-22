@@ -193,6 +193,46 @@ describe("GET /api/products - filtros de listado", () => {
     expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
 
+  it("ignora una categoria fraccionaria (1.5): categoriaId es Int y llegaría a Prisma como float → 500", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/products?categoria=1.5");
+
+    expect(res.status).toBe(200);
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("ignora un minPrecio no finito (1e400 → Infinity): reventaría contra el Decimal de Prisma", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/products?minPrecio=1e400");
+
+    expect(res.status).toBe(200);
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("ignora maxPrecio malformado sin romper (200, filtro descartado)", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/products?maxPrecio=abc");
+
+    expect(res.status).toBe(200);
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("ignora un maxPrecio no finito (-1e400 → -Infinity) igual que el mínimo", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/products?maxPrecio=-1e400");
+
+    expect(res.status).toBe(200);
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
   it("combina múltiples filtros con AND, visibleEnCatalogo primero en modo público", async () => {
     findManyMock.mockResolvedValue([]);
 

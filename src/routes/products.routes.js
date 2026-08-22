@@ -17,19 +17,29 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter(_req, file, cb) {
+    // `status` explícito en los tres rechazos, mismo pitfall que documenta el
+    // filtro del .xlsx más abajo: sin él, el error handler central trata el
+    // error como interno (500), le esconde al admin el mensaje que nombra los
+    // formatos aceptados y encima ensucia `ErrorLog` con un error del usuario.
     if (file.fieldname === "fotos") {
       if (!ALLOWED_PHOTO_MIMES.includes(file.mimetype)) {
-        return cb(new Error("Tipo de imagen no permitido. Use JPEG, PNG o WEBP."));
+        const err = new Error("Tipo de imagen no permitido. Use JPEG, PNG o WEBP.");
+        err.status = 400;
+        return cb(err);
       }
       return cb(null, true);
     }
     if (file.fieldname === "video") {
       if (!ALLOWED_VIDEO_MIMES.includes(file.mimetype)) {
-        return cb(new Error("Tipo de video no permitido. Use MP4 o WEBM."));
+        const err = new Error("Tipo de video no permitido. Use MP4 o WEBM.");
+        err.status = 400;
+        return cb(err);
       }
       return cb(null, true);
     }
-    cb(new Error("Campo de archivo inesperado."));
+    const err = new Error("Campo de archivo inesperado.");
+    err.status = 400;
+    cb(err);
   },
 });
 
@@ -101,8 +111,12 @@ router.get("/:id/fotos/:fotoId", authOpcional, productsMediaController.streamFot
 router.get("/:id", authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 router.post("/", requireAuth, uploadFields, productsController.crear);
-router.post("/:id/compartir", limitadorInteraccionesPublicas, productsController.compartir);
-router.post("/:id/favorito", limitadorInteraccionesPublicas, productsController.favorito);
+// `authOpcional` también acá: los dos endpoints siguen siendo públicos, pero
+// necesitan saber si el llamador es admin para aplicar la misma paridad de 404
+// que `obtenerPorId` — un producto oculto tiene que responder igual que uno
+// inexistente, y solo un JWT verificado levanta esa guarda.
+router.post("/:id/compartir", limitadorInteraccionesPublicas, authOpcional, productsController.compartir);
+router.post("/:id/favorito", limitadorInteraccionesPublicas, authOpcional, productsController.favorito);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);

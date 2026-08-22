@@ -226,6 +226,10 @@ function valorCelda(celda) {
  * fila tal como se ve en Excel (el encabezado es la fila 1) para que los
  * errores apunten a algo que el admin pueda ubicar en su planilla.
  *
+ * Acumula a lo sumo `MAX_FILAS + 1` filas: la de más alcanza para que
+ * `procesarArchivo` detecte que el archivo supera el tope, sin cargar en
+ * memoria un workbook arbitrariamente grande.
+ *
  * @param {Buffer} buffer
  * @returns {Promise<Array<{numeroFila: number, valores: object}>>}
  */
@@ -244,6 +248,14 @@ export async function leerArchivo(buffer) {
 
   hoja.eachRow((fila, numeroFila) => {
     if (numeroFila === 1) return; // encabezado
+
+    // Corte temprano: apenas hay MAX_FILAS + 1 filas acumuladas ya se sabe que
+    // el archivo se pasa del tope, así que no tiene sentido seguir cargando el
+    // resto en memoria — un .xlsx muy comprimido puede traer decenas de miles
+    // de filas. La fila de más queda a propósito: es lo que le permite a
+    // `procesarArchivo` detectar el exceso y responder el mismo error de
+    // siempre.
+    if (filas.length > MAX_FILAS) return;
 
     const valores = {};
     COLUMNAS.forEach((columna, indice) => {

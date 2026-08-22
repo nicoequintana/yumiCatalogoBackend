@@ -130,8 +130,14 @@ export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion 
     }
   }
   if (esCreacion || precio !== undefined) {
-    if (precio === undefined || precio === null || precio === "" || Number.isNaN(Number(precio))) {
-      throw httpError(400, "El precio del producto debe ser un número válido.");
+    // Mismo criterio que `normalizarPrecio` en `lib/importProductos.js`:
+    // finito y mayor a 0. El chequeo viejo (`!Number.isNaN`) dejaba entrar
+    // precios negativos a la base (y de ahí a los snapshots de `ItemOrden` de
+    // futuras órdenes) y aceptaba `"Infinity"`, que no es NaN pero revienta
+    // contra el `Decimal` de Prisma con un 500.
+    const numero = Number(precio);
+    if (precio === undefined || precio === null || precio === "" || !Number.isFinite(numero) || numero <= 0) {
+      throw httpError(400, "El precio del producto debe ser un número mayor a 0.");
     }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseListas, parseEspecificaciones } from "./products.input.js";
+import { parseListas, parseEspecificaciones, validarCamposBase } from "./products.input.js";
 
 describe("parseListas", () => {
   it("retorna undefined si raw es undefined (campo omitido)", () => {
@@ -53,5 +53,47 @@ describe("parseEspecificaciones", () => {
 
   it("rechaza JSON inválido con 400", () => {
     expect(() => parseEspecificaciones("no json")).toThrow(expect.objectContaining({ status: 400 }));
+  });
+});
+
+describe("validarCamposBase — precio", () => {
+  // Mismo criterio que `normalizarPrecio` del importador de planillas
+  // (`lib/importProductos.js`): finito y mayor a 0. Antes el formulario era
+  // más laxo que el `.xlsx`: un precio negativo entraba a la base (y de ahí a
+  // los snapshots de `ItemOrden` de futuras órdenes), y `"Infinity"` pasaba el
+  // chequeo de NaN y reventaba contra el `Decimal` de Prisma con un 500.
+  const base = { nombre: "Vela", descripcion: "Aromática" };
+
+  it("acepta un precio positivo (número o string multipart)", () => {
+    expect(() => validarCamposBase({ ...base, precio: "1500.50" }, { esCreacion: true })).not.toThrow();
+    expect(() => validarCamposBase({ ...base, precio: 100 }, { esCreacion: true })).not.toThrow();
+  });
+
+  it("rechaza un precio negativo con 400", () => {
+    expect(() => validarCamposBase({ ...base, precio: "-50" }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+
+  it('rechaza "Infinity" con 400 (no es NaN, pero no es un precio)', () => {
+    expect(() => validarCamposBase({ ...base, precio: "Infinity" }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+
+  it("rechaza 0 con 400, igual que el importador (> 0 estricto)", () => {
+    expect(() => validarCamposBase({ ...base, precio: "0" }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+
+  it("rechaza un precio no numérico con 400", () => {
+    expect(() => validarCamposBase({ ...base, precio: "abc" }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+
+  it("en actualización, omitir el precio no valida nada", () => {
+    expect(() => validarCamposBase({ ...base, precio: undefined }, { esCreacion: false })).not.toThrow();
   });
 });

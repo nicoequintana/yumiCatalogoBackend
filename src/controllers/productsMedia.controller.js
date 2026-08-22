@@ -40,9 +40,12 @@ function puedeVerMediaDe({ req, visibleEnCatalogo }) {
 const DEFAULT_VIDEO_MIME = "video/mp4";
 
 /**
- * Streams a product's video through the backend, proxying Drive's
+ * Streams a legacy product's video through the backend, proxying Drive's
  * `alt=media` response byte-for-byte (design D1/D3). Video is NEVER a public
- * Drive URL — this route is the only way the frontend plays it.
+ * Drive URL — this route is the only way the frontend plays *Drive-hosted*
+ * video. Cloudinary-hosted video bypasses this route entirely and is served
+ * from its own public CDN URL (see `products.mapper.js`), so the visibility
+ * guard below only protects Drive-hosted media.
  *
  * Forwards an incoming `Range` header to Drive and mirrors whatever Drive
  * answers: 206 + Content-Range for a satisfied range request, or a plain
@@ -60,7 +63,10 @@ const DEFAULT_VIDEO_MIME = "video/mp4";
 export async function streamVideo(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    // `Number.isInteger`, no `Number.isNaN`: un float ("1.5") no es NaN y
+    // llegaría a Prisma como filtro sobre una columna Int → 500 en un endpoint
+    // público, en vez del mismo 404 que un id inexistente.
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     // `findUnique` ya devuelve la fila entera de `Product`, así que
     // `visibleEnCatalogo` viene sin consultas extra: esta ruta transmite bytes
@@ -156,7 +162,7 @@ export async function streamFoto(req, res, next) {
   try {
     const id = Number(req.params.id);
     const fotoId = Number(req.params.fotoId);
-    if (Number.isNaN(id) || Number.isNaN(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
+    if (!Number.isInteger(id) || !Number.isInteger(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
 
     // El `include` trae la visibilidad del producto en la MISMA consulta (es un
     // join, no un segundo viaje): la guarda de acceso no le cuesta latencia a

@@ -52,13 +52,12 @@ import {
  * Productos por página del catálogo, distinto del `DEFAULT_PAGE_SIZE` de los
  * listados del admin.
  *
- * 12 porque es el número que le cierra a la grilla: es múltiplo de 1, 2 y 3
+ * 12 porque es el número que le cierra a la grilla: es múltiplo de 1, 2 y 4
  * (las columnas que `/coleccion` usa en mobile, `md` y `lg`), así que ninguna
- * página termina con una fila huérfana; y es múltiplo de 4, que es la cadencia
- * de la card ancha (`index % 4 === 3` en `Coleccion.jsx`), así que el patrón
- * asimétrico cierra igual en todas las páginas en vez de cortarse distinto en
- * cada una. Además deja la respuesta en una docena de fichas livianas, que es
- * más o menos un scroll de pantalla.
+ * página termina con una fila huérfana. Además deja la respuesta en una docena
+ * de fichas livianas, que es más o menos un scroll de pantalla. (La vieja
+ * justificación de la "card ancha cada cuatro" ya no aplica: esa variante
+ * horizontal se eliminó y la grilla es de 4 columnas uniformes en `lg`.)
  */
 export const PAGE_SIZE_CATALOGO = 12;
 
@@ -145,8 +144,11 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   if (ids !== null) where.id = { in: ids };
 
   if (query.categoria !== undefined) {
+    // `Number.isInteger`, no `!Number.isNaN`: `categoriaId` es Int en el
+    // schema, y un float ("1.5") pasaba el chequeo de NaN y reventaba en
+    // Prisma con un 500 — en el endpoint público de browse.
     const categoriaId = Number(query.categoria);
-    if (!Number.isNaN(categoriaId)) where.categoriaId = categoriaId;
+    if (Number.isInteger(categoriaId)) where.categoriaId = categoriaId;
   }
 
   // `destacado=1` alimenta el bento de la home y de `/coleccion`: son cuatro
@@ -183,14 +185,17 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
     ];
   }
 
+  // `Number.isFinite`, no `!Number.isNaN`: `"1e400"` da `Infinity`, que no es
+  // NaN pero revienta contra el `Decimal` de Prisma con un 500. Un precio
+  // fraccionario ("99.99") sigue siendo un filtro válido.
   const rangoPrecio = {};
   if (query.minPrecio !== undefined) {
     const min = Number(query.minPrecio);
-    if (!Number.isNaN(min)) rangoPrecio.gte = min;
+    if (Number.isFinite(min)) rangoPrecio.gte = min;
   }
   if (query.maxPrecio !== undefined) {
     const max = Number(query.maxPrecio);
-    if (!Number.isNaN(max)) rangoPrecio.lte = max;
+    if (Number.isFinite(max)) rangoPrecio.lte = max;
   }
   if (Object.keys(rangoPrecio).length > 0) where.precio = rangoPrecio;
 
@@ -285,7 +290,11 @@ async function obtenerRelacionados(producto, { esAdmin }) {
 export async function obtenerPorId(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    // `Number.isInteger`, no `Number.isNaN` (acá y en el resto de la familia
+    // `/:id`): un float ("1.5") no es NaN y llegaría a Prisma como filtro
+    // sobre una columna Int → `PrismaClientValidationError` → 500 en un
+    // endpoint público, en vez del mismo 404 que un id inexistente.
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
@@ -340,10 +349,21 @@ export async function obtenerPorId(req, res, next) {
 export async function compartir(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
+
+    // Misma paridad de 404 que `obtenerPorId` y los proxies de media: para un
+    // anónimo, un producto oculto y un id inexistente tienen que ser
+    // indistinguibles (mismo status Y mismo cuerpo) — los ids son secuenciales
+    // y sin esta guarda el `{ ok: true }` permitía enumerar los ocultos,
+    // además de inflarles el contador. `stock <= 0` NO entra acá a propósito:
+    // la ficha de un agotado devuelve 200 para que un link compartido no se
+    // rompa, y compartirlo es parte de ese mismo contrato.
+    if (!esRequestDeAdmin(req) && !existe.visibleEnCatalogo) {
+      throw httpError(404, "Producto no encontrado.");
+    }
 
     await prisma.product.update({ where: { id }, data: { compartidos: { increment: 1 } } });
 
@@ -359,10 +379,15 @@ export async function compartir(req, res, next) {
 export async function favorito(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
+
+    // Misma guarda y mismo razonamiento que `compartir` (ver arriba).
+    if (!esRequestDeAdmin(req) && !existe.visibleEnCatalogo) {
+      throw httpError(404, "Producto no encontrado.");
+    }
 
     await prisma.product.update({ where: { id }, data: { favoritosCount: { increment: 1 } } });
 
@@ -501,7 +526,7 @@ export async function crear(req, res, next) {
 export async function actualizar(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
@@ -729,7 +754,7 @@ export async function actualizar(req, res, next) {
 export async function actualizarVisibilidad(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const { visibleEnCatalogo } = req.body;
     if (typeof visibleEnCatalogo !== "boolean") {
@@ -775,7 +800,7 @@ export async function actualizarVisibilidad(req, res, next) {
 export async function actualizarMerchandising(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const { destacado, orden } = req.body;
 
@@ -814,7 +839,7 @@ export async function actualizarMerchandising(req, res, next) {
 export async function eliminar(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (Number.isNaN(id)) throw httpError(404, "Producto no encontrado.");
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
@@ -898,7 +923,7 @@ export async function eliminarFoto(req, res, next) {
   try {
     const id = Number(req.params.id);
     const fotoId = Number(req.params.fotoId);
-    if (Number.isNaN(id) || Number.isNaN(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
+    if (!Number.isInteger(id) || !Number.isInteger(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
 
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");

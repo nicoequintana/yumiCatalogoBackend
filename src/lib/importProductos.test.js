@@ -323,4 +323,21 @@ describe("procesarArchivo", () => {
       `El archivo tiene más de ${MAX_FILAS} filas. Dividilo en varios archivos.`,
     );
   });
+
+  it(`deja de acumular filas apenas supera las ${MAX_FILAS} (corte temprano, no al final)`, async () => {
+    // Robustez de memoria: antes se cargaba el workbook ENTERO en `filas` y
+    // recién después se comparaba contra el tope. Con el corte temprano,
+    // `leerArchivo` acumula a lo sumo MAX_FILAS + 1 — lo justo para que
+    // `procesarArchivo` detecte el exceso con el mismo mensaje de siempre.
+    const muchas = Array.from({ length: MAX_FILAS + 25 }, (_, i) => ({
+      nombre: `P${i}`,
+      descripcion: "d",
+      precio: 1,
+    }));
+    const buffer = await construirXlsx(muchas);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas).toHaveLength(MAX_FILAS + 1);
+  });
 });

@@ -850,3 +850,33 @@ describe("GET /api/products/:id/fotos/:fotoId — proxy de streaming", () => {
     });
   });
 });
+
+describe("ids no enteros en los proxies de media — 404 sin consultar la base", () => {
+  // `Number("1.5")` no es NaN, así que el patrón viejo (`Number.isNaN`) dejaba
+  // pasar el float hasta Prisma: `PrismaClientValidationError` → 500 en un
+  // endpoint público. El mock no replica esa validación, por eso lo que se
+  // fija es que la consulta ni siquiera se haga.
+  it("GET /api/products/1.5/video responde 404, no 500, sin consultar Prisma", async () => {
+    const res = await request(buildApp()).get("/api/products/1.5/video");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Producto no encontrado." });
+    expect(productFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/products/1.5/fotos/7 responde 404 sin consultar Prisma", async () => {
+    const res = await request(buildApp()).get("/api/products/1.5/fotos/7");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Producto o foto no encontrados." });
+    expect(fotoFindFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/products/1/fotos/7.5 responde 404 sin consultar Prisma", async () => {
+    const res = await request(buildApp()).get("/api/products/1/fotos/7.5");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Producto o foto no encontrados." });
+    expect(fotoFindFirstMock).not.toHaveBeenCalled();
+  });
+});
