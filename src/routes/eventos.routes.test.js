@@ -52,12 +52,12 @@ describe("POST /api/eventos", () => {
       .post("/api/eventos")
       .set("Referer", "https://yumi.example.com/producto/5")
       .set("User-Agent", "Mozilla/5.0")
-      .send({ tipo: "VISTA_PRODUCTO", productId: 5 });
+      .send({ tipo: "AGREGADO_CARRITO", productId: 5 });
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith({
       data: {
-        tipo: "VISTA_PRODUCTO",
+        tipo: "AGREGADO_CARRITO",
         productId: 5,
         referrer: "https://yumi.example.com/producto/5",
         userAgent: "Mozilla/5.0",
@@ -65,36 +65,46 @@ describe("POST /api/eventos", () => {
     });
   });
 
-  it.each([
-    "VISTA_PRODUCTO",
-    "CLICK_WHATSAPP",
-    "FAVORITO_AGREGADO",
-    "AGREGADO_CARRITO",
-    "ORDEN_CREADA",
-    "COMPARTIDO",
-  ])("acepta el tipo válido %s", async (tipo) => {
-    createMock.mockResolvedValue({ id: 3 });
-    const res = await request(buildApp()).post("/api/eventos").send({ tipo });
-    expect(res.status).toBe(201);
-  });
+  it.each(["CLICK_WHATSAPP", "AGREGADO_CARRITO"])(
+    "acepta el tipo válido %s (los únicos que emite el frontend)",
+    async (tipo) => {
+      createMock.mockResolvedValue({ id: 3 });
+      const res = await request(buildApp()).post("/api/eventos").send({ tipo });
+      expect(res.status).toBe(201);
+    },
+  );
 
-  it("acepta COMPARTIDO con productId y persiste el tipo tal cual", async () => {
+  it.each(["VISTA_PRODUCTO", "COMPARTIDO", "FAVORITO_AGREGADO", "ORDEN_CREADA"])(
+    "rechaza con 400 el tipo %s: solo el backend puede emitirlo (vía logEvento, no por HTTP)",
+    async (tipo) => {
+      // Estos cuatro tipos alimentan etapas del embudo y contadores que el
+      // backend emite por su cuenta. Aceptarlos por el endpoint público dejaba
+      // que cualquiera fabricara analytics dentro del rate limit.
+      const res = await request(buildApp()).post("/api/eventos").send({ tipo });
+
+      expect(res.status).toBe(400);
+      expect(createMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("trunca un Referer gigante y responde 201: el evento se guarda, nunca un 500 por P2000", async () => {
     createMock.mockResolvedValue({ id: 6 });
+
+    // `EventoTrafico.referrer` es NVarChar(1000). Un header Referer más largo
+    // (trivial de mandar) producía un P2000 de Prisma -> 500 + spam en ErrorLog.
+    const refererGigante = `https://spam.example.com/${"a".repeat(3000)}`;
 
     const res = await request(buildApp())
       .post("/api/eventos")
-      .set("Referer", "https://yima.example.com/producto/7")
-      .send({ tipo: "COMPARTIDO", productId: 7 });
+      .set("Referer", refererGigante)
+      .set("User-Agent", "U".repeat(2500))
+      .send({ tipo: "CLICK_WHATSAPP", productId: 7 });
 
     expect(res.status).toBe(201);
-    expect(createMock).toHaveBeenCalledWith({
-      data: {
-        tipo: "COMPARTIDO",
-        productId: 7,
-        referrer: "https://yima.example.com/producto/7",
-        userAgent: null,
-      },
-    });
+    const dataPasada = createMock.mock.calls[0][0].data;
+    expect(dataPasada.referrer).toHaveLength(1000);
+    expect(dataPasada.referrer).toBe(refererGigante.slice(0, 1000));
+    expect(dataPasada.userAgent).toHaveLength(1000);
   });
 
   it("responde 400 si tipo no es uno de los valores permitidos", async () => {

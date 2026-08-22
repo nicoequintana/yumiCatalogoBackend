@@ -1,18 +1,19 @@
 import { prisma } from "../lib/prisma.js";
 import { httpError } from "../lib/httpError.js";
+import { truncarTexto } from "../lib/limitesTexto.js";
 
 // `EventoTrafico.tipo` es `VarChar(30)`, no un enum de Prisma: agregar un tipo
-// acá no requiere migración de base de datos. Esta lista es la única fuente de
-// verdad de qué tipos acepta la API pública; los emisores del backend escriben
-// vía `logEvento.js` y deben usar alguno de estos mismos valores.
-const TIPOS_VALIDOS = [
-  "VISTA_PRODUCTO",
-  "CLICK_WHATSAPP",
-  "FAVORITO_AGREGADO",
-  "AGREGADO_CARRITO",
-  "ORDEN_CREADA",
-  "COMPARTIDO",
-];
+// acá no requiere migración de base de datos.
+//
+// Esta lista es SOLO lo que acepta la API pública, y es un SUBCONJUNTO
+// deliberado de los seis tipos del modelo: los únicos que el frontend emite
+// por HTTP (`registrarEvento` en `frontend/src/api/products.js`, usado por
+// `BotonWhatsapp` y `BotonAgregarCarrito`). Los otros cuatro
+// (`VISTA_PRODUCTO`, `COMPARTIDO`, `FAVORITO_AGREGADO`, `ORDEN_CREADA`) los
+// emite el backend con escritura directa vía `lib/logEvento.js` — aceptarlos
+// acá dejaba que cualquiera fabricara eventos de etapas del embudo dentro del
+// rate limit y envenenara la analytics.
+const TIPOS_VALIDOS = ["CLICK_WHATSAPP", "AGREGADO_CARRITO"];
 
 export async function crear(req, res, next) {
   try {
@@ -33,8 +34,10 @@ export async function crear(req, res, next) {
       data: {
         tipo,
         productId,
-        referrer: req.get("Referer") ?? null,
-        userAgent: req.get("User-Agent") ?? null,
+        // Recortados al largo de su columna (NVarChar(1000)): un header más
+        // largo producía un P2000 -> 500 público. Ver `lib/limitesTexto.js`.
+        referrer: truncarTexto(req.get("Referer")),
+        userAgent: truncarTexto(req.get("User-Agent")),
       },
     });
 
