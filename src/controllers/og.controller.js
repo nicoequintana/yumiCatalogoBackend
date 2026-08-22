@@ -45,7 +45,10 @@ export async function servirOgProducto(req, res, next) {
       return res.redirect(302, productUrl);
     }
 
-    const producto = Number.isNaN(id) ? null : await prisma.product.findUnique({
+    // `Number.isInteger`, no `Number.isNaN`: un float ("1.5") no es NaN y
+    // llegaría a Prisma como filtro sobre `id Int` → 500 en vez del HTML
+    // genérico que ya reciben los ids no numéricos o inexistentes.
+    const producto = !Number.isInteger(id) ? null : await prisma.product.findUnique({
       where: { id },
       include: { fotos: true },
     });

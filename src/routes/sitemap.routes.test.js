@@ -81,6 +81,35 @@ describe("GET /sitemap.xml", () => {
     expect(res.text).not.toMatch(/tag=a&b/);
   });
 
+  it("acota la consulta a un tope de URLs, quedándose con los productos más recientes", async () => {
+    // Sin `take`, el sitemap cargaba el catálogo entero sin techo en un
+    // endpoint público y sin auth. Si alguna vez hay más productos que el
+    // tope, se recorta por los actualizados más recientemente.
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/sitemap.xml");
+
+    const args = findManyMock.mock.calls[0][0];
+    expect(args.take).toBeGreaterThan(0);
+    expect(args.orderBy).toEqual({ updatedAt: "desc" });
+  });
+
+  it("tiene un rate limit cableado, laxo, que no molesta el uso normal de un crawler", async () => {
+    // El endpoint es público, sin auth, y cada request consulta la base. El
+    // límite es generoso a propósito: lo consumen crawlers legítimos y
+    // apretarlo rompería la indexación. Se verifica el CABLEADO (headers
+    // RateLimit-*) y que una tanda de requests normales no se bloquea; el 429
+    // en sí ya lo cubre `middlewares/rateLimit.middleware.test.js`.
+    findManyMock.mockResolvedValue([]);
+    const app = buildApp();
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app).get("/sitemap.xml");
+      expect(res.status).toBe(200);
+      expect(res.headers["ratelimit-limit"]).toBe("30");
+    }
+  });
+
   it("propaga errores de Prisma al middleware de errores (no cuelga la respuesta)", async () => {
     findManyMock.mockRejectedValue(new Error("DB down"));
 

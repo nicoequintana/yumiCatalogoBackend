@@ -555,7 +555,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       cliente: ANA,
       items: [{ precioUnitario: "100.00", cantidad: 1 }],
     });
-    ordenFindManyMock.mockResolvedValue(new Array(MAX_ORDENES_HISTORICO + 1).fill(unaOrden));
+    ordenFindManyMock.mockResolvedValue(Array.from({ length: MAX_ORDENES_HISTORICO + 1 }, () => unaOrden));
 
     const res = await request(buildApp())
       .get("/api/admin/clientes-resumen?desde=2026-08-01&hasta=2026-08-15")

@@ -88,6 +88,26 @@ const TOP_RANKING = 10;
  */
 const MAX_DIAS_PERIODO = 400;
 
+/**
+ * Tope de órdenes que se traen para el resumen de ventas (y, vía import, para
+ * `clientes-resumen` en `adminClientes.controller.js` — un solo dueño, ver
+ * "Módulos compartidos" del CLAUDE.md).
+ *
+ * El filtro de período acota los DÍAS (máx. 400), pero no las FILAS: un
+ * período válido con muchas órdenes se cargaba y reducía entero en memoria.
+ * Mismo patrón que `clientes-resumen`: se pide UNA fila de más que el tope
+ * para detectar el corte sin adivinar, se conservan las MÁS RECIENTES
+ * (`orderBy: createdAt desc`) y la respuesta lo declara en
+ * `historico: { ordenesAnalizadas, tope, recortado }`. Con `recortado: true`
+ * los totales del período son un PISO, no la verdad — el flag existe para que
+ * la pantalla lo diga en vez de mentir en silencio. Es un flag DISTINTO de
+ * `periodo.recortado`, que habla del rango de fechas.
+ *
+ * 20.000 es holgado para este negocio (~55 órdenes confirmadas por día
+ * sostenidas un año) y sigue siendo barato de reducir en O(n).
+ */
+export const MAX_ORDENES_HISTORICO = 20000;
+
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /** `Date` -> "YYYY-MM-DD" en UTC, la misma clave que agrupa la serie diaria. */
@@ -172,8 +192,11 @@ export async function resumenVentas(req, res, next) {
   try {
     const { desde, hasta, hastaInclusive, recortado } = parsearPeriodo(req.query);
 
-    const ordenes = await prisma.orden.findMany({
+    // Techo de filas con detección de corte: ver `MAX_ORDENES_HISTORICO`.
+    const filas = await prisma.orden.findMany({
       where: { createdAt: { gte: desde, lte: hastaInclusive } },
+      orderBy: { createdAt: "desc" },
+      take: MAX_ORDENES_HISTORICO + 1,
       select: {
         id: true,
         estado: true,
@@ -188,6 +211,9 @@ export async function resumenVentas(req, res, next) {
         },
       },
     });
+
+    const historicoRecortado = filas.length > MAX_ORDENES_HISTORICO;
+    const ordenes = historicoRecortado ? filas.slice(0, MAX_ORDENES_HISTORICO) : filas;
 
     let ingresosTotales = new Decimal(0);
     let cantidadOrdenes = 0;
@@ -295,6 +321,13 @@ export async function resumenVentas(req, res, next) {
 
     res.json({
       periodo: { desde: aClaveDia(desde), hasta: aClaveDia(hasta), recortado },
+      // Mismo criterio que `clientes-resumen`: si se recortó el histórico,
+      // los totales son un piso y la respuesta lo declara.
+      historico: {
+        ordenesAnalizadas: ordenes.length,
+        tope: MAX_ORDENES_HISTORICO,
+        recortado: historicoRecortado,
+      },
       ingresosTotales: ingresosTotales.toFixed(2),
       cantidadOrdenes,
       ticketPromedio,

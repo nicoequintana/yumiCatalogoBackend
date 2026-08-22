@@ -10,7 +10,7 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { obtenerHistorialCliente } = await import("./clientes.controller.js");
+const { obtenerHistorialCliente, MAX_ORDENES_HISTORIAL } = await import("./clientes.controller.js");
 
 function buildReqRes({ params } = {}) {
   const req = { params: params ?? {} };
@@ -80,6 +80,23 @@ describe("obtenerHistorialCliente()", () => {
 
     expect(ordenFindManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { cliente: { dni: "12345678" } } }),
+    );
+  });
+
+  it("acota la consulta a un tope de filas, conservando las más recientes", async () => {
+    // Sin `take`, el historial de un cliente crecía sin techo. El orderBy
+    // desc ya existente hace que el tope conserve las órdenes más nuevas.
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const { req, res, next } = buildReqRes({ params: { dni: "12345678" } });
+    await obtenerHistorialCliente(req, res, next);
+
+    expect(MAX_ORDENES_HISTORIAL).toBeGreaterThan(0);
+    expect(ordenFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        take: MAX_ORDENES_HISTORIAL,
+        orderBy: { createdAt: "desc" },
+      }),
     );
   });
 

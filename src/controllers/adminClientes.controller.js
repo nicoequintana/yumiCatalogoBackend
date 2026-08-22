@@ -1,7 +1,12 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { totalDeItems } from "../lib/dinero.js";
-import { ESTADOS_FACTURABLES, aClaveDia, parsearPeriodo } from "./admin.controller.js";
+import {
+  ESTADOS_FACTURABLES,
+  MAX_ORDENES_HISTORICO,
+  aClaveDia,
+  parsearPeriodo,
+} from "./admin.controller.js";
 
 /** Tope de clientes devueltos en el ranking de facturación. */
 const TOP_RANKING = 10;
@@ -29,8 +34,13 @@ const TOP_RANKING = 10;
  * números pasan a ser un PISO, no la verdad, y la respuesta lo informa en
  * `historico.recortado` — mismo criterio que `periodo.recortado`: si el dato
  * mostrado no es el pedido, se avisa, no se miente en silencio.
+ *
+ * El valor vive en `admin.controller.js` desde que `resumenVentas` adoptó el
+ * mismo patrón: un tope copiado en dos archivos es un tope que en algún
+ * momento cambia en uno solo. Se re-exporta acá porque este flujo lo hizo
+ * público primero (lo consume su suite de tests).
  */
-export const MAX_ORDENES_HISTORICO = 20000;
+export { MAX_ORDENES_HISTORICO };
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 

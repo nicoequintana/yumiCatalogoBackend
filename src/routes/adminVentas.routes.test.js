@@ -20,6 +20,7 @@ vi.mock("../lib/prisma.js", () => ({
 }));
 
 const { default: adminRouter } = await import("./admin.routes.js");
+const { MAX_ORDENES_HISTORICO } = await import("../controllers/admin.controller.js");
 
 function buildApp() {
   const app = express();
@@ -358,5 +359,63 @@ describe("GET /api/admin/ventas", () => {
     expect(res.status).toBe(200);
     expect(res.body.periodo.recortado).toBe(false);
     expect(res.body.serieTemporal).toHaveLength(15);
+  });
+});
+
+describe("GET /api/admin/ventas — tope de filas del histórico", () => {
+  // Mismo patrón que `clientes-resumen`: sin techo, un período de hasta 400
+  // días con muchas órdenes se carga y reduce entero en memoria. Se pide UNA
+  // fila de más que el tope para detectar el corte sin adivinar, conservando
+  // las más recientes, y la respuesta lo declara en `historico` — un flag
+  // DISTINTO de `periodo.recortado` (ese habla del rango de fechas).
+  it("consulta con take = tope + 1 y orderBy createdAt desc (conserva lo más reciente)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
+
+    const args = ordenFindManyMock.mock.calls[0][0];
+    expect(args.take).toBe(MAX_ORDENES_HISTORICO + 1);
+    expect(args.orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  it("declara historico.recortado: false cuando las órdenes entran en el tope", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 1,
+        estado: "CONFIRMADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+      }),
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+
+    expect(res.body.historico).toEqual({
+      ordenesAnalizadas: 1,
+      tope: MAX_ORDENES_HISTORICO,
+      recortado: false,
+    });
+  });
+
+  it("descarta la fila extra y declara historico.recortado: true al superar el tope", async () => {
+    const unaOrden = orden({
+      id: 1,
+      estado: "CONFIRMADA",
+      createdAt: "2026-08-10T12:00:00Z",
+      items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+    });
+    ordenFindManyMock.mockResolvedValue(Array.from({ length: MAX_ORDENES_HISTORICO + 1 }, () => unaOrden));
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.historico.recortado).toBe(true);
+    expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
+    // La fila de más no puede contaminar los números: se analiza el tope justo.
+    expect(res.body.cantidadOrdenes).toBe(MAX_ORDENES_HISTORICO);
   });
 });

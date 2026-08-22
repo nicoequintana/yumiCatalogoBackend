@@ -83,6 +83,20 @@ describe("GET /og/producto/:id", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
+  it("devuelve tags genéricos (200) para un id fraccionario sin consultar Prisma", async () => {
+    // `Number("1.5")` no es NaN: con el chequeo viejo el float llegaba a
+    // Prisma como filtro sobre `id Int` y el 500 resultante rompía el preview
+    // del link. Mismo destino que un id no numérico: HTML genérico, sin base.
+    const res = await request(buildApp())
+      .get("/og/producto/1.5")
+      .set("User-Agent", "Twitterbot/1.0");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("YIMA Productos");
+    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
   it("escapa HTML en nombre y descripción para evitar inyección", async () => {
     findUniqueMock.mockResolvedValue({
       id: 5,
@@ -117,5 +131,21 @@ describe("GET /og/producto/:id", () => {
     expect(res.text).not.toContain("Anillo Solitario");
     expect(res.text).toContain("YIMA Productos");
     expect(res.text).toContain("https://aura.example.com/og-default.svg");
+  });
+
+  it("tiene un rate limit cableado, laxo, que no molesta a los bots legítimos de previews", async () => {
+    // Público, sin auth, y con consulta a la base por request. El límite es
+    // generoso a propósito: lo consumen los bots de redes sociales al armar
+    // el preview de un link compartido, y apretarlo rompería justo eso. Se
+    // verifica el CABLEADO (headers RateLimit-*) y que una tanda normal no se
+    // bloquea; el 429 lo cubre `middlewares/rateLimit.middleware.test.js`.
+    findUniqueMock.mockResolvedValue(null);
+    const app = buildApp();
+
+    for (let i = 0; i < 10; i++) {
+      const res = await request(app).get("/og/producto/5").set("User-Agent", "Twitterbot/1.0");
+      expect(res.status).toBe(200);
+      expect(res.headers["ratelimit-limit"]).toBe("120");
+    }
   });
 });
