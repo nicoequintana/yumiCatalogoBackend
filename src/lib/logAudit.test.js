@@ -102,6 +102,26 @@ describe("logAudit", () => {
     });
   });
 
+  it("trunca una ruta más larga que su columna para que la traza no se pierda por P2000", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+
+    // `AuditLog.ruta` es NVarChar(1000). Una URL armada a propósito más larga
+    // hacía fallar el insert best-effort y la traza de auditoría de una
+    // mutación del admin se perdía SIN AVISO. Se recorta en origen.
+    const rutaGigante = `/api/products/1?x=${"a".repeat(3000)}`;
+
+    await logAudit(reqFalso({ usuario: { id: 1, email: "admin@yima.test" }, originalUrl: rutaGigante }), {
+      accion: "ACTUALIZAR",
+      entidad: "Producto",
+      entidadId: 1,
+    });
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+    const dataPasada = createMock.mock.calls[0][0].data;
+    expect(dataPasada.ruta).toHaveLength(1000);
+    expect(dataPasada.ruta).toBe(rutaGigante.slice(0, 1000));
+  });
+
   it("normaliza entidadId ausente a null", async () => {
     createMock.mockResolvedValue({ id: 1 });
 

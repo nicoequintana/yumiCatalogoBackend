@@ -43,14 +43,24 @@ export function mapMulterError(err) {
  * Decide status y mensaje al cliente según el tipo de error.
  *
  * @param {unknown} err
+ * @param {string} [metodo] método HTTP del request que falló (desambigua P2003)
  * @returns {{ status: number, mensaje: string }}
  */
-function clasificarError(err) {
+function clasificarError(err, metodo) {
   if (err?.name === "MulterError") {
     return {
       status: err.code === "LIMIT_FILE_SIZE" ? 413 : 400,
       mensaje: mapMulterError(err),
     };
+  }
+
+  // P2000 = valor más largo que su columna. Los campos que el cliente arma
+  // libremente (headers, URL) ya se recortan en origen (`lib/limitesTexto.js`),
+  // así que esto es la red de seguridad para cualquier columna acotada que
+  // todavía reciba texto sin recortar — un dato inválido del cliente es un
+  // 400, nunca un 500 opaco con spam en ErrorLog.
+  if (err?.code === "P2000") {
+    return { status: 400, mensaje: "Uno de los valores enviados es demasiado largo." };
   }
 
   // P2002 = violación de constraint único.
@@ -64,11 +74,19 @@ function clasificarError(err) {
   // la defensa principal y da un mensaje puntual; esto es la red de
   // seguridad para cualquier relación que todavía no lo tenga, para que al
   // admin no le llegue un 500 opaco.
+  //
+  // El mensaje distingue por método HTTP: la MISMA violación de FK salta al
+  // borrar una fila referenciada (DELETE) y al insertar/actualizar apuntando a
+  // un id inexistente (ej. `POST /api/eventos` con un productId de fantasía).
+  // Sugerir "ocultalo en vez de borrarlo" en un INSERT era absurdo.
   if (err?.code === "P2003") {
-    return {
-      status: 400,
-      mensaje: "No se puede eliminar: otros registros dependen de este. Ocultalo en vez de borrarlo.",
-    };
+    if (metodo === "DELETE") {
+      return {
+        status: 400,
+        mensaje: "No se puede eliminar: otros registros dependen de este. Ocultalo en vez de borrarlo.",
+      };
+    }
+    return { status: 400, mensaje: "Alguno de los datos hace referencia a un registro que no existe." };
   }
 
   const status = err?.status ?? 500;
@@ -77,7 +95,7 @@ function clasificarError(err) {
 
 // eslint-disable-next-line no-unused-vars
 export function manejadorDeErrores(err, req, res, _next) {
-  const { status, mensaje } = clasificarError(err);
+  const { status, mensaje } = clasificarError(err, req.method);
 
   // Solo los 500 van a la consola. Antes se imprimía SIEMPRE, así que cada bot
   // pegándole a una ruta inexistente o cada validación de formulario rechazada

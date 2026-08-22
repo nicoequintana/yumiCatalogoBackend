@@ -22,6 +22,11 @@ const { MAX_FOTOS, MAX_VIDEOS } = await import("../lib/limitesMedios.js");
 function appQueLanza(err) {
   const app = express();
   app.get("/boom", (_req, _res, next) => next(err));
+  // La misma ruta con otros métodos: el mapeo de P2003 distingue por método
+  // HTTP (un DELETE que falla por FK no es lo mismo que un INSERT con una
+  // referencia inválida).
+  app.post("/boom", (_req, _res, next) => next(err));
+  app.delete("/boom", (_req, _res, next) => next(err));
   app.use(manejadorDeErrores);
   return app;
 }
@@ -182,16 +187,50 @@ describe("manejadorDeErrores — errores de Prisma", () => {
     expect(res.body.error).toBe("Ya existe un registro con ese valor.");
   });
 
-  it("mapea P2003 (clave foránea) a 400 sugiriendo ocultar en vez de borrar", async () => {
+  it("mapea P2003 en un DELETE a 400 sugiriendo ocultar en vez de borrar", async () => {
     const err = new Error("Foreign key constraint failed");
     err.code = "P2003";
 
-    const res = await request(appQueLanza(err)).get("/boom");
+    const res = await request(appQueLanza(err)).delete("/boom");
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe(
       "No se puede eliminar: otros registros dependen de este. Ocultalo en vez de borrarlo.",
     );
+  });
+
+  it("mapea P2003 fuera de un DELETE a 400 hablando de una referencia inválida, no de borrar", async () => {
+    // La violación de FK también salta al INSERTAR (ej.: POST /api/eventos con
+    // un productId inexistente). El status 400 era correcto pero el mensaje
+    // hablaba de eliminar, que ahí es absurdo.
+    const err = new Error("Foreign key constraint failed");
+    err.code = "P2003";
+
+    const res = await request(appQueLanza(err)).post("/boom");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Alguno de los datos hace referencia a un registro que no existe.");
+  });
+
+  it("mapea P2000 (valor más largo que la columna) a 400, nunca a un 500 opaco", async () => {
+    const err = new Error("The provided value for the column is too long for the column's type.");
+    err.code = "P2000";
+    err.meta = { column_name: "referrer" };
+
+    const res = await request(appQueLanza(err)).post("/boom");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Uno de los valores enviados es demasiado largo.");
+  });
+
+  it("no imprime en consola ni enmascara un P2000: es un error de cliente", async () => {
+    const err = new Error("value too long");
+    err.code = "P2000";
+
+    const res = await request(appQueLanza(err)).post("/boom");
+
+    expect(res.body.error).not.toBe("Error interno del servidor.");
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
   it("no enmascara los errores de Prisma mapeados: no son 500", async () => {

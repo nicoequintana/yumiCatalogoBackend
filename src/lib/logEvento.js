@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { truncarTexto } from "./limitesTexto.js";
 
 /**
  * Extrae `Referer` y `User-Agent` de un request de Express.
@@ -54,8 +55,11 @@ export async function logEvento({ tipo, productId, referrer, userAgent }) {
       data: {
         tipo,
         productId: productId ?? null,
-        referrer: referrer ?? null,
-        userAgent: userAgent ?? null,
+        // Recortados al largo de su columna (NVarChar(1000)): un header más
+        // largo produce un P2000 y este insert best-effort perdería el evento
+        // en silencio. Ver `lib/limitesTexto.js`.
+        referrer: truncarTexto(referrer),
+        userAgent: truncarTexto(userAgent),
       },
     });
   } catch (err) {

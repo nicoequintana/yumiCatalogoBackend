@@ -90,6 +90,21 @@ describe("logError", () => {
     expect(createMock.mock.calls[0][0].data.stack).toContain("Caused by:");
   });
 
+  it("trunca una ruta más larga que su columna para que el log no se pierda por P2000", async () => {
+    createMock.mockResolvedValue({ id: 1 });
+
+    // `ErrorLog.ruta` es NVarChar(1000): la URL la arma el cliente, así que un
+    // request malicioso con una ruta gigante hacía fallar el propio insert del
+    // log del error. Se recorta en origen; mensaje y stack son NVarChar(Max).
+    const rutaGigante = `/api/eventos?x=${"b".repeat(3000)}`;
+
+    await logError({ mensaje: "Falló", stack: null, ruta: rutaGigante, metodo: "POST", status: 500 });
+
+    const dataPasada = createMock.mock.calls[0][0].data;
+    expect(dataPasada.ruta).toHaveLength(1000);
+    expect(dataPasada.ruta).toBe(rutaGigante.slice(0, 1000));
+  });
+
   it("no lanza si prisma.errorLog.create rechaza (best-effort)", async () => {
     createMock.mockRejectedValue(new Error("DB caída"));
 

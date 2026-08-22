@@ -72,6 +72,27 @@ describe("logEvento", () => {
     });
   });
 
+  it("trunca referrer y userAgent al largo de su columna antes de insertar", async () => {
+    createMock.mockResolvedValue({ id: 8 });
+
+    // NVarChar(1000): un header más largo produce un P2000 y, como el insert es
+    // best-effort, el evento se perdería en silencio. Se recorta en origen.
+    const referrerGigante = `https://spam.example.com/${"a".repeat(3000)}`;
+    const userAgentGigante = "M".repeat(2500);
+
+    await logEvento({
+      tipo: "VISTA_PRODUCTO",
+      productId: 1,
+      referrer: referrerGigante,
+      userAgent: userAgentGigante,
+    });
+
+    const dataPasada = createMock.mock.calls[0][0].data;
+    expect(dataPasada.referrer).toHaveLength(1000);
+    expect(dataPasada.referrer).toBe(referrerGigante.slice(0, 1000));
+    expect(dataPasada.userAgent).toHaveLength(1000);
+  });
+
   it("no lanza si prisma.eventoTrafico.create rechaza (best-effort)", async () => {
     createMock.mockRejectedValue(new Error("DB caída"));
 

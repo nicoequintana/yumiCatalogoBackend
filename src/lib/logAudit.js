@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { truncarTexto } from "./limitesTexto.js";
 
 /**
  * Serializa el `detalle` a string para persistirlo en una columna de texto.
@@ -61,9 +62,13 @@ export async function logAudit(req, { accion, entidad, entidadId, detalle }) {
         entidad,
         entidadId: entidadId ?? null,
         detalle: serializarDetalle(detalle),
-        ruta: req?.originalUrl ?? null,
+        // `ruta` e `ip` se recortan al largo de su columna (NVarChar(1000)):
+        // la URL la arma el cliente, y una más larga producía un P2000 que
+        // hacía perder la traza de auditoría EN SILENCIO — lo peor que le
+        // puede pasar a un audit log. Ver `lib/limitesTexto.js`.
+        ruta: truncarTexto(req?.originalUrl),
         metodo: req?.method ?? null,
-        ip: req?.ip ?? null,
+        ip: truncarTexto(req?.ip),
       },
     });
   } catch (err) {

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { truncarTexto } from "./limitesTexto.js";
 
 /**
  * Serializa una causa arbitraria a texto.
@@ -67,7 +68,10 @@ function stackConCausa(stack, causa) {
 export async function logError({ mensaje, stack, causa, ruta, metodo, status }) {
   try {
     await prisma.errorLog.create({
-      data: { mensaje, stack: stackConCausa(stack, causa), ruta, metodo, status },
+      // `ruta` se recorta al largo de su columna (NVarChar(1000)): la URL la
+      // arma el cliente, y una más larga hacía fallar justamente el insert del
+      // log del error. `mensaje` y `stack` son NVarChar(Max), no lo necesitan.
+      data: { mensaje, stack: stackConCausa(stack, causa), ruta: truncarTexto(ruta), metodo, status },
     });
   } catch (err) {
     console.error("logError: no se pudo persistir el ErrorLog:", err);
