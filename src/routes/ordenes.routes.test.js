@@ -17,6 +17,7 @@ const ordenCreateMock = vi.fn();
 const ordenFindManyMock = vi.fn();
 const ordenFindUniqueMock = vi.fn();
 const ordenUpdateMock = vi.fn();
+const ordenUpdateManyMock = vi.fn();
 const ordenCountMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const auditCreateMock = vi.fn();
@@ -40,6 +41,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => ordenFindManyMock(...args),
       findUnique: (...args) => ordenFindUniqueMock(...args),
       update: (...args) => ordenUpdateMock(...args),
+      updateMany: (...args) => ordenUpdateManyMock(...args),
       count: (...args) => ordenCountMock(...args),
     },
     eventoTrafico: {
@@ -61,6 +63,7 @@ vi.mock("../lib/prisma.js", () => ({
           create: (...args) => ordenCreateMock(...args),
           findUnique: (...args) => ordenFindUniqueMock(...args),
           update: (...args) => ordenUpdateMock(...args),
+          updateMany: (...args) => ordenUpdateManyMock(...args),
         },
       }),
   },
@@ -114,6 +117,10 @@ beforeEach(() => {
   ordenFindManyMock.mockReset();
   ordenFindUniqueMock.mockReset();
   ordenUpdateMock.mockReset();
+  ordenUpdateManyMock.mockReset();
+  // Por defecto la escritura guardada de transición matchea la fila (la
+  // orden NO estaba CONFIRMADA).
+  ordenUpdateManyMock.mockResolvedValue({ count: 1 });
   ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   eventoTraficoCreateMock.mockResolvedValue({});
@@ -281,6 +288,33 @@ describe("auditoría de órdenes", () => {
         }),
       }),
     });
+  });
+
+  it("una confirmación con stock insuficiente devuelve advertencias y registra el faltante en AuditLog", async () => {
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN, estado: "PENDIENTE" });
+    // El descuento guardado no matchea (stock quedó por debajo de lo pedido);
+    // el segundo updateMany apoya la fila en 0.
+    productUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(res.body.advertencias).toHaveLength(1);
+    expect(res.body.advertencias[0]).toContain("Producto A");
+
+    // El AuditLog recibe el detalle estructurado del faltante, además del
+    // cambio de estado.
+    const detalle = JSON.parse(auditCreateMock.mock.calls[0][0].data.detalle);
+    expect(detalle.estadoNuevo).toBe("CONFIRMADA");
+    expect(detalle.stockDescontado).toBe(true);
+    expect(detalle.stockInsuficiente).toEqual([
+      { productId: 1, nombreProducto: "Producto A", cantidadPedida: 1 },
+    ]);
   });
 
   it("NO registra nada en AuditLog al crear una orden (checkout público, no es acción de admin)", async () => {

@@ -8,6 +8,12 @@ import { parsearPaginacion } from "../lib/paginacion.js";
 
 const MAX_INTENTOS_DNI = 5;
 
+// Topes anti-abuso del checkout público (POST /ordenes no requiere auth, solo
+// rate limit por IP): sin ellos un body armado a mano podía crear una orden
+// con miles de items o cantidades absurdas. Exportados para los tests.
+export const MAX_ITEMS_POR_ORDEN = 100;
+export const MAX_CANTIDAD_POR_ITEM = 999;
+
 /**
  * Valida los campos requeridos del body de creación de orden (checkout de
  * invitado): dni/nombre/telefono/items no vacíos. email y notas son
@@ -27,6 +33,9 @@ function validarCamposBase({ dni, nombre, telefono, items }) {
   if (!Array.isArray(items) || items.length === 0) {
     throw httpError(400, "Debe incluir al menos un producto en la orden.");
   }
+  if (items.length > MAX_ITEMS_POR_ORDEN) {
+    throw httpError(400, `Una orden no puede tener más de ${MAX_ITEMS_POR_ORDEN} items.`);
+  }
 }
 
 /**
@@ -43,6 +52,9 @@ function validarFormaItems(items) {
     }
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       throw httpError(400, "Cada item debe tener una cantidad entera mayor a 0.");
+    }
+    if (cantidad > MAX_CANTIDAD_POR_ITEM) {
+      throw httpError(400, `Cada item admite una cantidad máxima de ${MAX_CANTIDAD_POR_ITEM} unidades.`);
     }
   }
 }
@@ -312,10 +324,14 @@ export async function obtenerPorId(req, res, next) {
  *
  * Todo el descuento es a prueba de concurrencia, y eso pide dos cosas:
  *
- *   1. El estado de la orden se relee DENTRO de la transacción. La lectura
- *      previa solo existe para responder 404 temprano; decidir con ella si
- *      hay que descontar hacía que dos PATCH simultáneos leyeran PENDIENTE
- *      los dos y descontaran el stock dos veces.
+ *   1. La ENTRADA a CONFIRMADA se decide con una escritura guardada
+ *      (`updateMany` con `estado: { not: "CONFIRMADA" }`), nunca con una
+ *      lectura. Bajo READ COMMITTED dos PATCH simultáneos pueden ambos releer
+ *      PENDIENTE dentro de su transacción, pero solo uno logra que ese
+ *      `updateMany` matchee la fila — el `count` de esa escritura es el
+ *      árbitro de quién descuenta. La relectura dentro de la transacción
+ *      sigue existiendo, pero solo para los items a descontar y el estado
+ *      anterior de la auditoría, jamás para decidir el descuento.
  *   2. La resta la hace la base con `decrement` sobre el valor vigente de la
  *      fila, no el proceso sobre un valor leído antes. SQL Server corre en
  *      READ COMMITTED: un leer-restar-escribir pierde el descuento de la
@@ -324,7 +340,10 @@ export async function obtenerPorId(req, res, next) {
  * El `gte` del `where` es el que impide dejar el stock en negativo: si no
  * alcanza, no descuenta. Ese caso no se ignora — un segundo `updateMany`,
  * también guardado, apoya la fila en 0, que es el mismo resultado observable
- * que daba el viejo `Math.max(0, ...)`.
+ * que daba el viejo `Math.max(0, ...)`. Y no es silencioso: cada producto que
+ * se apoyó en 0 viaja como string en `advertencias` dentro de la respuesta
+ * (el frontend actual ignora campos extra) y como objeto en el detalle del
+ * AuditLog (`stockInsuficiente`).
  *
  * Incluye `cliente` e `items` en la respuesta (mismo shape que
  * `obtenerPorId()`), no solo los campos escalares de `Orden`: el frontend
@@ -350,15 +369,28 @@ export async function actualizarEstado(req, res, next) {
 
     let estadoAnterior = actual.estado;
     let descontoStock = false;
+    const faltantes = [];
 
     const orden = await prisma.$transaction(async (tx) => {
-      // Relectura dentro de la transacción: es la única lectura sobre la que
-      // se puede decidir el descuento (ver el comentario del bloque de arriba).
+      // Relectura dentro de la transacción: aporta los items a descontar y el
+      // estado anterior real para la auditoría. La DECISIÓN de descontar NO
+      // sale de esta lectura (ver el comentario del bloque de arriba).
       const vigente = await tx.orden.findUnique({ where: { id }, include: { items: true } });
       if (!vigente) throw httpError(404, "Orden no encontrada.");
 
       estadoAnterior = vigente.estado;
-      descontoStock = estado === "CONFIRMADA" && vigente.estado !== "CONFIRMADA";
+
+      if (estado === "CONFIRMADA") {
+        // Escritura guardada: solo matchea si la orden todavía NO estaba
+        // CONFIRMADA. El `count` es el árbitro de la transición — dos PATCH
+        // concurrentes pueden releer PENDIENTE los dos, pero solo uno de los
+        // dos consigue `count: 1` y descuenta.
+        const transicion = await tx.orden.updateMany({
+          where: { id, estado: { not: "CONFIRMADA" } },
+          data: { estado },
+        });
+        descontoStock = transicion.count === 1;
+      }
 
       if (descontoStock) {
         for (const item of vigente.items) {
@@ -377,10 +409,23 @@ export async function actualizarEstado(req, res, next) {
               where: { id: item.productId, stock: { lt: item.cantidad } },
               data: { stock: 0 },
             });
+            // Sobreventa con señal: el faltante no bloquea la confirmación,
+            // pero tampoco pasa en silencio — viaja a la respuesta y al
+            // AuditLog (ver después de la transacción).
+            faltantes.push({
+              productId: item.productId,
+              nombreProducto: item.nombreProducto,
+              cantidadPedida: item.cantidad,
+            });
           }
         }
       }
 
+      // Escribe el estado pedido para las transiciones que no pasaron por la
+      // escritura guardada (destino no-CONFIRMADA, o re-guardar CONFIRMADA —
+      // en ambos casos es idempotente respecto de lo que ya decidió el
+      // updateMany) y devuelve la orden con el shape que espera el frontend
+      // (cliente + items, igual que obtenerPorId()).
       return tx.orden.update({
         where: { id },
         data: { estado },
@@ -399,10 +444,19 @@ export async function actualizarEstado(req, res, next) {
         estadoAnterior,
         estadoNuevo: estado,
         stockDescontado: descontoStock,
+        // Solo cuando hubo sobreventa: qué producto, cuánto se pidió y que el
+        // stock se apoyó en 0 en vez de descontarse completo.
+        ...(faltantes.length > 0 && { stockInsuficiente: faltantes }),
       },
     });
 
-    res.json(orden);
+    // `advertencias` viaja solo cuando hubo faltantes; el frontend actual
+    // ignora campos extra, así que agregarlo no rompe a ningún consumidor.
+    const advertencias = faltantes.map(
+      (f) =>
+        `Stock insuficiente para "${f.nombreProducto}": se pidieron ${f.cantidadPedida} unidades y el stock se apoyó en 0.`,
+    );
+    res.json(advertencias.length > 0 ? { ...orden, advertencias } : orden);
   } catch (err) {
     next(err);
   }

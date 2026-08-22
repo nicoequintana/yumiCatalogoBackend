@@ -11,6 +11,7 @@ const ordenCreateMock = vi.fn();
 const ordenFindManyMock = vi.fn();
 const ordenFindUniqueMock = vi.fn();
 const ordenUpdateMock = vi.fn();
+const ordenUpdateManyMock = vi.fn();
 const ordenCountMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const transactionMock = vi.fn();
@@ -33,6 +34,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => ordenFindManyMock(...args),
       findUnique: (...args) => ordenFindUniqueMock(...args),
       update: (...args) => ordenUpdateMock(...args),
+      updateMany: (...args) => ordenUpdateManyMock(...args),
       count: (...args) => ordenCountMock(...args),
     },
     eventoTrafico: {
@@ -42,7 +44,8 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { crear, listar, obtenerPorId, actualizarEstado } = await import("./ordenes.controller.js");
+const { crear, listar, obtenerPorId, actualizarEstado, MAX_ITEMS_POR_ORDEN, MAX_CANTIDAD_POR_ITEM } =
+  await import("./ordenes.controller.js");
 
 function buildReqRes({ body, query, params } = {}) {
   const req = { body: body ?? {}, query: query ?? {}, params: params ?? {} };
@@ -135,6 +138,7 @@ beforeEach(() => {
   ordenFindManyMock.mockReset();
   ordenFindUniqueMock.mockReset();
   ordenUpdateMock.mockReset();
+  ordenUpdateManyMock.mockReset();
   ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   transactionMock.mockReset();
@@ -158,6 +162,7 @@ beforeEach(() => {
         create: (...args) => ordenCreateMock(...args),
         findUnique: (...args) => ordenFindUniqueMock(...args),
         update: (...args) => ordenUpdateMock(...args),
+        updateMany: (...args) => ordenUpdateManyMock(...args),
       },
     };
     return cb(tx);
@@ -166,6 +171,9 @@ beforeEach(() => {
   // Por defecto el descuento guardado encuentra la fila y la actualiza; los
   // tests que simulan stock insuficiente devuelven `{ count: 0 }` a propósito.
   productUpdateManyMock.mockResolvedValue({ count: 1 });
+  // Por defecto la escritura guardada de transición matchea la fila (la orden
+  // NO estaba CONFIRMADA); los tests de carrera devuelven `{ count: 0 }`.
+  ordenUpdateManyMock.mockResolvedValue({ count: 1 });
   eventoTraficoCreateMock.mockResolvedValue({});
 });
 
@@ -277,6 +285,65 @@ describe("crear() — validación de items", () => {
     const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1.5 }] }) });
     await crear(req, res, next);
     expect(next.mock.calls[0][0].status).toBe(400);
+  });
+});
+
+describe("crear() — topes de items y cantidades (anti-abuso)", () => {
+  it("exporta los topes con los valores acordados", () => {
+    expect(MAX_ITEMS_POR_ORDEN).toBe(100);
+    expect(MAX_CANTIDAD_POR_ITEM).toBe(999);
+  });
+
+  it("responde 400 si la orden trae más de MAX_ITEMS_POR_ORDEN items, sin tocar la DB", async () => {
+    const items = Array.from({ length: 101 }, (_, i) => ({ productId: i + 1, cantidad: 1 }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items }) });
+
+    await crear(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(400);
+    expect(productFindManyMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si un item pide más de MAX_CANTIDAD_POR_ITEM unidades, sin tocar la DB", async () => {
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 1000 }] }) });
+
+    await crear(req, res, next);
+
+    expect(next.mock.calls[0][0].status).toBe(400);
+    expect(productFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("acepta una cantidad exactamente igual a MAX_CANTIDAD_POR_ITEM (999)", async () => {
+    clienteFindUniqueMock.mockResolvedValue(CLIENTE_EXISTENTE);
+    clienteUpdateMock.mockResolvedValue(CLIENTE_EXISTENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 999 }] }) });
+    await crear(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("acepta una orden con exactamente MAX_ITEMS_POR_ORDEN items (100)", async () => {
+    const productos = Array.from({ length: 100 }, (_, i) => ({
+      ...PRODUCTO_DISPONIBLE,
+      id: i + 1,
+      nombre: `Producto ${i + 1}`,
+    }));
+    clienteFindUniqueMock.mockResolvedValue(CLIENTE_EXISTENTE);
+    clienteUpdateMock.mockResolvedValue(CLIENTE_EXISTENTE);
+    productFindManyMock.mockResolvedValue(productos);
+    ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+
+    const items = Array.from({ length: 100 }, (_, i) => ({ productId: i + 1, cantidad: 1 }));
+    const { req, res, next } = buildReqRes({ body: bodyValido({ items }) });
+    await crear(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(201);
   });
 });
 
@@ -776,6 +843,9 @@ describe("actualizarEstado()", () => {
 
     it("pasar de CONFIRMADA a CONFIRMADA de nuevo no vuelve a descontar stock", async () => {
       ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+      // La escritura guardada no matchea ninguna fila: la orden ya estaba
+      // CONFIRMADA, así que `estado != CONFIRMADA` no encuentra nada.
+      ordenUpdateManyMock.mockResolvedValue({ count: 0 });
       ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
 
       const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
@@ -814,11 +884,12 @@ describe("actualizarEstado()", () => {
     it("no descuenta si otra confirmación concurrente ya dejó la orden en CONFIRMADA", async () => {
       // La lectura previa al `$transaction` solo sirve para el 404 temprano.
       // Si entre esa lectura y la transacción otro PATCH confirmó la misma
-      // orden, la relectura de adentro ve CONFIRMADA y el stock no se toca:
-      // sin eso, dos confirmaciones simultáneas descuentan dos veces.
+      // orden, la escritura guardada (`estado != CONFIRMADA`) no matchea
+      // ninguna fila y el stock no se toca.
       ordenFindUniqueMock
         .mockResolvedValueOnce({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" })
         .mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+      ordenUpdateManyMock.mockResolvedValue({ count: 0 });
       productFindUniqueMock.mockResolvedValue({ ...PRODUCTO_DISPONIBLE, stock: 10 });
       ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
 
@@ -829,6 +900,95 @@ describe("actualizarEstado()", () => {
       expect(productUpdateManyMock).not.toHaveBeenCalled();
       expect(productUpdateMock).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(200);
+    });
+
+    it("decide la transición a CONFIRMADA con una escritura guardada, no con la relectura", async () => {
+      ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      // El árbitro de la transición es este updateMany guardado: solo matchea
+      // si la orden todavía NO estaba CONFIRMADA. Decidir con una lectura
+      // bajo READ COMMITTED dejaba que dos PATCH concurrentes descontaran
+      // dos veces.
+      expect(ordenUpdateManyMock).toHaveBeenCalledWith({
+        where: { id: 100, estado: { not: "CONFIRMADA" } },
+        data: { estado: "CONFIRMADA" },
+      });
+    });
+
+    it("dos confirmaciones concurrentes que leyeron ambas PENDIENTE descuentan el stock UNA sola vez", async () => {
+      // Simula la carrera de BK-A1: bajo READ COMMITTED las dos requests
+      // releen PENDIENTE dentro de su transacción. La escritura guardada es
+      // la que arbitra: la primera matchea la fila ({ count: 1 }), la segunda
+      // ya la encuentra CONFIRMADA ({ count: 0 }) y NO descuenta.
+      ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" });
+      ordenUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+      const primera = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      const segunda = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(primera.req, primera.res, primera.next);
+      await actualizarEstado(segunda.req, segunda.res, segunda.next);
+
+      expect(primera.next).not.toHaveBeenCalled();
+      expect(segunda.next).not.toHaveBeenCalled();
+      // La orden tiene 1 item: exactamente 1 descuento total entre los dos PATCH.
+      expect(productUpdateManyMock).toHaveBeenCalledTimes(1);
+      expect(primera.res.statusCode).toBe(200);
+      expect(segunda.res.statusCode).toBe(200);
+    });
+
+    it("una confirmación con stock insuficiente responde con advertencias (una por producto afectado)", async () => {
+      const ordenCantidadAlta = {
+        ...ORDEN_CREADA_MOCK,
+        estado: "PENDIENTE",
+        items: [{ id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 50 }],
+      };
+      ordenFindUniqueMock.mockResolvedValue(ordenCantidadAlta);
+      // El descuento guardado no matchea (stock < 50) y el segundo updateMany
+      // apoya la fila en 0.
+      productUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+      ordenUpdateMock.mockResolvedValue({ ...ordenCantidadAlta, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      // La sobreventa no bloquea la confirmación (el piso-en-cero se mantiene),
+      // pero deja de ser silenciosa: un string por producto afectado.
+      expect(res.body.advertencias).toHaveLength(1);
+      expect(res.body.advertencias[0]).toContain("Producto A");
+      expect(res.body.estado).toBe("CONFIRMADA");
+    });
+
+    it("una confirmación sin faltantes de stock no incluye el campo advertencias", async () => {
+      ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "CONFIRMADA" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.body.advertencias).toBeUndefined();
+    });
+
+    it("una transición a un estado que no es CONFIRMADA no pasa por la escritura guardada ni descuenta", async () => {
+      ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "PENDIENTE" });
+      ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "EN_PREPARACION" });
+
+      const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
+      await actualizarEstado(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(ordenUpdateManyMock).not.toHaveBeenCalled();
+      expect(productUpdateManyMock).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(res.body.estado).toBe("EN_PREPARACION");
     });
   });
 
