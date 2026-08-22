@@ -7,7 +7,8 @@
     "predev": "npx --yes kill-port 4000 --silent || true",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "oxlint"
   },
   "dependencies": {
     "@prisma/adapter-mssql": "^7.9.1",
@@ -27,6 +28,7 @@
     "prisma": "7.9.1"
   },
   "devDependencies": {
+    "oxlint": "^1.79.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
   }
