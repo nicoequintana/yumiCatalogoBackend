@@ -33,6 +33,9 @@ describe("enviarMail", () => {
       port: 465,
       secure: true,
       auth: { user: "yimaproductos@gmail.com", pass: "abcdefghijklmnop" },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 12_000,
     });
   });
 

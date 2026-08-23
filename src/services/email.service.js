@@ -42,6 +42,17 @@ function obtenerTransporter() {
     port: PORT,
     secure: true,
     auth: { user, pass },
+    // Los defaults de nodemailer (2 min / 30 s / 10 min) son más largos que
+    // los 15 s que `frontend/src/api/http.js` espera antes de abortar. Sin
+    // estos topes, un Gmail lento deja el estado YA guardado (la transacción
+    // commitea antes del envío) pero el admin ve un timeout del cliente sobre
+    // una pantalla que no refleja lo que pasó — el modo de falla mudo que
+    // esta feature existe para eliminar. Calibrados por debajo de esos 15 s
+    // para que un envío lento se manifieste como `notificacion.enviada ===
+    // false` (con su aviso en pantalla) en vez de como un abort del cliente.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 12_000,
   });
 
   return transporter;
