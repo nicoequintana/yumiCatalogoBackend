@@ -1,0 +1,236 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+model Product {
+  id                 Int              @id @default(autoincrement())
+  nombre             String
+  descripcion        String           @db.NVarChar(Max)
+  precio             Decimal          @db.Decimal(10, 2)
+  etiqueta           String?
+  fraseComercial     String?
+  porQueLoVasAQuerer String?          @db.NVarChar(Max)
+  tePasaEsto         String?          @db.NVarChar(Max)
+  sku                String           @unique
+  visibleEnCatalogo  Boolean          @default(false)
+  stock              Int              @default(0)
+  destacado          Boolean          @default(false)
+  orden              Int              @default(0) // control manual de merchandising, menor = primero
+  driveFolderId      String?
+  categoriaId        Int?
+  categoria          Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
+  vistas             Int              @default(0)
+  compartidos        Int              @default(0)
+  favoritosCount     Int              @default(0)
+  caracteristicas    Caracteristica[]
+  listas             ProductoLista[]
+  especificaciones   Especificacion[]
+  fotos              Foto[]
+  video              Video?
+  eventos            EventoTrafico[]
+  itemsOrden         ItemOrden[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([visibleEnCatalogo, orden])
+  @@index([destacado])
+  @@index([categoriaId])
+}
+
+model Caracteristica {
+  id        Int     @id @default(autoincrement())
+  texto     String
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model ProductoLista {
+  id        Int     @id @default(autoincrement())
+  tipo      String  @db.VarChar(20) // BENEFICIO | USO | IDEAL_PARA | INCLUYE
+  texto     String
+  orden     Int     @default(0)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, tipo])
+}
+
+model Especificacion {
+  id        Int     @id @default(autoincrement())
+  nombre    String
+  valor     String
+  orden     Int     @default(0)
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, orden])
+}
+
+model Foto {
+  id                     Int     @id @default(autoincrement())
+  url                    String
+  driveFileId            String?
+  cloudinaryPublicId     String?
+  cloudinaryResourceType String?
+  orden                  Int
+  productId              Int
+  product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, orden])
+}
+
+model Video {
+  id                     Int     @id @default(autoincrement())
+  url                    String
+  driveFileId            String?
+  cloudinaryPublicId     String?
+  cloudinaryResourceType String?
+  productId              Int     @unique
+  product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Categoria {
+  id        Int       @id @default(autoincrement())
+  nombre    String    @unique
+  productos Product[]
+  createdAt DateTime  @default(now())
+}
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model EventoTrafico {
+  id        Int      @id @default(autoincrement())
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO
+  // Es VarChar y no un enum de Prisma a propósito: agregar un tipo nuevo es una
+  // línea en `TIPOS_VALIDOS` (eventos.controller.js), sin migración de base.
+  // La fuente de verdad es esa constante — este comentario debe seguirla.
+  productId Int?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  referrer  String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([tipo, createdAt])
+  @@index([productId, tipo])
+  @@index([createdAt])
+}
+
+model Cliente {
+  id        Int      @id @default(autoincrement())
+  dni       String   @unique
+  nombre    String
+  telefono  String
+  email     String?
+  ordenes   Orden[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Orden {
+  id        Int         @id @default(autoincrement())
+  clienteId Int
+  cliente   Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
+  // valores: PENDIENTE | CONFIRMADA | EN_PREPARACION | ENTREGADA | CANCELADA
+  // No es un enum porque SQL Server vía Prisma no los soporta: quien valida
+  // de verdad es src/lib/estadosOrden.js, que es la única copia ejecutable.
+  estado    String      @default("PENDIENTE") @db.VarChar(20)
+  // ¿Esta orden tiene stock TOMADO ahora mismo?
+  //
+  // No se deduce del estado a propósito: la re-confirmación está fuera de
+  // alcance (CONFIRMADA -> ENTREGADA -> CONFIRMADA no vuelve a descontar), así
+  // que "está en CONFIRMADA" no implica "tiene stock tomado". Sin esta columna,
+  // cancelar devolvería unidades que nunca se sacaron.
+  //
+  // Lo enciende la escritura guardada que descuenta al confirmar y lo apaga la
+  // que libera al cancelar; ese par de escrituras es lo que hace que el
+  // descuento y la devolución ocurran exactamente una vez cada uno.
+  stockDescontado Boolean @default(false)
+  notas     String?     @db.NVarChar(Max)
+  items     ItemOrden[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([clienteId])
+  @@index([estado, createdAt])
+  @@index([createdAt])
+}
+
+model ItemOrden {
+  id             Int     @id @default(autoincrement())
+  ordenId        Int
+  orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  // Nullable con SetNull: borrar un producto DESLIGA sus líneas históricas en
+  // vez de quedar bloqueado por ellas. Era `NoAction`, y eso hacía imborrable
+  // a cualquier producto que apareciera en una orden — incluidas las
+  // CANCELADAS, que el propio proyecto no cuenta como ventas.
+  //
+  // La orden no pierde nada legible: `nombreProducto` y `precioUnitario` son
+  // snapshots y existen exactamente para que la línea sobreviva sin el
+  // producto. Lo que SÍ se pierde para siempre es el vínculo con el producto,
+  // así que el ranking de `admin.controller.js` no puede agrupar por
+  // `productId` a secas — con varios borrados, todos caerían en la clave null
+  // y sumarían su facturación en una sola fila.
+  productId      Int?
+  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  nombreProducto String // snapshot, no se recalcula
+  precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
+  cantidad       Int
+
+  @@index([ordenId])
+  @@index([productId])
+}
+
+model ErrorLog {
+  id        Int      @id @default(autoincrement())
+  mensaje   String   @db.NVarChar(Max)
+  stack     String?  @db.NVarChar(Max)
+  ruta      String?
+  metodo    String?
+  status    Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Traza de auditoría de las mutaciones del panel admin (quién hizo qué y
+// cuándo). Solo escrituras — las lecturas no se auditan.
+//
+// `usuarioEmail` es un SNAPSHOT copiado al momento de escribir, NO una
+// relación a `Usuario`: mismo criterio que `ItemOrden.nombreProducto`/
+// `precioUnitario`. Es deliberado — si después se borra el usuario admin, la
+// traza tiene que seguir diciendo quién hizo cada cosa. Una FK con onDelete
+// haría exactamente lo contrario (borraría o anularía la evidencia).
+// `usuarioId` se guarda igual, pero solo como referencia informativa.
+model AuditLog {
+  id           Int      @id @default(autoincrement())
+  usuarioId    Int?
+  usuarioEmail String
+  accion       String   @db.VarChar(50) // valores: CREAR | ACTUALIZAR | ELIMINAR (+ variantes por recurso)
+  entidad      String   @db.VarChar(50) // valores: Producto | Orden | Usuario | Categoria
+  entidadId    Int?
+  detalle      String?  @db.NVarChar(Max) // resumen JSON de lo que cambió
+  ruta         String
+  metodo       String   @db.VarChar(10)
+  ip           String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entidad, createdAt])
+}
