@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
+import { esEmailValido } from "../lib/emailValido.js";
 
 const SALT_ROUNDS = 10;
 
@@ -13,16 +14,8 @@ const SALT_ROUNDS = 10;
  */
 const MIN_LARGO_PASSWORD = 8;
 
-/**
- * Chequeo básico de forma (algo@algo.algo), no una validación RFC completa:
- * el email es el nombre de login del admin y la única garantía que importa es
- * que no sea un string arbitrario. El constraint único de la base sigue
- * siendo la autoridad sobre duplicados.
- */
-const FORMATO_EMAIL = /^\S+@\S+\.\S+$/;
-
 function validarEmail(email) {
-  if (!FORMATO_EMAIL.test(email)) {
+  if (!esEmailValido(email)) {
     throw httpError(400, "El email no tiene un formato válido.");
   }
 }
