@@ -27,3 +27,23 @@ export const ESTADOS_TERMINALES = ["ENTREGADA", "CANCELADA"];
 
 /** Los 5 estados del modelo, en orden de flujo. */
 export const ESTADOS_ORDEN = [...ESTADOS_NO_TERMINALES, ...ESTADOS_TERMINALES];
+
+/**
+ * Etiquetas legibles de cada estado, para el texto que ve una persona.
+ *
+ * ESPEJO MANUAL de `frontend/src/constants/ordenes.js`'s `ETIQUETA_ESTADO`.
+ * Los dos repos se publican por separado (ver `docs/deploy/`), así que no hay
+ * forma de compartir el módulo — mismo tipo de sincronización a mano que
+ * `botDetector.js` ↔ `nginx.conf`. Al agregar un estado, tocar los dos.
+ *
+ * El backend sigue devolviendo SIEMPRE las claves crudas en sus respuestas
+ * JSON; esto existe únicamente para el copy de los mails, que no pasa por el
+ * frontend.
+ */
+export const ETIQUETA_ESTADO = {
+  PENDIENTE: "Pendiente",
+  CONFIRMADA: "Confirmada",
+  EN_PREPARACION: "En preparación",
+  ENTREGADA: "Entregada",
+  CANCELADA: "Cancelada",
+};
