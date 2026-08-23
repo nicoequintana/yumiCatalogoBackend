@@ -6,7 +6,7 @@ import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
-import { notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
+import { notificarCambioEstado, notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
 
 const MAX_INTENTOS_DNI = 5;
 
@@ -524,7 +524,25 @@ export async function actualizarEstado(req, res, next) {
       (f) =>
         `Stock insuficiente para "${f.nombreProducto}": se pidieron ${f.cantidadPedida} unidades y el stock se apoyó en 0.`,
     );
-    res.json(advertencias.length > 0 ? { ...orden, advertencias } : orden);
+
+    // Notificación al cliente, DESPUÉS de que la transacción commiteó: el
+    // estado ya está guardado y un fallo de correo no puede revertirlo.
+    //
+    // Comparación estricta contra `true`: el default es NO notificar, así que
+    // cualquier otro valor (un string, un 1, el campo ausente) se trata como
+    // que no se pidió. Un consumidor que no conozca este campo no puede
+    // disparar correos por accidente.
+    //
+    // A diferencia del alta, acá SÍ se espera el resultado: hay una persona
+    // en el panel que necesita saber si el cliente se enteró.
+    const notificacion =
+      req.body?.notificarCliente === true ? await notificarCambioEstado(orden) : undefined;
+
+    res.json({
+      ...orden,
+      ...(advertencias.length > 0 && { advertencias }),
+      ...(notificacion !== undefined && { notificacion }),
+    });
   } catch (err) {
     next(err);
   }

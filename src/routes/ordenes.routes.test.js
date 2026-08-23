@@ -481,3 +481,96 @@ describe("POST /api/ordenes — email obligatorio y notificaciones", () => {
     expect(res.body.id).toBe(100);
   });
 });
+
+describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
+  function prepararCambio() {
+    const confirmada = { ...ORDEN, estado: "CONFIRMADA" };
+    ordenFindUniqueMock.mockResolvedValue(ORDEN);
+    ordenUpdateMock.mockResolvedValue(confirmada);
+    return confirmada;
+  }
+
+  it("no notifica cuando no viene el campo", async () => {
+    prepararCambio();
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA" });
+
+    expect(res.status).toBe(200);
+    expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
+    expect(res.body.notificacion).toBeUndefined();
+  });
+
+  it("no notifica cuando notificarCliente es false", async () => {
+    prepararCambio();
+
+    await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA", notificarCliente: false });
+
+    expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
+  });
+
+  it("notifica con la orden YA actualizada cuando se pide", async () => {
+    const confirmada = prepararCambio();
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA", notificarCliente: true });
+
+    expect(res.status).toBe(200);
+    expect(notificarCambioEstadoMock).toHaveBeenCalledWith(confirmada);
+    expect(res.body.notificacion).toEqual({ intentada: true, enviada: true });
+  });
+
+  it("guarda el estado igual cuando el envío falla", async () => {
+    prepararCambio();
+    notificarCambioEstadoMock.mockResolvedValue({
+      intentada: true,
+      enviada: false,
+      error: "Invalid login",
+    });
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA", notificarCliente: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe("CONFIRMADA");
+    expect(res.body.notificacion.enviada).toBe(false);
+    expect(res.body.notificacion.error).toBe("Invalid login");
+  });
+
+  it("informa cuando el cliente no tiene email, sin fallar el cambio", async () => {
+    prepararCambio();
+    notificarCambioEstadoMock.mockResolvedValue({
+      intentada: false,
+      enviada: false,
+      error: "El cliente no tiene email registrado.",
+    });
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "ENTREGADA", notificarCliente: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.notificacion.intentada).toBe(false);
+  });
+
+  it("ignora un notificarCliente que no sea booleano true", async () => {
+    prepararCambio();
+
+    await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "CONFIRMADA", notificarCliente: "si" });
+
+    expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
+  });
+});
