@@ -369,7 +369,9 @@ export async function actualizarEstado(req, res, next) {
 
     let estadoAnterior = actual.estado;
     let descontoStock = false;
+    let liberoStock = false;
     const faltantes = [];
+    const liberados = [];
 
     const orden = await prisma.$transaction(async (tx) => {
       // Relectura dentro de la transacción: aporta los items a descontar y el
@@ -385,11 +387,50 @@ export async function actualizarEstado(req, res, next) {
         // CONFIRMADA. El `count` es el árbitro de la transición — dos PATCH
         // concurrentes pueden releer PENDIENTE los dos, pero solo uno de los
         // dos consigue `count: 1` y descuenta.
+        //
+        // La misma escritura enciende `stockDescontado`: es lo que le permite
+        // a la cancelación saber que esta orden tiene stock tomado, sin tener
+        // que deducirlo del estado (ver el comentario de la columna).
         const transicion = await tx.orden.updateMany({
           where: { id, estado: { not: "CONFIRMADA" } },
-          data: { estado },
+          data: { estado, stockDescontado: true },
         });
         descontoStock = transicion.count === 1;
+      }
+
+      if (estado === "CANCELADA") {
+        // Espejo exacto del descuento, y por la misma razón: el árbitro es una
+        // ESCRITURA guardada, nunca una lectura. `stockDescontado: true` en el
+        // `where` es lo que garantiza que se devuelva una sola vez — una orden
+        // que nunca se confirmó no devuelve nada, y cancelar dos veces
+        // devuelve una.
+        const transicion = await tx.orden.updateMany({
+          where: { id, estado: { not: "CANCELADA" }, stockDescontado: true },
+          data: { estado, stockDescontado: false },
+        });
+        liberoStock = transicion.count === 1;
+      }
+
+      if (liberoStock) {
+        for (const item of vigente.items) {
+          // `increment` sobre el valor vigente de la fila, no el proceso sobre
+          // uno leído antes: bajo READ COMMITTED un leer-sumar-escribir pierde
+          // lo que haya escrito otra transacción en el medio.
+          //
+          // Sin guarda de tope: no hay un máximo de stock que respetar, y el
+          // producto puede haber sido borrado — `updateMany` sobre cero filas
+          // es un no-op, no un error, que es justo lo que se quiere acá.
+          await tx.product.updateMany({
+            where: { id: item.productId },
+            data: { stock: { increment: item.cantidad } },
+          });
+
+          liberados.push({
+            productId: item.productId,
+            nombreProducto: item.nombreProducto,
+            cantidad: item.cantidad,
+          });
+        }
       }
 
       if (descontoStock) {
@@ -447,6 +488,13 @@ export async function actualizarEstado(req, res, next) {
         // Solo cuando hubo sobreventa: qué producto, cuánto se pidió y que el
         // stock se apoyó en 0 en vez de descontarse completo.
         ...(faltantes.length > 0 && { stockInsuficiente: faltantes }),
+        // Qué se devolvió al cancelar. Se registra con el detalle por producto
+        // porque es la única traza de una devolución: si la confirmación se
+        // había apoyado en 0 por falta de stock, acá se devuelve la cantidad
+        // PEDIDA y no la efectivamente tomada, así que el número puede quedar
+        // por encima de la realidad. Es una imprecisión conocida y acotada a
+        // ese caso; este registro es lo que la hace rastreable.
+        ...(liberados.length > 0 && { stockLiberado: liberados }),
       },
     });
 

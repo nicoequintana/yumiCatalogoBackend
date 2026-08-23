@@ -151,6 +151,17 @@ model Orden {
   // No es un enum porque SQL Server vía Prisma no los soporta: quien valida
   // de verdad es src/lib/estadosOrden.js, que es la única copia ejecutable.
   estado    String      @default("PENDIENTE") @db.VarChar(20)
+  // ¿Esta orden tiene stock TOMADO ahora mismo?
+  //
+  // No se deduce del estado a propósito: la re-confirmación está fuera de
+  // alcance (CONFIRMADA -> ENTREGADA -> CONFIRMADA no vuelve a descontar), así
+  // que "está en CONFIRMADA" no implica "tiene stock tomado". Sin esta columna,
+  // cancelar devolvería unidades que nunca se sacaron.
+  //
+  // Lo enciende la escritura guardada que descuenta al confirmar y lo apaga la
+  // que libera al cancelar; ese par de escrituras es lo que hace que el
+  // descuento y la devolución ocurran exactamente una vez cada uno.
+  stockDescontado Boolean @default(false)
   notas     String?     @db.NVarChar(Max)
   items     ItemOrden[]
   createdAt DateTime    @default(now())
@@ -165,8 +176,19 @@ model ItemOrden {
   id             Int     @id @default(autoincrement())
   ordenId        Int
   orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
-  productId      Int
-  product        Product @relation(fields: [productId], references: [id], onDelete: NoAction)
+  // Nullable con SetNull: borrar un producto DESLIGA sus líneas históricas en
+  // vez de quedar bloqueado por ellas. Era `NoAction`, y eso hacía imborrable
+  // a cualquier producto que apareciera en una orden — incluidas las
+  // CANCELADAS, que el propio proyecto no cuenta como ventas.
+  //
+  // La orden no pierde nada legible: `nombreProducto` y `precioUnitario` son
+  // snapshots y existen exactamente para que la línea sobreviva sin el
+  // producto. Lo que SÍ se pierde para siempre es el vínculo con el producto,
+  // así que el ranking de `admin.controller.js` no puede agrupar por
+  // `productId` a secas — con varios borrados, todos caerían en la clave null
+  // y sumarían su facturación en una sola fila.
+  productId      Int?
+  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   nombreProducto String // snapshot, no se recalcula
   precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
   cantidad       Int

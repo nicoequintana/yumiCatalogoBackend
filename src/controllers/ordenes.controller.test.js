@@ -914,9 +914,11 @@ describe("actualizarEstado()", () => {
       // si la orden todavía NO estaba CONFIRMADA. Decidir con una lectura
       // bajo READ COMMITTED dejaba que dos PATCH concurrentes descontaran
       // dos veces.
+      // La misma escritura enciende `stockDescontado`: es lo que después le
+      // permite a la cancelación saber que esta orden tiene stock tomado.
       expect(ordenUpdateManyMock).toHaveBeenCalledWith({
         where: { id: 100, estado: { not: "CONFIRMADA" } },
-        data: { estado: "CONFIRMADA" },
+        data: { estado: "CONFIRMADA", stockDescontado: true },
       });
     });
 
