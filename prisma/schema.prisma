@@ -108,6 +108,25 @@ model Categoria {
   createdAt DateTime  @default(now())
 }
 
+/// Mensajes de la cinta de anuncios del catálogo público (`BarraAnuncios`).
+///
+/// `orden` es una secuencia que define en qué sucesión desfilan; el panel la
+/// reescribe entera al reordenar, así que no se asume compacta ni sin repetidos
+/// más allá de lo que escriba esa operación. `activo` permite sacar un mensaje
+/// de la cinta sin perder el texto, que es lo que se quiere para un anuncio
+/// estacional que vuelve.
+model Anuncio {
+  id        Int      @id @default(autoincrement())
+  texto     String   @db.NVarChar(200)
+  activo    Boolean  @default(true)
+  orden     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // La consulta pública es exactamente `where activo = 1 order by orden`.
+  @@index([activo, orden])
+}
+
 model Usuario {
   id           Int      @id @default(autoincrement())
   email        String   @unique
