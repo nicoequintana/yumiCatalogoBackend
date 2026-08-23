@@ -39,10 +39,18 @@ function urlDeOrden(id) {
  * `descripcion` es lo que va a leer el operador en `ErrorLog` para saber qué
  * mail no salió, así que nombra el destinatario y la orden.
  *
+ * `armarPlantilla` se recibe como FUNCIÓN, no ya invocada — se llama DENTRO
+ * del `try`. Las plantillas son funciones puras, pero no son infalibles:
+ * `items.map(...)` sin `items`, o un `precioUnitario` que `Decimal` no puede
+ * parsear, lanzan. Si se armara la plantilla afuera (al construir el objeto
+ * que recibe esta función), esa excepción escaparía antes de entrar al
+ * `try/catch` y rompería el contrato "nunca lanza" de quien llama a esto.
+ *
  * @returns {Promise<{enviada: boolean, error?: string}>}
  */
-async function enviarYRegistrar({ para, plantilla, descripcion }) {
+async function enviarYRegistrar({ para, armarPlantilla, descripcion }) {
   try {
+    const plantilla = armarPlantilla();
     await enviarMail({
       para,
       asunto: plantilla.asunto,
@@ -82,7 +90,7 @@ export async function notificarOrdenCreada(orden) {
     envios.push(
       enviarYRegistrar({
         para: orden.cliente.email,
-        plantilla: plantillaOrdenCreadaCliente(orden),
+        armarPlantilla: () => plantillaOrdenCreadaCliente(orden),
         descripcion: `confirmación de la orden ${orden.id} al cliente`,
       }),
     );
@@ -93,7 +101,7 @@ export async function notificarOrdenCreada(orden) {
     envios.push(
       enviarYRegistrar({
         para: destinoAdmin,
-        plantilla: plantillaOrdenCreadaAdmin(orden, { urlOrden: urlDeOrden(orden.id) }),
+        armarPlantilla: () => plantillaOrdenCreadaAdmin(orden, { urlOrden: urlDeOrden(orden.id) }),
         descripcion: `aviso interno de la orden ${orden.id}`,
       }),
     );
@@ -126,7 +134,7 @@ export async function notificarCambioEstado(orden) {
 
   const resultado = await enviarYRegistrar({
     para: email,
-    plantilla: plantillaCambioEstadoCliente(orden),
+    armarPlantilla: () => plantillaCambioEstadoCliente(orden),
     descripcion: `cambio de estado de la orden ${orden.id}`,
   });
 

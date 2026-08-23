@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import * as plantillasEmail from "../lib/plantillasEmail.js";
 
 const enviarMailMock = vi.fn();
 const logErrorMock = vi.fn();
@@ -95,6 +96,42 @@ describe("notificarOrdenCreada", () => {
     expect(logErrorMock).toHaveBeenCalledTimes(2);
     expect(logErrorMock.mock.calls[0][0].mensaje).toContain("orden 42");
   });
+
+  it("no lanza cuando la plantilla del cliente tira, y manda igual el mail a YIMA", async () => {
+    const spy = vi
+      .spyOn(plantillasEmail, "plantillaOrdenCreadaCliente")
+      .mockImplementation(() => {
+        throw new Error("plantilla rota");
+      });
+
+    try {
+      await expect(notificarOrdenCreada(ORDEN)).resolves.toBeUndefined();
+
+      expect(enviarMailMock).toHaveBeenCalledTimes(1);
+      expect(enviarMailMock.mock.calls[0][0].para).toBe("yimaproductos@gmail.com");
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+      expect(logErrorMock.mock.calls[0][0].mensaje).toContain("orden 42");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("no lanza cuando la plantilla del admin tira, y manda igual el mail al cliente", async () => {
+    const spy = vi.spyOn(plantillasEmail, "plantillaOrdenCreadaAdmin").mockImplementation(() => {
+      throw new Error("plantilla rota");
+    });
+
+    try {
+      await expect(notificarOrdenCreada(ORDEN)).resolves.toBeUndefined();
+
+      expect(enviarMailMock).toHaveBeenCalledTimes(1);
+      expect(enviarMailMock.mock.calls[0][0].para).toBe("juan@gmail.com");
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+      expect(logErrorMock.mock.calls[0][0].mensaje).toContain("orden 42");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe("notificarCambioEstado", () => {
@@ -135,5 +172,25 @@ describe("notificarCambioEstado", () => {
     await notificarCambioEstado({ ...ORDEN, estado: "ENTREGADA" });
 
     expect(logErrorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reporta el fallo en vez de lanzar cuando la plantilla tira", async () => {
+    const spy = vi
+      .spyOn(plantillasEmail, "plantillaCambioEstadoCliente")
+      .mockImplementation(() => {
+        throw new Error("plantilla rota");
+      });
+
+    try {
+      const resultado = await notificarCambioEstado({ ...ORDEN, estado: "ENTREGADA" });
+
+      expect(resultado.intentada).toBe(true);
+      expect(resultado.enviada).toBe(false);
+      expect(resultado.error).toContain("plantilla rota");
+      expect(enviarMailMock).not.toHaveBeenCalled();
+      expect(logErrorMock).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

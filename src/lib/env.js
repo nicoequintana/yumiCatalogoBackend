@@ -20,17 +20,16 @@
 // - JWT_SECRET: sin esto, `jwt.sign` en el login tira y nadie puede entrar al
 //   admin (y un secreto vacío haría falsificable cualquier token).
 // - CLOUDINARY_*: storage principal de fotos y video (ver CLAUDE.md).
-//
-// Las de Google Drive quedan afuera aposta: son legado de solo lectura y solo
-// hacen falta mientras existan productos con medios sin migrar, así que un
-// deploy nuevo sin ellas es perfectamente válido.
-//
 // - SMTP_USER / SMTP_PASSWORD: sin credenciales de Gmail no sale ninguna
 //   notificación de órdenes. Van acá y no en una validación perezosa por el
 //   mismo motivo que Cloudinary: un deploy mal configurado tiene que fallar
 //   en los logs de arranque, no días después cuando un cliente no recibe su
 //   confirmación y nadie se entera.
 // - MAIL_ADMIN_DESTINO: sin esto YIMA no se entera de las órdenes nuevas.
+//
+// Las de Google Drive quedan afuera aposta: son legado de solo lectura y solo
+// hacen falta mientras existan productos con medios sin migrar, así que un
+// deploy nuevo sin ellas es perfectamente válido.
 export const VARIABLES_REQUERIDAS = [
   "DATABASE_URL",
   "JWT_SECRET",
