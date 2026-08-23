@@ -8,7 +8,7 @@ import { COLUMNAS, MARCA_EJEMPLO, MAX_FILAS, NOMBRE_HOJA } from "./importProduct
  */
 export const ETIQUETAS_SUGERIDAS = ["Exclusivo", "Nuevo", "Best Seller", "Trending", "Popular"];
 
-const HOJA_LISTAS = "Listas";
+export const HOJA_LISTAS = "Listas";
 
 /** Última fila a la que se aplican las validaciones (el admin puede llenar hasta MAX_FILAS). */
 const ULTIMA_FILA = MAX_FILAS + 1;
@@ -42,15 +42,7 @@ const FILA_EJEMPLO = {
 export async function generarPlantilla(categorias) {
   const wb = new ExcelJS.Workbook();
 
-  const listas = wb.addWorksheet(HOJA_LISTAS);
-  listas.getCell("A1").value = "Categorías";
-  listas.getCell("B1").value = "Etiquetas sugeridas";
-  categorias.forEach((nombre, indice) => {
-    listas.getCell(`A${indice + 2}`).value = nombre;
-  });
-  ETIQUETAS_SUGERIDAS.forEach((etiqueta, indice) => {
-    listas.getCell(`B${indice + 2}`).value = etiqueta;
-  });
+  construirHojaListas(wb, categorias);
 
   const hoja = wb.addWorksheet(NOMBRE_HOJA);
   hoja.addRow(COLUMNAS);
@@ -63,11 +55,40 @@ export async function generarPlantilla(categorias) {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-/** Aplica las validaciones de Excel a todo el rango editable de cada columna. */
-function aplicarValidaciones(hoja, cantidadCategorias) {
-  const indice = (columna) => COLUMNAS.indexOf(columna) + 1;
+/**
+ * Arma la hoja `Listas` con las categorías y las etiquetas sugeridas que
+ * alimentan los desplegables de la hoja `Productos`. Compartida por la
+ * plantilla de alta (`generarPlantilla`) y la exportación para actualización
+ * masiva (`exportarProductos.js`) — las dos necesitan exactamente los mismos
+ * dos desplegables.
+ */
+export function construirHojaListas(wb, categorias) {
+  const listas = wb.addWorksheet(HOJA_LISTAS);
+  listas.getCell("A1").value = "Categorías";
+  listas.getCell("B1").value = "Etiquetas sugeridas";
+  categorias.forEach((nombre, indice) => {
+    listas.getCell(`A${indice + 2}`).value = nombre;
+  });
+  ETIQUETAS_SUGERIDAS.forEach((etiqueta, indice) => {
+    listas.getCell(`B${indice + 2}`).value = etiqueta;
+  });
+  return listas;
+}
 
-  for (let fila = 2; fila <= ULTIMA_FILA; fila++) {
+/**
+ * Aplica las validaciones de Excel a todo el rango editable de cada columna.
+ *
+ * `columnas` generaliza el cálculo de índice para que sirva tanto para
+ * `COLUMNAS` (alta) como para `COLUMNAS_ACTUALIZACION` (actualización, `sku`
+ * primero). `ultimaFila` generaliza el rango de filas: la plantilla de alta
+ * cubre hasta `MAX_FILAS` (el admin todavía no sabe cuántas va a cargar),
+ * pero la exportación para actualizar conoce de antemano la cantidad exacta
+ * de productos y no tiene sentido validar miles de filas vacías de más.
+ */
+export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNAS, ultimaFila = ULTIMA_FILA) {
+  const indice = (columna) => columnas.indexOf(columna) + 1;
+
+  for (let fila = 2; fila <= ultimaFila; fila++) {
     hoja.getCell(fila, indice("precio")).dataValidation = {
       type: "decimal",
       operator: "greaterThan",

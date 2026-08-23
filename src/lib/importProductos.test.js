@@ -3,12 +3,18 @@ import ExcelJS from "exceljs";
 import {
   parsearLista,
   parsearEspecificaciones,
+  serializarLista,
+  serializarEspecificaciones,
   validarFila,
+  validarFilaActualizacion,
   COLUMNAS,
+  COLUMNAS_ACTUALIZACION,
   MAX_FILAS,
+  MAX_FILAS_ACTUALIZACION,
   MARCA_EJEMPLO,
   leerArchivo,
   procesarArchivo,
+  procesarArchivoActualizacion,
 } from "./importProductos.js";
 
 describe("parsearLista", () => {
@@ -71,6 +77,36 @@ describe("parsearEspecificaciones", () => {
   it("devuelve lista vacía para celda vacía", () => {
     expect(parsearEspecificaciones("")).toEqual([]);
     expect(parsearEspecificaciones(null)).toEqual([]);
+  });
+});
+
+describe("serializarLista", () => {
+  it("es la inversa de parsearLista", () => {
+    const items = [{ texto: "Uno" }, { texto: "Dos" }];
+    expect(serializarLista(items)).toBe("Uno\nDos");
+    expect(parsearLista(serializarLista(items))).toEqual(items);
+  });
+
+  it("devuelve null para una lista vacía o ausente", () => {
+    expect(serializarLista([])).toBeNull();
+    expect(serializarLista(null)).toBeNull();
+    expect(serializarLista(undefined)).toBeNull();
+  });
+});
+
+describe("serializarEspecificaciones", () => {
+  it("es la inversa de parsearEspecificaciones", () => {
+    const especificaciones = [
+      { nombre: "Material", valor: "Soja" },
+      { nombre: "Horario", valor: "9:00 a 18:00" },
+    ];
+    expect(serializarEspecificaciones(especificaciones)).toBe("Material: Soja\nHorario: 9:00 a 18:00");
+    expect(parsearEspecificaciones(serializarEspecificaciones(especificaciones))).toEqual(especificaciones);
+  });
+
+  it("devuelve null para una lista vacía o ausente", () => {
+    expect(serializarEspecificaciones([])).toBeNull();
+    expect(serializarEspecificaciones(null)).toBeNull();
   });
 });
 
@@ -273,6 +309,29 @@ describe("leerArchivo", () => {
       'El archivo no tiene una hoja llamada "Productos". Descargá la plantilla y completala.',
     );
   });
+
+  it("acepta un array de columnas por parámetro, para hojas con otra forma (ej. sku primero)", async () => {
+    const columnas = ["sku", "nombre"];
+    const wb = new ExcelJS.Workbook();
+    const hoja = wb.addWorksheet("Productos");
+    hoja.addRow(columnas);
+    hoja.addRow(["SKU-1", "Vela"]);
+    const buffer = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const filas = await leerArchivo(buffer, columnas);
+
+    expect(filas).toHaveLength(1);
+    expect(filas[0].valores).toEqual({ sku: "SKU-1", nombre: "Vela" });
+  });
+
+  it("sin el parámetro sigue usando COLUMNAS (default), como antes", async () => {
+    const buffer = await construirXlsx([{ nombre: "Vela", descripcion: "d", precio: 1 }]);
+
+    const filas = await leerArchivo(buffer);
+
+    expect(filas[0].valores.nombre).toBe("Vela");
+    expect(filas[0].valores.precio).toBe(1);
+  });
 });
 
 describe("procesarArchivo", () => {
@@ -339,5 +398,206 @@ describe("procesarArchivo", () => {
     const filas = await leerArchivo(buffer);
 
     expect(filas).toHaveLength(MAX_FILAS + 1);
+  });
+});
+
+/** Arma un .xlsx en memoria con COLUMNAS_ACTUALIZACION (sku primero). */
+async function construirXlsxActualizacion(filas) {
+  const wb = new ExcelJS.Workbook();
+  const hoja = wb.addWorksheet("Productos");
+  hoja.addRow(COLUMNAS_ACTUALIZACION);
+  for (const fila of filas) hoja.addRow(COLUMNAS_ACTUALIZACION.map((c) => fila[c] ?? null));
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+function filaActualizacionValida(extra = {}) {
+  return { sku: "VEL-1", nombre: "Vela de soja", descripcion: "Aroma lavanda", precio: 1500, ...extra };
+}
+
+describe("validarFilaActualizacion", () => {
+  const IDS_POR_SKU = new Map([
+    ["VEL-1", 101],
+    ["VEL-2", 102],
+  ]);
+
+  it("sku vacío: ya no es error — es una fila para CREAR", () => {
+    const { datos, id, accion, errores } = validarFilaActualizacion(
+      filaActualizacionValida({ sku: undefined }),
+      2,
+      CATEGORIAS,
+      IDS_POR_SKU,
+    );
+
+    expect(errores).toEqual([]);
+    expect(accion).toBe("crear");
+    expect(id).toBeNull();
+    expect(datos).toEqual({
+      nombre: "Vela de soja",
+      descripcion: "Aroma lavanda",
+      precio: "1500",
+      stock: 0,
+      etiqueta: null,
+      categoriaId: null,
+      fraseComercial: null,
+      porQueLoVasAQuerer: null,
+      tePasaEsto: null,
+      caracteristicas: [],
+      beneficios: [],
+      usos: [],
+      idealPara: [],
+      incluye: [],
+      especificaciones: [],
+    });
+  });
+
+  it("sku vacío con errores de campo: sigue rechazando la fila (accion null)", () => {
+    const { datos, id, accion, errores } = validarFilaActualizacion(
+      filaActualizacionValida({ sku: undefined, nombre: "" }),
+      2,
+      CATEGORIAS,
+      IDS_POR_SKU,
+    );
+
+    expect(datos).toBeNull();
+    expect(id).toBeNull();
+    expect(accion).toBeNull();
+    expect(errores).toEqual([
+      { fila: 2, columna: "nombre", valor: "", motivo: "El nombre es obligatorio." },
+    ]);
+  });
+
+  it("rechaza sku inexistente (typo) — sigue sin crear, para no duplicar por error de tipeo", () => {
+    const { datos, id, accion, errores } = validarFilaActualizacion(
+      filaActualizacionValida({ sku: "NOEXISTE" }),
+      5,
+      CATEGORIAS,
+      IDS_POR_SKU,
+    );
+
+    expect(datos).toBeNull();
+    expect(id).toBeNull();
+    expect(accion).toBeNull();
+    expect(errores).toEqual([
+      { fila: 5, columna: "sku", valor: "NOEXISTE", motivo: "No existe ningún producto con este SKU." },
+    ]);
+  });
+
+  it("con sku válido, sigue aplicando las mismas reglas de campo que validarFila", () => {
+    const { datos, id, accion, errores } = validarFilaActualizacion(
+      filaActualizacionValida({ nombre: "", precio: "abc" }),
+      3,
+      CATEGORIAS,
+      IDS_POR_SKU,
+    );
+
+    expect(datos).toBeNull();
+    expect(id).toBeNull();
+    expect(accion).toBeNull();
+    expect(errores).toEqual([
+      { fila: 3, columna: "nombre", valor: "", motivo: "El nombre es obligatorio." },
+      { fila: 3, columna: "precio", valor: "abc", motivo: "El precio debe ser un número mayor a 0." },
+    ]);
+  });
+
+  it("mapea una fila válida completa, con el id del producto resuelto por sku (accion actualizar)", () => {
+    const { datos, id, accion, errores } = validarFilaActualizacion(
+      filaActualizacionValida({ sku: "VEL-2", stock: 12, categoria: "Velas" }),
+      2,
+      CATEGORIAS,
+      IDS_POR_SKU,
+    );
+
+    expect(errores).toEqual([]);
+    expect(accion).toBe("actualizar");
+    expect(id).toBe(102);
+    expect(datos).toEqual({
+      nombre: "Vela de soja",
+      descripcion: "Aroma lavanda",
+      precio: "1500",
+      stock: 12,
+      etiqueta: null,
+      categoriaId: 7,
+      fraseComercial: null,
+      porQueLoVasAQuerer: null,
+      tePasaEsto: null,
+      caracteristicas: [],
+      beneficios: [],
+      usos: [],
+      idealPara: [],
+      incluye: [],
+      especificaciones: [],
+    });
+  });
+});
+
+describe("procesarArchivoActualizacion", () => {
+  it("devuelve las operaciones listas (accion actualizar) cuando todas las filas traen sku existente", async () => {
+    const buffer = await construirXlsxActualizacion([
+      { sku: "VEL-1", nombre: "Vela renovada", descripcion: "d", precio: 1800, stock: 9 },
+    ]);
+    const idsPorSku = new Map([["VEL-1", 101]]);
+
+    const { operaciones, errores } = await procesarArchivoActualizacion(buffer, CATEGORIAS, idsPorSku);
+
+    expect(errores).toEqual([]);
+    expect(operaciones).toEqual([
+      {
+        accion: "actualizar",
+        id: 101,
+        datos: expect.objectContaining({ nombre: "Vela renovada", stock: 9 }),
+      },
+    ]);
+  });
+
+  it("mezcla alta (sku vacío) y actualización (sku existente) en el mismo archivo", async () => {
+    const buffer = await construirXlsxActualizacion([
+      { sku: "VEL-1", nombre: "Vela renovada", descripcion: "d", precio: 1800, stock: 9 },
+      { sku: "", nombre: "Producto nuevo", descripcion: "d", precio: 500 },
+    ]);
+    const idsPorSku = new Map([["VEL-1", 101]]);
+
+    const { operaciones, errores } = await procesarArchivoActualizacion(buffer, CATEGORIAS, idsPorSku);
+
+    expect(errores).toEqual([]);
+    expect(operaciones).toHaveLength(2);
+    expect(operaciones[0]).toEqual({
+      accion: "actualizar",
+      id: 101,
+      datos: expect.objectContaining({ nombre: "Vela renovada" }),
+    });
+    expect(operaciones[1]).toEqual({
+      accion: "crear",
+      id: null,
+      datos: expect.objectContaining({ nombre: "Producto nuevo" }),
+    });
+  });
+
+  it("todo o nada: una fila con sku inexistente (typo) invalida el archivo entero", async () => {
+    const buffer = await construirXlsxActualizacion([
+      { sku: "VEL-1", nombre: "Vela", descripcion: "d", precio: 1500 },
+      { sku: "NOEXISTE", nombre: "Difusor", descripcion: "d", precio: 2000 },
+    ]);
+    const idsPorSku = new Map([["VEL-1", 101]]);
+
+    const { operaciones, errores } = await procesarArchivoActualizacion(buffer, CATEGORIAS, idsPorSku);
+
+    expect(operaciones).toEqual([]);
+    expect(errores).toEqual([
+      { fila: 3, columna: "sku", valor: "NOEXISTE", motivo: "No existe ningún producto con este SKU." },
+    ]);
+  });
+
+  it(`lanza si el archivo supera las ${MAX_FILAS_ACTUALIZACION} filas`, async () => {
+    const muchas = Array.from({ length: MAX_FILAS_ACTUALIZACION + 1 }, (_, i) => ({
+      sku: `SKU-${i}`,
+      nombre: `P${i}`,
+      descripcion: "d",
+      precio: 1,
+    }));
+    const buffer = await construirXlsxActualizacion(muchas);
+
+    await expect(procesarArchivoActualizacion(buffer, CATEGORIAS, new Map())).rejects.toThrow(
+      `El archivo tiene más de ${MAX_FILAS_ACTUALIZACION} filas. Dividilo en varios archivos.`,
+    );
   });
 });

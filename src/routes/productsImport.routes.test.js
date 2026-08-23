@@ -9,19 +9,25 @@ process.env.JWT_SECRET = "test-secret";
 
 const categoriaMock = { findMany: vi.fn() };
 const productCreateMock = vi.fn();
+const productFindManyMock = vi.fn();
+const productUpdateMock = vi.fn();
 const transactionMock = vi.fn();
 const auditCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     categoria: { findMany: (...args) => categoriaMock.findMany(...args) },
-    product: { create: (...args) => productCreateMock(...args) },
+    product: {
+      create: (...args) => productCreateMock(...args),
+      findMany: (...args) => productFindManyMock(...args),
+      update: (...args) => productUpdateMock(...args),
+    },
     auditLog: { create: (...args) => auditCreateMock(...args) },
     $transaction: (...args) => transactionMock(...args),
   },
 }));
 
-const { COLUMNAS } = await import("../lib/importProductos.js");
+const { COLUMNAS, COLUMNAS_ACTUALIZACION } = await import("../lib/importProductos.js");
 const { default: productsRouter } = await import("./products.routes.js");
 
 function buildApp() {
@@ -37,6 +43,19 @@ async function xlsxCon(filas) {
   hoja.addRow(COLUMNAS);
   for (const fila of filas) hoja.addRow(COLUMNAS.map((c) => fila[c] ?? null));
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+async function xlsxConActualizacion(filas) {
+  const wb = new ExcelJS.Workbook();
+  const hoja = wb.addWorksheet("Productos");
+  hoja.addRow(COLUMNAS_ACTUALIZACION);
+  for (const fila of filas) hoja.addRow(COLUMNAS_ACTUALIZACION.map((c) => fila[c] ?? null));
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/** Precio "estilo Prisma Decimal": alcanza con `toString()` para estos tests. */
+function decimal(valor) {
+  return { toString: () => String(valor) };
 }
 
 const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
@@ -252,6 +271,345 @@ describe("POST /api/products/import", () => {
     expect(auditCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ accion: "IMPORTAR", entidad: "Producto" }),
+      }),
+    );
+  });
+});
+
+describe("GET /api/products/export", () => {
+  it("responde 401 sin token", async () => {
+    const res = await request(buildApp()).get("/api/products/export");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("devuelve un .xlsx con una fila por producto, sin auditoría (es una lectura)", async () => {
+    productFindManyMock.mockResolvedValue([
+      {
+        sku: "VEL-1",
+        nombre: "Vela",
+        descripcion: "Lavanda",
+        precio: decimal("1500"),
+        stock: 3,
+        etiqueta: null,
+        fraseComercial: null,
+        porQueLoVasAQuerer: null,
+        tePasaEsto: null,
+        categoria: { nombre: "Velas" },
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      },
+    ]);
+    categoriaMock.findMany.mockResolvedValue([{ nombre: "Velas" }]);
+
+    const res = await request(buildApp())
+      .get("/api/products/export")
+      .set("Authorization", authHeader)
+      .responseType("blob");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("spreadsheetml");
+    expect(res.headers["content-disposition"]).toContain("productos-export.xlsx");
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(auditCreateMock).not.toHaveBeenCalled();
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(res.body);
+    const hoja = wb.getWorksheet("Productos");
+    expect(hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("sku") + 1).value).toBe("VEL-1");
+    expect(hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("categoria") + 1).value).toBe("Velas");
+    expect(wb.getWorksheet("Listas").getCell("A2").value).toBe("Velas");
+  });
+});
+
+describe("POST /api/products/actualizar-masivo", () => {
+  it("responde 401 sin token y no escribe nada", async () => {
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "A", descripcion: "d", precio: 1 }]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(401);
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("responde 400 si no se adjuntó ningún archivo", async () => {
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain(".xlsx");
+  });
+
+  it("actualiza un producto existente por sku, sin tocar sku/visibilidad/destacado/orden", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+    productUpdateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 5,
+        sku: "VEL-1",
+        visibleEnCatalogo: true,
+        destacado: true,
+        orden: 3,
+        ...data,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "VEL-1", nombre: "Vela renovada", descripcion: "d", precio: 1800, stock: 9 },
+        ]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.creados).toBe(0);
+    expect(res.body.actualizados).toBe(1);
+    expect(productUpdateMock).toHaveBeenCalledTimes(1);
+
+    const llamada = productUpdateMock.mock.calls[0][0];
+    expect(llamada.where).toEqual({ id: 5 });
+    expect(llamada.data.nombre).toBe("Vela renovada");
+    expect(llamada.data.precio).toBe("1800");
+    expect(llamada.data.stock).toBe(9);
+    // Invariante de seguridad del diseño: estos campos NO van en el `data`
+    // del update, así Prisma los deja intactos.
+    expect(llamada.data.sku).toBeUndefined();
+    expect(llamada.data.visibleEnCatalogo).toBeUndefined();
+    expect(llamada.data.destacado).toBeUndefined();
+    expect(llamada.data.orden).toBeUndefined();
+    expect(res.body.productos[0].visibleEnCatalogo).toBe(true);
+    expect(res.body.productos[0].destacado).toBe(true);
+    expect(res.body.productos[0].orden).toBe(3);
+  });
+
+  it("con sku vacío CREA el producto nuevo, oculto y con sku recién generado", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+    productCreateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        ...data,
+        id: 99,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "", nombre: "Producto nuevo", descripcion: "d", precio: 500, stock: 4 },
+        ]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.creados).toBe(1);
+    expect(res.body.actualizados).toBe(0);
+    expect(productCreateMock).toHaveBeenCalledTimes(1);
+    expect(productUpdateMock).not.toHaveBeenCalled();
+
+    const llamada = productCreateMock.mock.calls[0][0];
+    expect(llamada.data.nombre).toBe("Producto nuevo");
+    expect(llamada.data.visibleEnCatalogo).toBe(false);
+    expect(llamada.data.sku).not.toBe("VEL-1");
+    expect(llamada.data.sku).toMatch(/^YIMA-/);
+    expect(res.body.productos[0].visibleEnCatalogo).toBe(false);
+  });
+
+  it("un archivo con una fila sku-vacío + una fila sku-existente crea Y actualiza en la misma transacción", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+    productCreateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        ...data,
+        id: 99,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+    productUpdateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 5,
+        sku: "VEL-1",
+        visibleEnCatalogo: true,
+        destacado: false,
+        orden: 0,
+        ...data,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "VEL-1", nombre: "Vela renovada", descripcion: "d", precio: 1800, stock: 9 },
+          { sku: "", nombre: "Producto nuevo", descripcion: "d", precio: 500 },
+        ]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.creados).toBe(1);
+    expect(res.body.actualizados).toBe(1);
+    expect(productCreateMock).toHaveBeenCalledTimes(1);
+    expect(productUpdateMock).toHaveBeenCalledTimes(1);
+    expect(res.body.productos).toHaveLength(2);
+  });
+
+  it("rechaza (400, todo o nada) si una fila tiene sku inexistente y no actualiza ninguna", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "VEL-1", nombre: "Vela", descripcion: "d", precio: 1500 },
+          { sku: "NOEXISTE", nombre: "Difusor", descripcion: "d", precio: 2000 },
+        ]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(400);
+    expect(productUpdateMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(res.body.errores).toEqual([
+      { fila: 3, columna: "sku", valor: "NOEXISTE", motivo: "No existe ningún producto con este SKU." },
+    ]);
+  });
+
+  it("audita la actualización por producto, con precio antes/después", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+    productUpdateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 5,
+        sku: "VEL-1",
+        visibleEnCatalogo: true,
+        destacado: false,
+        orden: 0,
+        ...data,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+
+    await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "VEL-1", nombre: "Vela", descripcion: "d", precio: 1800, stock: 9 },
+        ]),
+        "p.xlsx",
+      );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ accion: "ACTUALIZAR_MASIVO", entidad: "Producto", entidadId: 5 }),
+      }),
+    );
+  });
+
+  it("audita IMPORTAR_MASIVO para el creado y ACTUALIZAR_MASIVO para el actualizado, en el mismo lote", async () => {
+    productFindManyMock.mockResolvedValue([{ id: 5, sku: "VEL-1", precio: decimal("1000"), stock: 2 }]);
+    productCreateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        ...data,
+        id: 99,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+    productUpdateMock.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 5,
+        sku: "VEL-1",
+        visibleEnCatalogo: true,
+        destacado: false,
+        orden: 0,
+        ...data,
+        precio: decimal(data.precio),
+        categoria: null,
+        fotos: [],
+        video: null,
+        caracteristicas: [],
+        listas: [],
+        especificaciones: [],
+      }),
+    );
+
+    await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([
+          { sku: "VEL-1", nombre: "Vela", descripcion: "d", precio: 1800, stock: 9 },
+          { sku: "", nombre: "Producto nuevo", descripcion: "d", precio: 500 },
+        ]),
+        "p.xlsx",
+      );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ accion: "ACTUALIZAR_MASIVO", entidad: "Producto", entidadId: 5 }),
+      }),
+    );
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ accion: "IMPORTAR_MASIVO", entidad: "Producto", entidadId: 99 }),
       }),
     );
   });

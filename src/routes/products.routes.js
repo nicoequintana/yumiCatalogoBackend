@@ -100,6 +100,10 @@ const router = Router();
 // reemplaza al viejo `?admin=1`, que otorgaba esa vista a cualquiera.
 router.get("/", authOpcional, productsController.listar);
 router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
+// `/export` alimenta el flujo de ACTUALIZACIÓN masiva (exportar -> editar a
+// mano -> volver a subir). Va ANTES de `GET /:id`, mismo motivo que
+// `/import/template`: si no, Express matchea "export" como el `:id`.
+router.get("/export", requireAuth, productsImportController.exportar);
 // Los dos proxies de media también llevan `authOpcional`: la media de un
 // producto oculto no puede seguir siendo pública solo porque se la pida por
 // otra URL. Siguen sirviendo a visitantes anónimos —las fotos de un producto
@@ -116,6 +120,9 @@ router.post("/import", requireAuth, uploadXlsx, productsImportController.importa
 // pisotón que ya evita `/import` unas líneas más arriba.
 router.post("/eliminar-masivo", requireAuth, productsController.eliminarMasivo);
 router.patch("/visibilidad-masiva", requireAuth, productsController.actualizarVisibilidadMasiva);
+// Actualización masiva por planilla (matcheo por SKU, nunca crea). Mismo
+// multer `uploadXlsx` que `/import`.
+router.post("/actualizar-masivo", requireAuth, uploadXlsx, productsImportController.actualizarMasivo);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 // `authOpcional` también acá: los dos endpoints siguen siendo públicos, pero
 // necesitan saber si el llamador es admin para aplicar la misma paridad de 404
