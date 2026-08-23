@@ -1,4 +1,5 @@
 import { subtotalDeItem, totalDeItems } from "./dinero.js";
+import { ETIQUETA_ESTADO } from "./estadosOrden.js";
 
 /**
  * Plantillas de los mails transaccionales de órdenes.
@@ -178,6 +179,127 @@ export function plantillaOrdenCreadaCliente(orden) {
       <p style="margin:24px 0 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;line-height:1.6;">
         Tu pedido está pendiente de confirmación. Te vamos a avisar por este medio en cuanto cambie de estado.
       </p>`,
+  });
+
+  return { asunto, texto, html };
+}
+
+/**
+ * Texto introductorio de cada estado. Un pedido cancelado no puede leerse con
+ * el mismo tono que uno entregado, así que el copy no se genera a partir de
+ * la etiqueta: se escribe uno por estado.
+ */
+const INTRO_POR_ESTADO = {
+  PENDIENTE: "Tu pedido volvió a quedar pendiente de confirmación.",
+  CONFIRMADA: "¡Confirmamos tu pedido! Ya lo estamos procesando.",
+  EN_PREPARACION: "Estamos preparando tu pedido.",
+  ENTREGADA: "¡Tu pedido fue entregado! Gracias por comprar en YIMA.",
+  CANCELADA: "Tu pedido fue cancelado. Si no esperabas esto, escribinos y lo vemos.",
+};
+
+/**
+ * Mail interno a YIMA cuando entra una orden. El asunto lleva nombre y DNI
+ * para que la bandeja se pueda escanear sin abrir nada.
+ *
+ * `urlOrden` la arma el llamador (necesita `FRONTEND_URL`, que es entorno):
+ * esta función se mantiene pura.
+ *
+ * @param {{id: number, notas: string|null, cliente: object, items: Array}} orden
+ * @param {{urlOrden: string}} opciones
+ * @returns {{asunto: string, texto: string, html: string}}
+ */
+export function plantillaOrdenCreadaAdmin(orden, { urlOrden }) {
+  const { cliente } = orden;
+  const asunto = `Nueva orden #${orden.id} — ${cliente.nombre} (DNI ${cliente.dni})`;
+  const email = cliente.email ?? "—";
+
+  const texto = [
+    `Entró una orden nueva: #${orden.id}`,
+    "",
+    "CLIENTE",
+    `Nombre: ${cliente.nombre}`,
+    `DNI: ${cliente.dni}`,
+    `Teléfono: ${cliente.telefono}`,
+    `Email: ${email}`,
+    "",
+    "PEDIDO",
+    itemsComoTexto(orden.items),
+    "",
+    `Total: ${formatearMonto(totalDeItems(orden.items))}`,
+    orden.notas ? `\nNotas del cliente: ${orden.notas}` : "",
+    "",
+    `Ver en el panel: ${urlOrden}`,
+  ].join("\n");
+
+  const html = envolver({
+    titulo: `Nueva orden #${orden.id}`,
+    cuerpo: `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 24px;">
+        <tr><td style="padding:2px 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;width:90px;">Nombre</td><td style="padding:2px 0;color:${COLOR_TEXTO};font-size:14px;">${escaparHtml(cliente.nombre)}</td></tr>
+        <tr><td style="padding:2px 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;">DNI</td><td style="padding:2px 0;color:${COLOR_TEXTO};font-size:14px;">${escaparHtml(cliente.dni)}</td></tr>
+        <tr><td style="padding:2px 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;">Teléfono</td><td style="padding:2px 0;color:${COLOR_TEXTO};font-size:14px;">${escaparHtml(cliente.telefono)}</td></tr>
+        <tr><td style="padding:2px 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;">Email</td><td style="padding:2px 0;color:${COLOR_TEXTO};font-size:14px;">${escaparHtml(email)}</td></tr>
+      </table>
+      ${tablaDeItems(orden.items)}
+      ${
+        orden.notas
+          ? `<p style="margin:16px 0 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;"><strong style="color:${COLOR_TEXTO};">Notas del cliente:</strong> ${escaparHtml(orden.notas)}</p>`
+          : ""
+      }
+      <p style="margin:28px 0 0;">
+        <a href="${escaparHtml(urlOrden)}" style="display:inline-block;background-color:${COLOR_PRIMARIO};color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:15px;font-weight:bold;">
+          Ver la orden en el panel
+        </a>
+      </p>`,
+  });
+
+  return { asunto, texto, html };
+}
+
+/**
+ * Mail al cliente cuando el admin cambia el estado de su orden.
+ *
+ * `orden.estado` ya es el estado NUEVO — la orden que llega acá es la que
+ * devolvió la transacción del PATCH, no la anterior.
+ *
+ * Repite el detalle completo del pedido a propósito: el mail tiene que
+ * entenderse solo, sin obligar a buscar el de la confirmación.
+ *
+ * @param {{id: number, estado: string, cliente: object, items: Array}} orden
+ * @returns {{asunto: string, texto: string, html: string}}
+ */
+export function plantillaCambioEstadoCliente(orden) {
+  const etiqueta = ETIQUETA_ESTADO[orden.estado] ?? orden.estado;
+  const asunto = `Tu pedido #${orden.id} está ${etiqueta.toLowerCase()}`;
+  const intro = INTRO_POR_ESTADO[orden.estado] ?? `Tu pedido cambió de estado: ${etiqueta}.`;
+
+  const texto = [
+    `Hola ${orden.cliente.nombre},`,
+    "",
+    intro,
+    "",
+    `Estado actual del pedido #${orden.id}: ${etiqueta}`,
+    "",
+    "Detalle:",
+    itemsComoTexto(orden.items),
+    "",
+    `Total: ${formatearMonto(totalDeItems(orden.items))}`,
+    "",
+    "Gracias por comprar en YIMA.",
+  ].join("\n");
+
+  const html = envolver({
+    titulo: `Tu pedido #${orden.id} está ${etiqueta.toLowerCase()}`,
+    cuerpo: `
+      <p style="margin:0 0 16px;color:${COLOR_TEXTO};font-size:16px;">
+        Hola ${escaparHtml(orden.cliente.nombre)}, ${escaparHtml(intro)}
+      </p>
+      <p style="margin:0 0 24px;">
+        <span style="display:inline-block;background-color:${COLOR_FONDO};border:1px solid ${COLOR_BORDE};color:${COLOR_PRIMARIO};padding:8px 16px;border-radius:999px;font-size:14px;font-weight:bold;">
+          ${escaparHtml(etiqueta)}
+        </span>
+      </p>
+      ${tablaDeItems(orden.items)}`,
   });
 
   return { asunto, texto, html };

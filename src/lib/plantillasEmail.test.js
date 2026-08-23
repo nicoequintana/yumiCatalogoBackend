@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   escaparHtml,
   formatearMonto,
+  plantillaCambioEstadoCliente,
+  plantillaOrdenCreadaAdmin,
   plantillaOrdenCreadaCliente,
 } from "./plantillasEmail.js";
 import { Decimal } from "@prisma/client/runtime/client.js";
+import { ESTADOS_ORDEN } from "./estadosOrden.js";
 
 const ORDEN = {
   id: 42,
@@ -96,5 +99,65 @@ describe("plantillaOrdenCreadaCliente", () => {
     expect(html).not.toContain("display: flex");
     expect(html).not.toContain("display:grid");
     expect(html).not.toContain("<link");
+  });
+});
+
+describe("plantillaOrdenCreadaAdmin", () => {
+  const OPCIONES = { urlOrden: "https://yima.test/catalogo/admin/ordenes/42" };
+
+  it("pone nombre y DNI del cliente en el asunto, para escanear la bandeja", () => {
+    expect(plantillaOrdenCreadaAdmin(ORDEN, OPCIONES).asunto).toBe(
+      "Nueva orden #42 — Juan Pérez (DNI 12345678)",
+    );
+  });
+
+  it("incluye el link directo al detalle en el panel", () => {
+    const { texto, html } = plantillaOrdenCreadaAdmin(ORDEN, OPCIONES);
+    expect(texto).toContain(OPCIONES.urlOrden);
+    expect(html).toContain(`href="${OPCIONES.urlOrden}"`);
+  });
+
+  it("incluye los datos de contacto que el mail al cliente no necesita", () => {
+    const { texto } = plantillaOrdenCreadaAdmin(ORDEN, OPCIONES);
+    expect(texto).toContain("1122334455");
+    expect(texto).toContain("juan@gmail.com");
+  });
+
+  it("muestra un guion cuando el cliente no dejó email", () => {
+    const sinEmail = { ...ORDEN, cliente: { ...ORDEN.cliente, email: null } };
+    expect(plantillaOrdenCreadaAdmin(sinEmail, OPCIONES).texto).toContain("Email: —");
+  });
+
+  it("calcula el total con Decimal", () => {
+    expect(plantillaOrdenCreadaAdmin(ORDEN, OPCIONES).texto).toContain("$33.001,00");
+  });
+});
+
+describe("plantillaCambioEstadoCliente", () => {
+  it("usa la etiqueta legible del estado en el asunto", () => {
+    const enPreparacion = { ...ORDEN, estado: "EN_PREPARACION" };
+    expect(plantillaCambioEstadoCliente(enPreparacion).asunto).toBe(
+      "Tu pedido #42 está en preparación",
+    );
+  });
+
+  it("cubre los cinco estados sin devolver undefined en el asunto", () => {
+    for (const estado of ESTADOS_ORDEN) {
+      const { asunto } = plantillaCambioEstadoCliente({ ...ORDEN, estado });
+      expect(asunto).not.toContain("undefined");
+      expect(asunto.startsWith("Tu pedido #42 está ")).toBe(true);
+    }
+  });
+
+  it("le da a CANCELADA un texto distinto del de ENTREGADA", () => {
+    const cancelada = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CANCELADA" });
+    const entregada = plantillaCambioEstadoCliente({ ...ORDEN, estado: "ENTREGADA" });
+    expect(cancelada.texto).not.toBe(entregada.texto);
+  });
+
+  it("repite el detalle de la orden para que el mail se entienda solo", () => {
+    const { texto } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" });
+    expect(texto).toContain("Lámpara de sal");
+    expect(texto).toContain("$33.001,00");
   });
 });
