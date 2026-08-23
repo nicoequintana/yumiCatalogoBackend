@@ -110,6 +110,12 @@ router.get("/:id/video", authOpcional, productsMediaController.streamVideo);
 router.get("/:id/fotos/:fotoId", authOpcional, productsMediaController.streamFoto);
 router.get("/:id", authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
+// Acciones masivas del listado del admin. Van ANTES de cualquier ruta `/:id`
+// del mismo método: si se declararan después, Express matchearía
+// "eliminar-masivo" como un id y el handler correcto nunca correría. Mismo
+// pisotón que ya evita `/import` unas líneas más arriba.
+router.post("/eliminar-masivo", requireAuth, productsController.eliminarMasivo);
+router.patch("/visibilidad-masiva", requireAuth, productsController.actualizarVisibilidadMasiva);
 router.post("/", requireAuth, uploadFields, productsController.crear);
 // `authOpcional` también acá: los dos endpoints siguen siendo públicos, pero
 // necesitan saber si el llamador es admin para aplicar la misma paridad de 404

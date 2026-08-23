@@ -844,39 +844,47 @@ export async function eliminar(req, res, next) {
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
 
-    // Pre-chequeo del historial de ventas, mismo criterio que
-    // `categorias.controller.js` con los productos de una categoría.
-    //
-    // `ItemOrden.product` es `onDelete: NoAction`, así que borrar un producto
-    // vendido explota con el error P2003 de Prisma (violación de FK), que el
-    // error handler central de `server.js` no mapea: al admin le llegaba un
-    // 500 con "Error interno del servidor." y ninguna pista de qué hacer.
-    // Preguntando primero se responde un 400 que explica el problema y ofrece
-    // la salida correcta (ocultarlo del catálogo en vez de borrarlo).
-    //
-    // El conteo es barato: `ItemOrden.productId` está indexado.
-    const cantidadVentas = await prisma.itemOrden.count({ where: { productId: id } });
-    if (cantidadVentas > 0) {
-      throw httpError(
-        400,
-        `No se puede eliminar: el producto aparece en ${cantidadVentas} ${cantidadVentas === 1 ? "orden" : "órdenes"} de compra. ` +
-          "Para sacarlo del catálogo sin perder el historial de ventas, ocultalo desde el listado de productos.",
-      );
-    }
+    // Sin pre-chequeo de ventas: `ItemOrden.productId` es nullable con
+    // `onDelete: SetNull`, así que la base desliga las líneas históricas sola
+    // y ya no hay P2003 que anticipar. Antes se contaba `ItemOrden` para
+    // devolver un 400 explicativo, y eso volvía imborrable a cualquier
+    // producto que apareciera en una orden — incluidas las CANCELADAS.
+    await borrarFilaYLimpiarMedia(producto, req);
 
-    // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
-    await prisma.product.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
 
-    // Se audita apenas la fila se borró, antes de la limpieza de media: el
-    // borrado ya es irreversible en este punto, y la limpieza de Cloudinary/
-    // Drive puede fallar sin invalidar el hecho de que el producto se eliminó.
-    logAudit(req, {
-      accion: "ELIMINAR",
-      entidad: "Producto",
-      entidadId: id,
-      detalle: { nombre: producto.nombre, sku: producto.sku },
-    });
+/**
+ * Borra la fila del producto, la audita y barre su media remota.
+ *
+ * Extraído para que el borrado individual (`eliminar`) y el masivo
+ * (`eliminarMasivo`) compartan exactamente el mismo orden de operaciones. Es
+ * la parte sutil del borrado —el barrido de archivos antes que el de la
+ * carpeta, la auditoría antes que la limpieza— y tenerla dos veces sería
+ * tenerla mal en una de las dos en cuanto alguien toque una.
+ *
+ * NO valida el historial de ventas: cada llamador decide qué hacer con un
+ * producto vendido (el individual tira 400, el masivo lo informa como
+ * rechazado y sigue con el resto).
+ */
+async function borrarFilaYLimpiarMedia(producto, req) {
+  // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
+  await prisma.product.delete({ where: { id: producto.id } });
 
+  // Se audita apenas la fila se borró, antes de la limpieza de media: el
+  // borrado ya es irreversible en este punto, y la limpieza de Cloudinary/
+  // Drive puede fallar sin invalidar el hecho de que el producto se eliminó.
+  logAudit(req, {
+    accion: "ELIMINAR",
+    entidad: "Producto",
+    entidadId: producto.id,
+    detalle: { nombre: producto.nombre, sku: producto.sku },
+  });
+
+  {
     // Always sweep individual files first — a product may have a
     // driveFolderId AND still have some fotos/video whose driveFileId
     // predates that folder (e.g. a legacy product that was edited once
@@ -912,8 +920,128 @@ export async function eliminar(req, res, next) {
         .eliminarCarpeta(carpetaCloudinary)
         .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req)),
     ]);
+  }
+}
 
-    res.json({ ok: true });
+/**
+ * Valida la lista de ids de una acción masiva del admin.
+ *
+ * Comparte `MAX_IDS_LISTADO` con `?ids=` del listado a propósito: es el mismo
+ * techo de "cuántas cosas puede nombrar un cliente en un pedido", y tenerlo
+ * dos veces sería tenerlo distinto en cuanto alguien mueva uno.
+ *
+ * Una lista vacía es un 400, no un no-op silencioso: si la pantalla mandó un
+ * lote vacío hay un bug en la selección, y devolver `{ actualizados: 0 }`
+ * lo escondería detrás de un cartel de éxito.
+ */
+function parsearIdsMasivos(valor) {
+  if (!Array.isArray(valor)) {
+    throw httpError(400, "Se espera una lista de ids de producto.");
+  }
+  if (valor.length === 0) {
+    throw httpError(400, "No se seleccionó ningún producto.");
+  }
+  if (valor.length > MAX_IDS_LISTADO) {
+    throw httpError(400, `No se pueden procesar más de ${MAX_IDS_LISTADO} productos a la vez.`);
+  }
+
+  const ids = valor.map(Number);
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw httpError(400, "La lista contiene ids de producto inválidos.");
+  }
+
+  return [...new Set(ids)];
+}
+
+/**
+ * Oculta o muestra varios productos de una sola vez, desde los checkbox del
+ * listado del admin.
+ *
+ * Es un único `updateMany` porque no hay nada por producto que decidir: la
+ * visibilidad no depende del estado anterior ni puede fallar parcialmente.
+ * El borrado masivo, en cambio, sí es parcial por naturaleza — ver
+ * `eliminarMasivo`.
+ */
+export async function actualizarVisibilidadMasiva(req, res, next) {
+  try {
+    const ids = parsearIdsMasivos(req.body?.ids);
+    const { visible } = req.body ?? {};
+    if (typeof visible !== "boolean") {
+      throw httpError(400, "El campo 'visible' debe ser true o false.");
+    }
+
+    const { count } = await prisma.product.updateMany({
+      where: { id: { in: ids } },
+      data: { visibleEnCatalogo: visible },
+    });
+
+    // Un renglón de auditoría POR PRODUCTO, no uno por lote: la pregunta que
+    // se le hace después a `AuditLog` es "¿quién ocultó ESTE producto?", y un
+    // único registro con una lista adentro no la contesta sin parsear JSON.
+    for (const id of ids) {
+      logAudit(req, {
+        accion: "ACTUALIZAR_VISIBILIDAD",
+        entidad: "Producto",
+        entidadId: id,
+        detalle: { visibleEnCatalogo: visible, masivo: true },
+      });
+    }
+
+    res.json({ actualizados: count });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Elimina varios productos seleccionados en el listado del admin.
+ *
+ * **Este endpoint es parcial POR DISEÑO, y esa es su razón de existir.**
+ * `ItemOrden.product` es `onDelete: NoAction`, así que un producto que
+ * aparece en cualquier orden NO se puede borrar. En una selección grande eso
+ * es lo habitual, no la excepción — por eso la respuesta separa `eliminados`
+ * de `rechazados` con su motivo, y la pantalla lo muestra tal cual. Un
+ * `{ ok: true }` después de borrar 38 de 50 le haría creer al admin que
+ * limpió el catálogo cuando no.
+ *
+ * Se procesa SECUENCIALMENTE, no con `Promise.all`: cada borrado barre hasta
+ * once archivos de Cloudinary más la carpeta del producto, y cien en paralelo
+ * castigan a la vez a la base y a la API de Cloudinary. Es una acción de
+ * admin, no una ruta caliente: la latencia importa mucho menos que no
+ * derribar nada.
+ */
+export async function eliminarMasivo(req, res, next) {
+  try {
+    const ids = parsearIdsMasivos(req.body?.ids);
+
+    const productos = await prisma.product.findMany({
+      where: { id: { in: ids } },
+      include: PRODUCT_INCLUDE,
+    });
+    const porId = new Map(productos.map((p) => [p.id, p]));
+
+    const eliminados = [];
+    const rechazados = [];
+
+    // Se itera sobre `ids` y no sobre `productos` para que un id inexistente
+    // aparezca como rechazado con su motivo, en vez de desaparecer del
+    // informe: "pedí borrar 5 y me contestaron por 4" es peor que un error.
+    for (const id of ids) {
+      const producto = porId.get(id);
+      if (!producto) {
+        rechazados.push({ id, nombre: null, motivo: "El producto no existe." });
+        continue;
+      }
+
+      // El historial de ventas ya no rechaza nada: `onDelete: SetNull` desliga
+      // las líneas y la orden conserva sus snapshots. `rechazados` sobrevive
+      // porque un id inexistente sigue siendo un caso real que hay que
+      // informar en vez de tragarse.
+      await borrarFilaYLimpiarMedia(producto, req);
+      eliminados.push(id);
+    }
+
+    res.json({ eliminados, rechazados });
   } catch (err) {
     next(err);
   }
