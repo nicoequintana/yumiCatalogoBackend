@@ -263,14 +263,28 @@ export async function resumenVentas(req, res, next) {
         unidadesVendidas += item.cantidad;
 
         const facturacionItem = subtotales[indice];
-        const acumulado = porProducto.get(item.productId);
+
+        // Clave del agrupamiento: el id del producto, y el snapshot del nombre
+        // cuando ese id ya no existe.
+        //
+        // `ItemOrden.productId` es nullable desde que borrar un producto
+        // desliga sus líneas (`onDelete: SetNull`). Agrupar por `productId` a
+        // secas metía a TODOS los productos borrados en la misma entrada —la
+        // clave `null`— y sumaba la facturación de productos distintos bajo el
+        // nombre del primero que apareciera. Sin error y sin aviso: un número
+        // inventado en el ranking que mira el negocio.
+        const clave = item.productId ?? `eliminado:${item.nombreProducto}`;
+        const acumulado = porProducto.get(clave);
 
         if (acumulado) {
           acumulado.unidades += item.cantidad;
           acumulado.facturacion = acumulado.facturacion.plus(facturacionItem);
         } else {
-          porProducto.set(item.productId, {
-            productId: item.productId,
+          porProducto.set(clave, {
+            // Se emite `null`, no la clave sintética: para el consumidor
+            // "este producto ya no existe" y "este producto es el 7" son
+            // cosas distintas, y un id inventado sería peor que ninguno.
+            productId: item.productId ?? null,
             // Se usa el snapshot `nombreProducto`, no el nombre vivo del
             // producto, por la misma razón que el precio: la orden histórica
             // no se reescribe si el producto se renombra después.

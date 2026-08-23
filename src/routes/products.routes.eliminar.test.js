@@ -56,48 +56,18 @@ beforeEach(() => {
 });
 
 describe("DELETE /api/products/:id con historial de ventas", () => {
-  // `ItemOrden.product` es `onDelete: NoAction`, así que borrar un producto
-  // que aparece en alguna orden explota con el error P2003 de Prisma, que el
-  // error handler central no mapea: el admin veía "Error interno del
-  // servidor." sin ninguna pista de qué hacer. Mismo criterio de pre-chequeo
-  // que `categorias.controller.js` usa con los productos de una categoría.
-  it("devuelve 400 con un mensaje accionable si el producto tiene ventas", async () => {
+  // `ItemOrden.productId` es nullable con `onDelete: SetNull`: borrar un
+  // producto DESLIGA sus líneas históricas en vez de quedar bloqueado por
+  // ellas. La orden conserva su contenido legible gracias a los snapshots
+  // `nombreProducto` y `precioUnitario`.
+  //
+  // Antes acá había un pre-chequeo que devolvía 400 y recomendaba ocultar el
+  // producto. Se quitó a pedido explícito: volvía imborrable a cualquier
+  // producto que apareciera en una orden, incluidas las CANCELADAS, que este
+  // proyecto no cuenta como ventas.
+  it("borra el producto aunque aparezca en órdenes de compra", async () => {
     findUniqueMock.mockResolvedValue({ ...productoBase });
     itemOrdenCountMock.mockResolvedValue(3);
-
-    const res = await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/no se puede eliminar/i);
-    expect(res.body.error).toContain("3");
-    expect(res.body.error).toMatch(/ocult/i);
-    expect(res.body.error).toContain("órdenes");
-    expect(deleteMock).not.toHaveBeenCalled();
-  });
-
-  it("singulariza el mensaje cuando hay una sola venta", async () => {
-    findUniqueMock.mockResolvedValue({ ...productoBase });
-    itemOrdenCountMock.mockResolvedValue(1);
-
-    const res = await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("1 orden de compra");
-    expect(res.body.error).not.toContain("órdenes");
-  });
-
-  it("cuenta los ItemOrden del producto por su índice de productId", async () => {
-    findUniqueMock.mockResolvedValue({ ...productoBase });
-    itemOrdenCountMock.mockResolvedValue(0);
-
-    await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
-
-    expect(itemOrdenCountMock).toHaveBeenCalledWith({ where: { productId: 42 } });
-  });
-
-  it("borra normalmente cuando el producto no tiene ventas", async () => {
-    findUniqueMock.mockResolvedValue({ ...productoBase });
-    itemOrdenCountMock.mockResolvedValue(0);
     deleteMock.mockResolvedValue({ id: 42 });
 
     const res = await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
@@ -107,12 +77,32 @@ describe("DELETE /api/products/:id con historial de ventas", () => {
     expect(deleteMock).toHaveBeenCalledWith({ where: { id: 42 } });
   });
 
-  it("no cuenta ventas si el producto ni siquiera existe (404 primero)", async () => {
+  it("no consulta ItemOrden para decidir: la FK lo resuelve sola", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase });
+    deleteMock.mockResolvedValue({ id: 42 });
+
+    await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
+
+    expect(itemOrdenCountMock).not.toHaveBeenCalled();
+  });
+
+  it("borra normalmente cuando el producto no tiene ventas", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase });
+    deleteMock.mockResolvedValue({ id: 42 });
+
+    const res = await request(buildApp()).delete("/api/products/42").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(deleteMock).toHaveBeenCalledWith({ where: { id: 42 } });
+  });
+
+  it("responde 404 si el producto ni siquiera existe, sin borrar nada", async () => {
     findUniqueMock.mockResolvedValue(null);
 
     const res = await request(buildApp()).delete("/api/products/999").set("Authorization", authHeader);
 
     expect(res.status).toBe(404);
-    expect(itemOrdenCountMock).not.toHaveBeenCalled();
+    expect(deleteMock).not.toHaveBeenCalled();
   });
 });
