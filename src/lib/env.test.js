@@ -7,6 +7,9 @@ const entornoCompleto = {
   CLOUDINARY_CLOUD_NAME: "yima",
   CLOUDINARY_API_KEY: "123",
   CLOUDINARY_API_SECRET: "abc",
+  SMTP_USER: "yimaproductos@gmail.com",
+  SMTP_PASSWORD: "abcdefghijklmnop",
+  MAIL_ADMIN_DESTINO: "yimaproductos@gmail.com",
 };
 
 describe("variablesFaltantes", () => {
@@ -22,6 +25,25 @@ describe("variablesFaltantes", () => {
       "CLOUDINARY_CLOUD_NAME",
       "CLOUDINARY_API_KEY",
       "CLOUDINARY_API_SECRET",
+      "SMTP_USER",
+      "SMTP_PASSWORD",
+      "MAIL_ADMIN_DESTINO",
+    ]);
+  });
+
+  it("exige las tres variables de correo", () => {
+    const entorno = {
+      DATABASE_URL: "x",
+      JWT_SECRET: "x",
+      CLOUDINARY_CLOUD_NAME: "x",
+      CLOUDINARY_API_KEY: "x",
+      CLOUDINARY_API_SECRET: "x",
+    };
+
+    expect(variablesFaltantes(entorno)).toEqual([
+      "SMTP_USER",
+      "SMTP_PASSWORD",
+      "MAIL_ADMIN_DESTINO",
     ]);
   });
 
