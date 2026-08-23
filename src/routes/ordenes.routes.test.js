@@ -6,6 +6,26 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
+// `POST /api/ordenes` está detrás de un limitador de 10 solicitudes/10min con
+// store en memoria por proceso (ver rateLimit.middleware.js), y ese store es
+// un singleton de módulo: vive mientras dure este archivo, no se resetea test
+// a test. Este archivo ya hace más de 10 POST reales a lo largo de su propia
+// suite, así que sin este mock los últimos tests reciben 429 en vez del
+// status que en realidad están probando. El comportamiento del limitador
+// tiene su propia cobertura dedicada en rateLimit.middleware.test.js — acá
+// solo se neutraliza para no ensuciar tests que no son sobre rate limiting.
+vi.mock("../middlewares/rateLimit.middleware.js", () => ({
+  crearLimitadorDeVelocidad: () => (_req, _res, next) => next(),
+}));
+
+const notificarOrdenCreadaMock = vi.fn();
+const notificarCambioEstadoMock = vi.fn();
+
+vi.mock("../services/notificacionesOrden.service.js", () => ({
+  notificarOrdenCreada: (...args) => notificarOrdenCreadaMock(...args),
+  notificarCambioEstado: (...args) => notificarCambioEstadoMock(...args),
+}));
+
 const clienteFindUniqueMock = vi.fn();
 const clienteCreateMock = vi.fn();
 const clienteUpdateMock = vi.fn();
@@ -87,7 +107,7 @@ const PRODUCTO_DISPONIBLE = {
   stock: 10,
 };
 
-const CLIENTE = { id: 10, dni: "12345678", nombre: "Juan Perez", telefono: "1122334455", email: null };
+const CLIENTE = { id: 10, dni: "12345678", nombre: "Juan Perez", telefono: "1122334455", email: "juan@gmail.com" };
 
 const ORDEN = {
   id: 100,
@@ -124,6 +144,10 @@ beforeEach(() => {
   ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   eventoTraficoCreateMock.mockResolvedValue({});
+  notificarOrdenCreadaMock.mockReset();
+  notificarOrdenCreadaMock.mockResolvedValue(undefined);
+  notificarCambioEstadoMock.mockReset();
+  notificarCambioEstadoMock.mockResolvedValue({ intentada: true, enviada: true });
 });
 
 describe("POST /api/ordenes", () => {
@@ -139,6 +163,7 @@ describe("POST /api/ordenes", () => {
         dni: "12345678",
         nombre: "Juan Perez",
         telefono: "1122334455",
+        email: "juan@gmail.com",
         items: [{ productId: 1, cantidad: 1 }],
       });
 
@@ -162,6 +187,7 @@ describe("POST /api/ordenes", () => {
         dni: "12345678",
         nombre: "Juan Perez",
         telefono: "1122334455",
+        email: "juan@gmail.com",
         items: [{ productId: 999, cantidad: 1 }],
       });
 
@@ -330,6 +356,7 @@ describe("auditoría de órdenes", () => {
         dni: "12345678",
         nombre: "Juan Perez",
         telefono: "1122334455",
+        email: "juan@gmail.com",
         items: [{ productId: 1, cantidad: 1 }],
       });
 
@@ -349,6 +376,7 @@ describe("auditoría de órdenes", () => {
         dni: "12345678",
         nombre: "Juan Perez",
         telefono: "1122334455",
+        email: "juan@gmail.com",
         items: [{ productId: 1, cantidad: 1 }],
       });
     await new Promise((resolve) => setImmediate(resolve));
@@ -374,6 +402,7 @@ describe("auditoría de órdenes", () => {
         dni: "12345678",
         nombre: "Juan Perez",
         telefono: "1122334455",
+        email: "juan@gmail.com",
         items: [{ productId: 1, cantidad: 1 }],
       });
     await new Promise((resolve) => setImmediate(resolve));
@@ -389,5 +418,66 @@ describe("auditoría de órdenes", () => {
     await request(buildApp()).get("/api/ordenes").set("Authorization", authHeader);
 
     expect(auditCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/ordenes — email obligatorio y notificaciones", () => {
+  const BODY_VALIDO = {
+    dni: "12345678",
+    nombre: "Juan Perez",
+    telefono: "1122334455",
+    email: "juan@gmail.com",
+    items: [{ productId: 1, cantidad: 1 }],
+  };
+
+  function prepararAltaExitosa() {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN);
+  }
+
+  it("rechaza con 400 si falta el email", async () => {
+    const { email, ...sinEmail } = BODY_VALIDO;
+
+    const res = await request(buildApp()).post("/api/ordenes").send(sinEmail);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El email es obligatorio.");
+  });
+
+  it("rechaza con 400 si el email tiene formato inválido", async () => {
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .send({ ...BODY_VALIDO, email: "juan-arroba-gmail" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El email no tiene un formato válido.");
+  });
+
+  it("no toca la base cuando el email es inválido", async () => {
+    await request(buildApp()).post("/api/ordenes").send({ ...BODY_VALIDO, email: "roto" });
+
+    expect(productFindManyMock).not.toHaveBeenCalled();
+    expect(ordenCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("dispara las notificaciones con la orden creada", async () => {
+    prepararAltaExitosa();
+
+    const res = await request(buildApp()).post("/api/ordenes").send(BODY_VALIDO);
+
+    expect(res.status).toBe(201);
+    expect(notificarOrdenCreadaMock).toHaveBeenCalledWith(ORDEN);
+  });
+
+  it("responde 201 aunque el envío de correo falle", async () => {
+    prepararAltaExitosa();
+    notificarOrdenCreadaMock.mockRejectedValue(new Error("SMTP caído"));
+
+    const res = await request(buildApp()).post("/api/ordenes").send(BODY_VALIDO);
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe(100);
   });
 });

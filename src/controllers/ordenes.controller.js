@@ -5,6 +5,8 @@ import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
+import { esEmailValido } from "../lib/emailValido.js";
+import { notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
 
 const MAX_INTENTOS_DNI = 5;
 
@@ -16,11 +18,16 @@ export const MAX_CANTIDAD_POR_ITEM = 999;
 
 /**
  * Valida los campos requeridos del body de creación de orden (checkout de
- * invitado): dni/nombre/telefono/items no vacíos. email y notas son
- * opcionales. Manual validation, sin Zod/Joi — sigue el mismo estilo que
+ * invitado): dni/nombre/telefono/email/items no vacíos. `notas` es el único
+ * opcional. Manual validation, sin Zod/Joi — sigue el mismo estilo que
  * `products.controller.js`'s `validarCamposBase`.
+ *
+ * El email es obligatorio desde que el checkout manda comprobante por correo:
+ * sin él, la orden no es notificable ni al crearse ni al cambiar de estado.
+ * La columna `Cliente.email` sigue siendo nullable — hay clientes históricos
+ * anteriores a esta regla —, así que la obligatoriedad la impone la API.
  */
-function validarCamposBase({ dni, nombre, telefono, items }) {
+function validarCamposBase({ dni, nombre, telefono, email, items }) {
   if (typeof dni !== "string" || dni.trim() === "") {
     throw httpError(400, "El DNI es obligatorio.");
   }
@@ -29,6 +36,12 @@ function validarCamposBase({ dni, nombre, telefono, items }) {
   }
   if (typeof telefono !== "string" || telefono.trim() === "") {
     throw httpError(400, "El teléfono es obligatorio.");
+  }
+  if (typeof email !== "string" || email.trim() === "") {
+    throw httpError(400, "El email es obligatorio.");
+  }
+  if (!esEmailValido(email)) {
+    throw httpError(400, "El email no tiene un formato válido.");
   }
   if (!Array.isArray(items) || items.length === 0) {
     throw httpError(400, "Debe incluir al menos un producto en la orden.");
@@ -159,7 +172,7 @@ export async function crear(req, res, next) {
   try {
     const { dni, nombre, telefono, email, notas, items } = req.body;
 
-    validarCamposBase({ dni, nombre, telefono, items });
+    validarCamposBase({ dni, nombre, telefono, email, items });
 
     const dniNormalizado = normalizarDni(dni);
     if (!esDniValido(dniNormalizado)) {
@@ -192,6 +205,13 @@ export async function crear(req, res, next) {
     // respuesta ya exitosa). Va sin `productId` a propósito: una orden puede
     // tener varios items, así que el evento es a nivel sitio, no de producto.
     logEvento({ tipo: "ORDEN_CREADA", ...headersDeEvento(req) });
+
+    // Fire-and-forget, mismo criterio que `logEvento` de arriba: la orden ya
+    // está creada y la respuesta no puede esperar a Gmail ni fallar por él.
+    // `notificarOrdenCreada` no lanza por diseño; el `.catch` está por si un
+    // cambio futuro la vuelve capaz de hacerlo — una promesa rechazada sin
+    // manejar tumba el proceso en Node.
+    notificarOrdenCreada(orden).catch(() => {});
 
     res.status(201).json(orden);
   } catch (err) {
