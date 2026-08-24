@@ -119,10 +119,83 @@ function listaDeProductos(productos, frontendUrl) {
     .join("")}</ul>`;
 }
 
+/**
+ * Copy y estructura de la home (`frontend/src/pages/Catalogo.jsx` +
+ * `frontend/src/constants/hero.js`), reescritos acá a mano.
+ *
+ * SYNC MANUAL entre repos, mismo criterio que `seo.cuerpo.js` ↔
+ * `FichaProducto.jsx` (regla de cloaking, spec §3 de la feature de SEO): el
+ * cuerpo que ve un crawler tiene que llevar el MISMO texto que ve una
+ * persona, empezando por el `<h1>`. Antes de esta feature Googlebot no
+ * estaba en la lista de bots, así que recibía la SPA entera y el
+ * renderizador de Google veía la home real; ahora se lo desvía acá, y si
+ * este texto queda desactualizado el crawler ve un `<h1>` que ya no existe
+ * en la página — la forma más literal de violar esa regla. Al cambiar el
+ * copy del hero o del manifiesto en el frontend, actualizar también acá.
+ */
+const HERO_TITULO = "Descubrí cosas que te hacen la vida más fácil.";
+const HERO_PARRAFO =
+  "En YIMA reunimos productos útiles, innovadores y con diseño que simplifican tu rutina y suman estilo a tu hogar, tu trabajo y tus momentos.";
+// Espeja `SENALES_CONFIANZA` de `frontend/src/constants/hero.js` — el
+// `texto` completo de cada señal (nunca `textoCompacto`, que es solo para la
+// tarjeta angosta de móvil).
+const SENALES_CONFIANZA_SEO = ["Productos seleccionados", "Útiles", "Diferentes", "Para vos o para regalar"];
+const MANIFIESTO_TITULO = "El Manifiesto YIMA";
+const MANIFIESTO_PARRAFO =
+  "No vendemos productos: elegimos piezas que valen la pena tener cerca. Cada cosa que entra al catálogo pasó antes por la misma pregunta que te hacemos a vos — ¿esto suma o solo ocupa lugar? Encontrá lo que buscabas, y de paso, algo que no sabías que te hacía falta.";
+
+/**
+ * Techo de destacados que se listan en el HTML de la home. Espeja
+ * `MAX_DESTACADOS` de `frontend/src/hooks/useDestacados.js` — mismo tope que
+ * ve el carrusel real, para que el crawler no descubra (ni deje de
+ * descubrir) productos que una persona no vería en esa sección.
+ */
+const MAX_DESTACADOS_SEO = 12;
+
+/**
+ * Piso para mostrar la sección de destacados. Espeja `MIN_DESTACADOS` de
+ * `useDestacados.js`: con menos, el carrusel real se oculta entero, así que
+ * el cuerpo del crawler tiene que ocultar la sección también — mostrarla
+ * igual sería contenido que ninguna persona ve en la home.
+ */
+const MIN_DESTACADOS_SEO = 4;
+
+function cuerpoHome(destacados, frontendUrl) {
+  const senales = `<ul>${SENALES_CONFIANZA_SEO.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`;
+
+  const seccionDestacados =
+    destacados.length >= MIN_DESTACADOS_SEO
+      ? `<section><h2>Hallazgos del día</h2>${listaDeProductos(destacados, frontendUrl)}</section>`
+      : "";
+
+  return [
+    `<h1>${escapeHtml(HERO_TITULO)}</h1>`,
+    `<p>${escapeHtml(HERO_PARRAFO)}</p>`,
+    senales,
+    `<p><a href="${frontendUrl}/coleccion">Ver productos</a></p>`,
+    seccionDestacados,
+    `<h2>${escapeHtml(MANIFIESTO_TITULO)}</h2>`,
+    `<p>${escapeHtml(MANIFIESTO_PARRAFO)}</p>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function servirSeoHome(req, res, next) {
   try {
     const { frontendUrl } = urls();
     if (!esBot(req.headers["user-agent"])) return res.redirect(302, `${frontendUrl}/`);
+
+    // Mismo filtro y mismo orden que ve una persona: `useDestacados.js` pide
+    // `destacado=1` contra `GET /products`, cuyo default de orden
+    // (`merchandising`) es `[{orden:"asc"},{createdAt:"desc"}]` — ver
+    // `ORDENES_LISTADO` en `products.controller.js`.
+    const destacados = await prisma.product.findMany({
+      where: { destacado: true, visibleEnCatalogo: true, stock: { gt: 0 } },
+      orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
+      take: MAX_DESTACADOS_SEO,
+      select: { id: true, nombre: true, precio: true },
+    });
 
     const html = renderHtmlSeo({
       titulo: `${SITE_NAME} — Productos útiles, innovadores y con diseño`,
@@ -131,7 +204,7 @@ export async function servirSeoHome(req, res, next) {
       canonical: `${frontendUrl}/`,
       imagen: `${frontendUrl}/og-default.png`,
       bloquesJsonLd: [jsonLdOrganizacion({ frontendUrl })],
-      cuerpo: `<h1>${SITE_NAME}</h1><p>Productos útiles, innovadores y con diseño.</p>`,
+      cuerpo: cuerpoHome(destacados, frontendUrl),
     });
 
     res.status(200).type("html").send(html);
@@ -166,7 +239,13 @@ async function servirListado(res, { categoria }) {
       stock: { gt: 0 },
       ...(categoria ? { categoriaId: categoria.id } : {}),
     },
-    orderBy: [{ orden: "asc" }, { id: "asc" }],
+    // Mismo orden que ve una persona en `/coleccion`: el default
+    // `merchandising` de `GET /products` (`ORDENES_LISTADO` en
+    // `products.controller.js`). `orden` vale 0 para todo producto que el
+    // admin no reordenó a mano, así que el desempate decide todo — con
+    // `{ id: "asc" }` el crawler vería los más VIEJOS primero mientras la
+    // persona ve los más nuevos.
+    orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
     take: MAX_PRODUCTOS_LISTADO_SEO,
     select: { id: true, nombre: true, precio: true },
   });

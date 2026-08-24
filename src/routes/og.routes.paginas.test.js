@@ -44,6 +44,49 @@ describe("GET /og/home", () => {
     expect(res.text).toContain('"@type":"Organization"');
     expect(res.text).not.toContain("noindex");
   });
+
+  it("emite el MISMO <h1> y el mismo copy que la home real, no un resumen (regla de cloaking)", async () => {
+    const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
+
+    // Mismo texto que `frontend/src/pages/Catalogo.jsx` y
+    // `frontend/src/constants/hero.js` — antes de este fix el cuerpo emitía
+    // `<h1>YIMA</h1>`, un h1 que la persona nunca ve.
+    expect(res.text).toContain("<h1>Descubrí cosas que te hacen la vida más fácil.</h1>");
+    expect(res.text).toContain(
+      "En YIMA reunimos productos útiles, innovadores y con diseño que simplifican tu rutina",
+    );
+    expect(res.text).toContain("Productos seleccionados");
+    expect(res.text).toContain("El Manifiesto YIMA");
+    expect(res.text).toContain("elegimos piezas que valen la pena tener cerca");
+    // Grafo interno: un link a la colección, aunque no haya destacados.
+    expect(res.text).toContain('href="https://yima.example.com/coleccion"');
+  });
+
+  it("oculta la sección de destacados por debajo de MIN_DESTACADOS, igual que el carrusel real", async () => {
+    // El mock por defecto de este archivo devuelve un solo producto.
+    const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
+
+    expect(res.text).not.toContain("Hallazgos del día");
+    expect(res.text).not.toContain("Set de cuchillos");
+  });
+
+  it("lista los destacados con sus links cuando hay 4 o más", async () => {
+    productFindManyMock.mockResolvedValue([
+      { id: 1, nombre: "Set de cuchillos", precio: { toString: () => "45000.00" } },
+      { id: 2, nombre: "Tabla de madera", precio: { toString: () => "12000.00" } },
+      { id: 3, nombre: "Organizador", precio: { toString: () => "8000.00" } },
+      { id: 4, nombre: "Lámpara", precio: { toString: () => "20000.00" } },
+    ]);
+
+    const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain("Hallazgos del día");
+    expect(res.text).toContain("/producto/1-set-de-cuchillos");
+    expect(res.text).toContain("/producto/4-lampara");
+
+    const [args] = productFindManyMock.mock.calls[0];
+    expect(args.where).toMatchObject({ destacado: true, visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
 });
 
 describe("GET /og/coleccion", () => {
