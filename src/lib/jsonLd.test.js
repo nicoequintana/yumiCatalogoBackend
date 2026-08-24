@@ -32,6 +32,7 @@ describe("jsonLdProducto", () => {
     expect(resultado.sku).toBe("YIMA-0012");
     expect(resultado.brand).toEqual({ "@type": "Brand", name: "YIMA" });
     expect(resultado.image).toEqual(["https://res.cloudinary.com/demo/a.jpg"]);
+    expect(resultado.category).toBe("Cocina");
   });
 
   it("emite el precio como string con dos decimales, nunca como número", () => {
