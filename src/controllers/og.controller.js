@@ -57,7 +57,7 @@ export async function servirOgProducto(req, res, next) {
       const html = renderOgHtml({
         title: SITE_NAME,
         description: "Catálogo online de YIMA Productos.",
-        image: `${frontendUrl}/og-default.svg`,
+        image: `${frontendUrl}/og-default.png`,
         url: productUrl,
       });
       res.status(200).type("html").send(html);

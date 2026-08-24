@@ -65,6 +65,13 @@ describe("resolverImagenOg", () => {
 
   it("cae al fallback del frontend cuando no hay fotos", () => {
     const producto = { id: 5, fotos: [] };
-    expect(resolverImagenOg(producto, urls)).toBe("https://aura.example.com/og-default.svg");
+    expect(resolverImagenOg(producto, urls)).toBe("https://aura.example.com/og-default.png");
+  });
+
+  it("el fallback es un mapa de bits, nunca un SVG", () => {
+    // Los scrapers de WhatsApp, Facebook, Twitter y LinkedIn no renderizan SVG
+    // como og:image: la tarjeta sale sin imagen. Este camino tuvo ese bug, y
+    // volver a un .svg lo reintroduce sin que nada más falle.
+    expect(resolverImagenOg({ id: 5, fotos: [] }, urls)).toMatch(/\.(png|jpe?g|webp)$/i);
   });
 });

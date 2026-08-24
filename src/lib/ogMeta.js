@@ -29,7 +29,12 @@ export function resolverImagenOg(producto, { frontendUrl, backendUrl }) {
   const fotos = [...(producto.fotos ?? [])].sort((a, b) => a.orden - b.orden);
   const primera = fotos[0];
 
-  if (!primera) return `${frontendUrl}/og-default.svg`;
+  // El fallback es un PNG y NO puede volver a ser un SVG: los scrapers de
+  // WhatsApp, Facebook, Twitter y LinkedIn no renderizan SVG como og:image, y
+  // la tarjeta sale sin imagen. Fue exactamente el bug que tenía este camino.
+  // Es el mismo archivo que usa el Open Graph del sitio en `frontend/index.html`
+  // — un producto sin foto y la home tienen la misma necesidad: mostrar la marca.
+  if (!primera) return `${frontendUrl}/og-default.png`;
   if (primera.cloudinaryPublicId) return primera.url;
   if (primera.driveFileId) return `${backendUrl}/api/products/${producto.id}/fotos/${primera.id}`;
   return primera.url;

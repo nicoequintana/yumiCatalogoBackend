@@ -13,7 +13,7 @@ import { ETIQUETA_ESTADO } from "./estadosOrden.js";
  * flexbox, grid, hojas externas ni clases — tablas con estilos inline y
  * colores hexadecimales literales. Esos hex son una COPIA MANUAL de la
  * paleta de `frontend/src/index.css`; si cambia la paleta, esto se actualiza
- * a mano (mismo criterio que `frontend/public/og-default.svg`).
+ * a mano (mismo criterio que `botDetector.js` ↔ `frontend/nginx.conf`).
  *
  * Siempre se emite `texto` además de `html`: es lo que ven los clientes que
  * no renderizan HTML, y su ausencia empeora la clasificación anti-spam.

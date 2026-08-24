@@ -69,7 +69,7 @@ describe("GET /og/producto/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain("YIMA Productos");
-    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(res.text).toContain("https://aura.example.com/og-default.png");
   });
 
   it("devuelve tags genéricos (200) para id no-numérico sin consultar Prisma", async () => {
@@ -79,7 +79,7 @@ describe("GET /og/producto/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain("YIMA Productos");
-    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(res.text).toContain("https://aura.example.com/og-default.png");
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
@@ -93,7 +93,7 @@ describe("GET /og/producto/:id", () => {
 
     expect(res.status).toBe(200);
     expect(res.text).toContain("YIMA Productos");
-    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(res.text).toContain("https://aura.example.com/og-default.png");
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
@@ -130,7 +130,7 @@ describe("GET /og/producto/:id", () => {
     expect(res.status).toBe(200);
     expect(res.text).not.toContain("Anillo Solitario");
     expect(res.text).toContain("YIMA Productos");
-    expect(res.text).toContain("https://aura.example.com/og-default.svg");
+    expect(res.text).toContain("https://aura.example.com/og-default.png");
   });
 
   it("tiene un rate limit cableado, laxo, que no molesta a los bots legítimos de previews", async () => {
