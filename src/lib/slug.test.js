@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slugify, parsearIdDeRuta, rutaProducto } from "./slug.js";
+import { slugify, parsearIdDeRuta, rutaProducto, rutaCategoria } from "./slug.js";
 
 describe("slugify", () => {
   it("pasa a minúsculas y reemplaza espacios por guiones", () => {
@@ -76,5 +76,24 @@ describe("rutaProducto", () => {
 
   it("omite el guion cuando el nombre no deja slug", () => {
     expect(rutaProducto({ id: 7, nombre: "!!!" })).toBe("/producto/7");
+  });
+});
+
+describe("rutaCategoria", () => {
+  it("arma la ruta con el slug del nombre", () => {
+    expect(rutaCategoria({ id: 3, nombre: "Cocina y hogar" })).toBe("/coleccion/categoria/cocina-y-hogar");
+  });
+
+  it("saca tildes y símbolos igual que slugify", () => {
+    expect(rutaCategoria({ id: 9, nombre: "Baño & jardín" })).toBe("/coleccion/categoria/bano-jardin");
+  });
+
+  it("devuelve null cuando el nombre no deja slug", () => {
+    // A diferencia de rutaProducto, acá no hay id en la URL para servir de
+    // fallback: sin slug no hay ruta posible, y el llamador tiene que omitir
+    // la entrada en vez de armar un "/coleccion/categoria/" ambiguo.
+    expect(rutaCategoria({ id: 5, nombre: "!!!" })).toBe(null);
+    expect(rutaCategoria({ id: 6, nombre: "" })).toBe(null);
+    expect(rutaCategoria({ id: 7 })).toBe(null);
   });
 });

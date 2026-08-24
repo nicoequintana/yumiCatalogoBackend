@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { slugify, rutaProducto } from "../lib/slug.js";
+import { rutaProducto, rutaCategoria } from "../lib/slug.js";
 
 /**
  * Tope de URLs de producto en el sitemap. El endpoint es público, sin auth y
@@ -43,7 +43,13 @@ export async function servirSitemap(req, res, next) {
     const urls = [
       entrada(`${frontendUrl}/`),
       entrada(`${frontendUrl}/coleccion`),
-      ...categorias.map((c) => entrada(`${frontendUrl}/coleccion/categoria/${slugify(c.nombre)}`)),
+      // `rutaCategoria` devuelve null cuando el nombre no deja slug (sin id
+      // en esa ruta no hay fallback posible) — se omite esa entrada en vez
+      // de publicar una URL ambigua.
+      ...categorias
+        .map((c) => rutaCategoria(c))
+        .filter((ruta) => ruta !== null)
+        .map((ruta) => entrada(`${frontendUrl}${ruta}`)),
       ...productos.map((p) => entrada(`${frontendUrl}${rutaProducto(p)}`, p.updatedAt.toISOString())),
     ];
 

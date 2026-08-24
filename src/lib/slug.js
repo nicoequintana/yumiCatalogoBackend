@@ -51,3 +51,18 @@ export function rutaProducto(producto) {
   const slug = slugify(producto.nombre);
   return slug ? `/producto/${producto.id}-${slug}` : `/producto/${producto.id}`;
 }
+
+/**
+ * A diferencia de `rutaProducto`, esta ruta NO lleva el `id` como prefijo
+ * (`/coleccion/categoria/:slugCategoria`, sin componente numérico) — así que
+ * no hay un fallback tipo "sin slug, mostrar el id pelado" al que recurrir.
+ * Si el nombre no deja slug (todo símbolos, o vacío), no hay forma de armar
+ * una ruta que distinga esa categoría de otra en la misma situación, y
+ * `/coleccion/categoria/` a secas sería una URL ambigua y rota. Por eso acá
+ * el contrato es: sin slug, no hay ruta — se devuelve `null` y el llamador
+ * decide qué hacer (omitir la entrada, típicamente).
+ */
+export function rutaCategoria(categoria) {
+  const slug = slugify(categoria?.nombre);
+  return slug ? `/coleccion/categoria/${slug}` : null;
+}

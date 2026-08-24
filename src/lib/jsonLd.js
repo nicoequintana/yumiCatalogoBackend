@@ -1,4 +1,4 @@
-import { slugify, rutaProducto } from "./slug.js";
+import { rutaProducto, rutaCategoria } from "./slug.js";
 
 /**
  * Datos estructurados schema.org del catálogo público.
@@ -64,10 +64,16 @@ export function jsonLdBreadcrumb(producto, { frontendUrl }) {
   ];
 
   if (producto.categoria?.nombre) {
-    niveles.push({
-      name: producto.categoria.nombre,
-      item: absoluta(frontendUrl, `/coleccion/categoria/${slugify(producto.categoria.nombre)}`),
-    });
+    // `rutaCategoria` devuelve null cuando el nombre no deja slug (sin id en
+    // esa ruta no hay fallback posible) — se omite el nivel en vez de armar
+    // un breadcrumb con una URL ambigua.
+    const rutaCat = rutaCategoria(producto.categoria);
+    if (rutaCat) {
+      niveles.push({
+        name: producto.categoria.nombre,
+        item: absoluta(frontendUrl, rutaCat),
+      });
+    }
   }
 
   niveles.push({
