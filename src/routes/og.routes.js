@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { servirSeoProducto } from "../controllers/seo.controller.js";
+import {
+  servirSeoProducto,
+  servirSeoHome,
+  servirSeoColeccion,
+  servirSeoCategoria,
+} from "../controllers/seo.controller.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 
 const router = Router();
@@ -16,6 +21,13 @@ const limitadorOg = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 
+// Las tres rutas de página van ANTES de `/producto/:idSlug`: si no, Express
+// matchea "home" o "coleccion" como si fueran el `:idSlug` de un producto
+// (mismo pisotón que documenta CLAUDE.md para `/products/import` y
+// `/products/eliminar-masivo`).
+router.get("/home", limitadorOg, servirSeoHome);
+router.get("/coleccion", limitadorOg, servirSeoColeccion);
+router.get("/categoria/:slug", limitadorOg, servirSeoCategoria);
 router.get("/producto/:idSlug", limitadorOg, servirSeoProducto);
 
 export default router;

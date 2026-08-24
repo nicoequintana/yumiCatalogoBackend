@@ -1,9 +1,9 @@
 import { prisma } from "../lib/prisma.js";
 import { esBot } from "../lib/botDetector.js";
 import { truncarDescripcion, resolverImagenOg } from "../lib/ogMeta.js";
-import { renderHtmlSeo } from "../lib/htmlSeo.js";
-import { jsonLdProducto, jsonLdBreadcrumb } from "../lib/jsonLd.js";
-import { parsearIdDeRuta, rutaProducto } from "../lib/slug.js";
+import { renderHtmlSeo, escapeHtml } from "../lib/htmlSeo.js";
+import { jsonLdProducto, jsonLdBreadcrumb, jsonLdOrganizacion, jsonLdColeccion } from "../lib/jsonLd.js";
+import { parsearIdDeRuta, rutaProducto, rutaCategoria, slugify } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";
 import { cuerpoProducto } from "./seo.cuerpo.js";
 import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
@@ -99,6 +99,132 @@ export async function servirSeoProducto(req, res, next) {
     });
 
     res.status(200).type("html").send(html);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Cuántos productos se listan en el HTML de una página de listado. Es lo que
+ * el crawler necesita para descubrir fichas; el resto lo alcanza por el
+ * sitemap. */
+const MAX_PRODUCTOS_LISTADO_SEO = 24;
+
+function listaDeProductos(productos, frontendUrl) {
+  if (productos.length === 0) return "<p>No hay productos para mostrar.</p>";
+  return `<ul>${productos
+    .map(
+      (p) =>
+        `<li><a href="${frontendUrl}${rutaProducto(p)}">${escapeHtml(p.nombre)}</a> — $${escapeHtml(p.precio.toString())}</li>`,
+    )
+    .join("")}</ul>`;
+}
+
+export async function servirSeoHome(req, res, next) {
+  try {
+    const { frontendUrl } = urls();
+    if (!esBot(req.headers["user-agent"])) return res.redirect(302, `${frontendUrl}/`);
+
+    const html = renderHtmlSeo({
+      titulo: `${SITE_NAME} — Productos útiles, innovadores y con diseño`,
+      descripcion:
+        "Productos útiles, innovadores y con diseño que simplifican tu rutina y suman estilo a tu hogar, tu trabajo y tus momentos.",
+      canonical: `${frontendUrl}/`,
+      imagen: `${frontendUrl}/og-default.png`,
+      bloquesJsonLd: [jsonLdOrganizacion({ frontendUrl })],
+      cuerpo: `<h1>${SITE_NAME}</h1><p>Productos útiles, innovadores y con diseño.</p>`,
+    });
+
+    res.status(200).type("html").send(html);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Sirve `/coleccion` y `/coleccion/categoria/:slug` con el mismo código: la
+ * única diferencia es el filtro y los textos. Solo necesita `res` — el
+ * llamador ya resolvió `categoria` y maneja sus propios errores.
+ */
+async function servirListado(res, { categoria }) {
+  const { frontendUrl } = urls();
+
+  // `rutaCategoria` puede devolver `null` si el nombre de la categoría no
+  // deja slug (símbolos, vacío) — mismo caso límite que documenta
+  // `Coleccion.jsx` del frontend (`rutaCanonica`). No alcanzable hoy: para
+  // llegar hasta acá la categoría ya matcheó un slug no vacío contra la ruta
+  // pedida. Se maneja igual que el frontend, cayendo a `/coleccion` sin
+  // filtro en vez de armar una URL rota.
+  const ruta = categoria ? (rutaCategoria(categoria) ?? "/coleccion") : "/coleccion";
+  const titulo = categoria ? `${categoria.nombre} — ${SITE_NAME}` : `Todos los productos — ${SITE_NAME}`;
+  const descripcion = categoria
+    ? `Productos de ${categoria.nombre} en ${SITE_NAME}: útiles, innovadores y con diseño.`
+    : `Explorá el catálogo completo de ${SITE_NAME}: filtrá por categoría y precio para encontrar lo que buscás.`;
+
+  const productos = await prisma.product.findMany({
+    where: {
+      visibleEnCatalogo: true,
+      stock: { gt: 0 },
+      ...(categoria ? { categoriaId: categoria.id } : {}),
+    },
+    orderBy: [{ orden: "asc" }, { id: "asc" }],
+    take: MAX_PRODUCTOS_LISTADO_SEO,
+    select: { id: true, nombre: true, precio: true },
+  });
+
+  const canonical = `${frontendUrl}${ruta}`;
+
+  const html = renderHtmlSeo({
+    titulo,
+    descripcion,
+    canonical,
+    imagen: `${frontendUrl}/og-default.png`,
+    bloquesJsonLd: [
+      jsonLdColeccion({
+        titulo: categoria ? categoria.nombre : "Todos los productos",
+        url: canonical,
+        productos,
+        frontendUrl,
+      }),
+    ],
+    cuerpo: `<h1>${escapeHtml(categoria ? categoria.nombre : "Todos los productos")}</h1>${listaDeProductos(productos, frontendUrl)}`,
+  });
+
+  res.status(200).type("html").send(html);
+}
+
+export async function servirSeoColeccion(req, res, next) {
+  try {
+    const { frontendUrl } = urls();
+    if (!esBot(req.headers["user-agent"])) return res.redirect(302, `${frontendUrl}/coleccion`);
+    await servirListado(res, { categoria: null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function servirSeoCategoria(req, res, next) {
+  try {
+    const { frontendUrl } = urls();
+    const slug = req.params.slug;
+
+    if (!esBot(req.headers["user-agent"])) {
+      return res.redirect(302, `${frontendUrl}/coleccion/categoria/${slug}`);
+    }
+
+    // No hay columna `slug` en la base: se traen las categorías y se compara
+    // el slug derivado de cada una. Son pocas decenas de filas — un
+    // `findMany` + filtro en memoria es más simple y más correcto que
+    // intentar reconstruir el nombre desde el slug, que no es reversible
+    // (tildes y símbolos se pierden al slugificar). Mismo criterio, mismo
+    // resultado, que `Coleccion.jsx` en el frontend (`categoriaDeRuta`): las
+    // dos comparan `slugify(c.nombre) === slug` contra la lista completa de
+    // categorías, así que resuelven la misma categoría para el mismo slug.
+    const categorias = await prisma.categoria.findMany({ select: { id: true, nombre: true } });
+    const categoria = categorias.find((c) => slugify(c.nombre) === slug) ?? null;
+
+    if (!categoria) return responderNoEncontrado(res, frontendUrl);
+
+    await servirListado(res, { categoria });
   } catch (err) {
     next(err);
   }
