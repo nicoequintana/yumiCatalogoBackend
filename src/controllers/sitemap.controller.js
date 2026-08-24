@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { slugify, rutaProducto } from "../lib/slug.js";
 
 /**
  * Tope de URLs de producto en el sitemap. El endpoint es público, sin auth y
@@ -17,26 +18,36 @@ function escapeXml(texto) {
     .replaceAll(">", "&gt;");
 }
 
+function entrada(loc, lastmod) {
+  const mod = lastmod ? `\n    <lastmod>${lastmod}</lastmod>` : "";
+  return `  <url>\n    <loc>${escapeXml(loc)}</loc>${mod}\n  </url>`;
+}
+
 export async function servirSitemap(req, res, next) {
   try {
     const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
-    const productos = await prisma.product.findMany({
-      where: { visibleEnCatalogo: true },
-      orderBy: { updatedAt: "desc" },
-      take: MAX_URLS_SITEMAP,
-      select: { id: true, updatedAt: true },
-    });
+    // Las dos consultas son independientes: en paralelo.
+    const [productos, categorias] = await Promise.all([
+      prisma.product.findMany({
+        where: { visibleEnCatalogo: true },
+        orderBy: { updatedAt: "desc" },
+        take: MAX_URLS_SITEMAP,
+        // `nombre` es nuevo: sin él no se puede armar el slug, y la URL del
+        // sitemap TIENE que ser idéntica al canonical que declara la página.
+        select: { id: true, nombre: true, updatedAt: true },
+      }),
+      prisma.categoria.findMany({ select: { id: true, nombre: true } }),
+    ]);
 
     const urls = [
-      `  <url>\n    <loc>${escapeXml(frontendUrl)}/</loc>\n  </url>`,
-      ...productos.map((producto) => {
-        const loc = `${frontendUrl}/producto/${producto.id}`;
-        const lastmod = producto.updatedAt.toISOString();
-        return `  <url>\n    <loc>${escapeXml(loc)}</loc>\n    <lastmod>${lastmod}</lastmod>\n  </url>`;
-      }),
+      entrada(`${frontendUrl}/`),
+      entrada(`${frontendUrl}/coleccion`),
+      ...categorias.map((c) => entrada(`${frontendUrl}/coleccion/categoria/${slugify(c.nombre)}`)),
+      ...productos.map((p) => entrada(`${frontendUrl}${rutaProducto(p)}`, p.updatedAt.toISOString())),
     ];
 
+    // Sin `priority` ni `changefreq`: Google los ignora desde hace años.
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>`;
 
     res.status(200).type("application/xml").send(xml);

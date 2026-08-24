@@ -3,9 +3,13 @@ import request from "supertest";
 import express from "express";
 
 const findManyMock = vi.fn();
+const categoriaFindManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
-  prisma: { product: { findMany: (...args) => findManyMock(...args) } },
+  prisma: {
+    product: { findMany: (...args) => findManyMock(...args) },
+    categoria: { findMany: (...args) => categoriaFindManyMock(...args) },
+  },
 }));
 
 const { default: sitemapRouter } = await import("./sitemap.routes.js");
@@ -18,6 +22,11 @@ function buildApp() {
 
 beforeEach(() => {
   findManyMock.mockReset();
+  categoriaFindManyMock.mockReset();
+  // Default para no romper los tests preexistentes que solo configuran
+  // `findManyMock`: sin este default, `categorias` llegaría `undefined` y
+  // `.map` explotaría con un TypeError ajeno a lo que esos tests afirman.
+  categoriaFindManyMock.mockResolvedValue([]);
   process.env.FRONTEND_URL = "https://aura.example.com";
 });
 
@@ -121,5 +130,60 @@ describe("GET /sitemap.xml", () => {
     const res = await request(app).get("/sitemap.xml");
 
     expect(res.status).toBe(500);
+  });
+});
+
+describe("GET /sitemap.xml — rutas y slugs", () => {
+  it("incluye la home y la colección", async () => {
+    findManyMock.mockResolvedValue([]);
+    categoriaFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    expect(res.text).toContain("<loc>https://aura.example.com/</loc>");
+    expect(res.text).toContain("<loc>https://aura.example.com/coleccion</loc>");
+  });
+
+  it("emite las URLs de producto CON slug, iguales al canonical", async () => {
+    findManyMock.mockResolvedValue([
+      { id: 12, nombre: "Set de cuchillos", updatedAt: new Date("2026-08-01T10:00:00Z") },
+    ]);
+    categoriaFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    expect(res.text).toContain("<loc>https://aura.example.com/producto/12-set-de-cuchillos</loc>");
+    expect(res.text).toContain("<lastmod>2026-08-01T10:00:00.000Z</lastmod>");
+  });
+
+  it("incluye una URL por categoría", async () => {
+    findManyMock.mockResolvedValue([]);
+    categoriaFindManyMock.mockResolvedValue([{ id: 3, nombre: "Cocina y hogar" }]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    expect(res.text).toContain("<loc>https://aura.example.com/coleccion/categoria/cocina-y-hogar</loc>");
+  });
+
+  it("pide el nombre del producto, que antes no seleccionaba", async () => {
+    findManyMock.mockResolvedValue([]);
+    categoriaFindManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/sitemap.xml");
+
+    const [args] = findManyMock.mock.calls[0];
+    expect(args.select).toHaveProperty("nombre", true);
+  });
+
+  it("escapa los ampersands de un nombre con & en la URL", async () => {
+    findManyMock.mockResolvedValue([]);
+    categoriaFindManyMock.mockResolvedValue([{ id: 1, nombre: "Baño & cocina" }]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    // slugify ya saca el &, pero el escape del XML tiene que seguir aplicando
+    // sobre la URL completa.
+    expect(res.text).toContain("bano-cocina");
+    expect(res.text).not.toContain("& ");
   });
 });
