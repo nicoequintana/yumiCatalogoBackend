@@ -25,6 +25,25 @@ describe("esBot", () => {
     expect(esBot("FACEBOOKEXTERNALHIT/1.1")).toBe(true);
   });
 
+  it("reconoce Googlebot y sus variantes", () => {
+    expect(esBot("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")).toBe(true);
+    expect(esBot("Googlebot-Image/1.0")).toBe(true);
+  });
+
+  it("reconoce el resto de los buscadores", () => {
+    expect(esBot("Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)")).toBe(true);
+    expect(esBot("DuckDuckBot/1.1; (+http://duckduckgo.com/duckduckbot.html)")).toBe(true);
+    expect(esBot("Mozilla/5.0 (Macintosh) AppleWebKit/605 (KHTML, like Gecko) Applebot/0.1")).toBe(true);
+    expect(esBot("Mozilla/5.0 (compatible; YandexBot/3.0)")).toBe(true);
+  });
+
+  it("reconoce los crawlers de sistemas de IA", () => {
+    expect(esBot("Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)")).toBe(true);
+    expect(esBot("Mozilla/5.0 (compatible; ClaudeBot/1.0)")).toBe(true);
+    expect(esBot("Mozilla/5.0 (compatible; PerplexityBot/1.0)")).toBe(true);
+    expect(esBot("Mozilla/5.0 (compatible; OAI-SearchBot/1.0)")).toBe(true);
+  });
+
   it("no reconoce un navegador real como bot", () => {
     expect(esBot("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")).toBe(false);
   });
