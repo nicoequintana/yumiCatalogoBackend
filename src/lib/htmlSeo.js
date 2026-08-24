@@ -30,6 +30,9 @@ export function escapeHtml(texto) {
  *
  * NO se puede usar `escapeHtml` acá: convertiría el `<` en `&lt;`, que dentro
  * de un bloque JSON-LD es texto literal y rompe el valor.
+ *
+ * Espejada en `frontend/src/components/MetaSeo.jsx` — misma implementación,
+ * mismo razonamiento. Sync manual entre repos, como `slug.js`.
  */
 export function serializarJsonLd(objeto) {
   return JSON.stringify(objeto).replaceAll("<", "\\u003c");
