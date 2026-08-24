@@ -10,6 +10,7 @@ const entornoCompleto = {
   SMTP_USER: "yimaproductos@gmail.com",
   SMTP_PASSWORD: "abcdefghijklmnop",
   MAIL_ADMIN_DESTINO: "yimaproductos@gmail.com",
+  FRONTEND_URL: "https://yima-productos.com",
 };
 
 describe("variablesFaltantes", () => {
@@ -28,6 +29,7 @@ describe("variablesFaltantes", () => {
       "SMTP_USER",
       "SMTP_PASSWORD",
       "MAIL_ADMIN_DESTINO",
+      "FRONTEND_URL",
     ]);
   });
 
@@ -44,7 +46,12 @@ describe("variablesFaltantes", () => {
       "SMTP_USER",
       "SMTP_PASSWORD",
       "MAIL_ADMIN_DESTINO",
+      "FRONTEND_URL",
     ]);
+  });
+
+  it("exige FRONTEND_URL, de donde salen el canonical, el JSON-LD y el sitemap", () => {
+    expect(VARIABLES_REQUERIDAS).toContain("FRONTEND_URL");
   });
 
   it("trata una variable definida pero vacía como faltante", () => {

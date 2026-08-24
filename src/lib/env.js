@@ -26,6 +26,13 @@
 //   en los logs de arranque, no días después cuando un cliente no recibe su
 //   confirmación y nadie se entera.
 // - MAIL_ADMIN_DESTINO: sin esto YIMA no se entera de las órdenes nuevas.
+// - FRONTEND_URL: `lib/urlsPublicas.js` cae a `http://localhost:5173` si
+//   falta o está vacía, y de ahí salen el `<link rel="canonical">` de cada
+//   HTML servido a crawlers, la `url` del `Offer` en el JSON-LD, cada
+//   `<loc>` del sitemap y la directiva `Sitemap:` de `robots.txt`. Un deploy
+//   con esta variable vacía en EasyPanel publicaría un sitemap entero
+//   apuntando a `localhost` sin un solo error en los logs — justo el modo de
+//   falla silenciosa que esta validación existe para evitar.
 //
 // Las de Google Drive quedan afuera aposta: son legado de solo lectura y solo
 // hacen falta mientras existan productos con medios sin migrar, así que un
@@ -39,6 +46,7 @@ export const VARIABLES_REQUERIDAS = [
   "SMTP_USER",
   "SMTP_PASSWORD",
   "MAIL_ADMIN_DESTINO",
+  "FRONTEND_URL",
 ];
 
 /**
