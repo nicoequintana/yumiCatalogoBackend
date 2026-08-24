@@ -14,6 +14,7 @@ import categoriasRouter from "./routes/categorias.routes.js";
 import anunciosRouter from "./routes/anuncios.routes.js";
 import ogRouter from "./routes/og.routes.js";
 import sitemapRouter from "./routes/sitemap.routes.js";
+import robotsRouter from "./routes/robots.routes.js";
 import authRouter from "./routes/auth.routes.js";
 import usuariosRouter from "./routes/usuarios.routes.js";
 import adminRouter from "./routes/admin.routes.js";
@@ -89,6 +90,7 @@ app.use("/api/ordenes", ordenesRouter);
 app.use("/api/clientes", clientesRouter);
 app.use("/og", ogRouter);
 app.use("/sitemap.xml", sitemapRouter);
+app.use("/robots.txt", robotsRouter);
 
 // 404 fallback for unknown routes
 app.use((_req, res) => {
