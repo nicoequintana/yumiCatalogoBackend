@@ -56,7 +56,7 @@ describe("parsearIdDeRuta", () => {
 
   it("devuelve null para un decimal, no 12", () => {
     // `Number("12.5")` no es NaN y llegaría a Prisma como filtro sobre un
-    // `Int` -> 500. Mismo motivo por el que og.controller.js usa
+    // `Int` -> 500. Mismo motivo por el que seo.controller.js usa
     // `Number.isInteger` y no `Number.isNaN`.
     expect(parsearIdDeRuta("12.5")).toBe(null);
   });

@@ -21,10 +21,13 @@ const limitadorOg = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 
-// Las tres rutas de página van ANTES de `/producto/:idSlug`: si no, Express
-// matchea "home" o "coleccion" como si fueran el `:idSlug` de un producto
-// (mismo pisotón que documenta CLAUDE.md para `/products/import` y
-// `/products/eliminar-masivo`).
+// El orden entre estas cuatro rutas NO importa para Express: son literales
+// distintos (`/home`, `/coleccion`, `/categoria/:slug`) que nunca compiten
+// por el mismo segmento que `/producto/:idSlug` — a diferencia del pisotón
+// real que CLAUDE.md documenta para `/products/import` y
+// `/products/eliminar-masivo`, donde la ruta con parámetro SÍ matchea un
+// literal declarado después. Van en este orden por legibilidad (páginas de
+// listado antes que la de detalle), no por necesidad.
 router.get("/home", limitadorOg, servirSeoHome);
 router.get("/coleccion", limitadorOg, servirSeoColeccion);
 router.get("/categoria/:slug", limitadorOg, servirSeoCategoria);
