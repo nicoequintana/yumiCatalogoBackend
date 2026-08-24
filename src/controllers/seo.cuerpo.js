@@ -34,6 +34,7 @@ function porTipo(listas, tipo) {
 export function cuerpoProducto(producto) {
   const partes = [
     `<h1>${escapeHtml(producto.nombre)}</h1>`,
+    producto.etiqueta ? `<p>Etiqueta: ${escapeHtml(producto.etiqueta)}</p>` : "",
     parrafo(producto.fraseComercial),
     producto.categoria?.nombre ? `<p>Categoría: ${escapeHtml(producto.categoria.nombre)}</p>` : "",
     `<p>Precio: $${escapeHtml(producto.precio.toString())}</p>`,

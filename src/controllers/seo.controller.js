@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { esBot } from "../lib/botDetector.js";
 import { truncarDescripcion, resolverImagenOg } from "../lib/ogMeta.js";
-import { renderHtmlSeo, escapeHtml } from "../lib/htmlSeo.js";
+import { renderHtmlSeo } from "../lib/htmlSeo.js";
 import { jsonLdProducto, jsonLdBreadcrumb } from "../lib/jsonLd.js";
 import { parsearIdDeRuta, rutaProducto } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";

@@ -22,6 +22,7 @@ function productoCompleto(extra = {}) {
     nombre: "Set de cuchillos",
     descripcion: "Seis piezas de acero inoxidable con mango ergonómico.",
     sku: "YIMA-0005",
+    etiqueta: "Nuevo",
     precio: { toString: () => "45000.00" },
     stock: 4,
     visibleEnCatalogo: true,
@@ -105,6 +106,7 @@ describe("GET /og/producto/:idSlug — producto visible", () => {
     expect(res.text).toContain("Taco de madera");
     expect(res.text).toContain("Acero inoxidable");
     expect(res.text).toContain("Material");
+    expect(res.text).toContain("Etiqueta: Nuevo");
   });
 
   it("emite los bloques JSON-LD de Product y BreadcrumbList", async () => {
