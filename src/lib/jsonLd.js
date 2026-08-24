@@ -22,6 +22,11 @@ function absoluta(frontendUrl, ruta) {
 export function jsonLdProducto(producto, { frontendUrl, imagenes }) {
   const url = absoluta(frontendUrl, rutaProducto(producto));
 
+  // Google rechaza el rich result de `Product` que no declara `image` — un
+  // producto sin fotos no puede emitir un array vacío. Mismo fallback que ya
+  // usa `og:image` para el mismo caso (`resolverImagenOg`, `lib/ogMeta.js`).
+  const imagenesConFallback = imagenes.length > 0 ? imagenes : [absoluta(frontendUrl, "/og-default.png")];
+
   const salida = {
     "@context": "https://schema.org",
     "@type": "Product",
@@ -29,13 +34,16 @@ export function jsonLdProducto(producto, { frontendUrl, imagenes }) {
     description: producto.descripcion ?? "",
     sku: producto.sku,
     brand: { "@type": "Brand", name: MARCA },
-    image: imagenes,
+    image: imagenesConFallback,
     offers: {
       "@type": "Offer",
       url,
-      // `precio` es un Decimal de Prisma: su `toString()` ya entrega el valor
-      // con dos decimales. NUNCA convertirlo a Number — un float publica un
-      // precio con cola de flotante en el resultado de búsqueda.
+      // `precio` es un Decimal de Prisma: se emite tal cual entrega su
+      // `.toString()`, NUNCA convertido a Number — un float publica un precio
+      // con cola de flotante en el resultado de búsqueda. Es un STRING, y
+      // cuántos decimales lleve depende de la escala del valor guardado (un
+      // precio entero sale sin decimales, ej. `"45000"`); schema.org acepta
+      // las dos formas.
       price: producto.precio.toString(),
       priceCurrency: MONEDA,
       availability: producto.stock > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",

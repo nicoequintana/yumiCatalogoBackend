@@ -4,7 +4,8 @@ import { jsonLdProducto, jsonLdBreadcrumb, jsonLdOrganizacion, jsonLdColeccion }
 const frontendUrl = "https://yima.example.com";
 
 // Espeja lo que entrega Prisma: `precio` es un Decimal cuyo `toString()`
-// devuelve el valor con dos decimales.
+// devuelve el valor tal cual está guardado — con dos decimales acá, pero no
+// siempre (ver el test de precio entero más abajo).
 function productoDePrueba(extra = {}) {
   return {
     id: 12,
@@ -35,7 +36,7 @@ describe("jsonLdProducto", () => {
     expect(resultado.category).toBe("Cocina");
   });
 
-  it("emite el precio como string con dos decimales, nunca como número", () => {
+  it("emite el precio como string, tal cual sale de .toString(), nunca como número", () => {
     const { offers } = jsonLdProducto(productoDePrueba(), { frontendUrl, imagenes: [] });
 
     // Un float acá publica "45000.000000001" en el SERP.
@@ -43,6 +44,27 @@ describe("jsonLdProducto", () => {
     expect(typeof offers.price).toBe("string");
     expect(offers.priceCurrency).toBe("ARS");
     expect(offers.itemCondition).toBe("https://schema.org/NewCondition");
+  });
+
+  it("un precio entero sale SIN decimales — la cantidad de decimales depende de la escala guardada, no de una regla fija", () => {
+    const producto = productoDePrueba({ precio: { toString: () => "45000" } });
+    const { offers } = jsonLdProducto(producto, { frontendUrl, imagenes: [] });
+
+    expect(offers.price).toBe("45000");
+    expect(typeof offers.price).toBe("string");
+  });
+
+  it("cae a la imagen de marca cuando el producto no tiene fotos, mismo fallback que og:image", () => {
+    const resultado = jsonLdProducto(productoDePrueba(), { frontendUrl, imagenes: [] });
+    expect(resultado.image).toEqual(["https://yima.example.com/og-default.png"]);
+  });
+
+  it("usa las imágenes reales cuando el producto sí tiene fotos", () => {
+    const resultado = jsonLdProducto(productoDePrueba(), {
+      frontendUrl,
+      imagenes: ["https://res.cloudinary.com/demo/a.jpg"],
+    });
+    expect(resultado.image).toEqual(["https://res.cloudinary.com/demo/a.jpg"]);
   });
 
   it("declara InStock cuando hay stock", () => {
