@@ -23,7 +23,10 @@ function productoCompleto(extra = {}) {
     descripcion: "Seis piezas de acero inoxidable con mango ergonómico.",
     sku: "YIMA-0005",
     etiqueta: "Nuevo",
-    precio: { toString: () => "45000.00" },
+    // Espeja un Decimal de Prisma de verdad: `toString()` para el JSON-LD,
+    // `toFixed()` para `formatearMonto` (`lib/plantillasEmail.js`), que arma
+    // el precio formateado del cuerpo del crawler.
+    precio: { toString: () => "45000.00", toFixed: (n) => Number(45000).toFixed(n) },
     stock: 4,
     visibleEnCatalogo: true,
     fraseComercial: "La cocina que siempre quisiste.",

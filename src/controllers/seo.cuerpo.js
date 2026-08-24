@@ -1,4 +1,5 @@
 import { escapeHtml } from "../lib/htmlSeo.js";
+import { formatearMonto } from "../lib/plantillasEmail.js";
 
 /**
  * El cuerpo HTML de la ficha de producto para crawlers.
@@ -37,7 +38,11 @@ export function cuerpoProducto(producto) {
     producto.etiqueta ? `<p>Etiqueta: ${escapeHtml(producto.etiqueta)}</p>` : "",
     parrafo(producto.fraseComercial),
     producto.categoria?.nombre ? `<p>Categoría: ${escapeHtml(producto.categoria.nombre)}</p>` : "",
-    `<p>Precio: $${escapeHtml(producto.precio.toString())}</p>`,
+    // `formatearMonto` (`lib/plantillasEmail.js`) — la misma casa de la
+    // aritmética con `Decimal` que usan los mails de órdenes — para que el
+    // precio que ve el crawler coincida con el que muestra `FichaProducto.jsx`
+    // ($45.000,00), no con el string crudo del `Decimal` ($45000.00).
+    `<p>Precio: ${escapeHtml(formatearMonto(producto.precio))}</p>`,
     `<p>${producto.stock > 0 ? "Disponible" : "Sin stock"}</p>`,
     seccion("Descripción", parrafo(producto.descripcion)),
     seccion("Por qué lo vas a querer", parrafo(producto.porQueLoVasAQuerer)),
