@@ -1,3 +1,5 @@
+import { urlFrontend } from "../lib/urlsPublicas.js";
+
 /**
  * `robots.txt`, servido por el backend en vez de ser un estático del frontend.
  *
@@ -15,7 +17,7 @@
  *     crawler entre y lea el `noindex` que emite la SPA.
  */
 export function servirRobots(_req, res) {
-  const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
+  const frontendUrl = urlFrontend();
 
   const cuerpo = `User-agent: *
 Allow: /

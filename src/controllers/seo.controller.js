@@ -6,6 +6,7 @@ import { jsonLdProducto, jsonLdBreadcrumb } from "../lib/jsonLd.js";
 import { parsearIdDeRuta, rutaProducto } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";
 import { cuerpoProducto } from "./seo.cuerpo.js";
+import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 
 /**
  * HTML server-side para crawlers.
@@ -22,8 +23,8 @@ const SITE_NAME = "YIMA";
 
 function urls() {
   return {
-    frontendUrl: process.env.FRONTEND_URL ?? "http://localhost:5173",
-    backendUrl: process.env.BACKEND_PUBLIC_URL ?? "http://localhost:4000",
+    frontendUrl: urlFrontend(),
+    backendUrl: urlBackend(),
   };
 }
 

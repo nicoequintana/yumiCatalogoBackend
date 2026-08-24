@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { rutaProducto, rutaCategoria } from "../lib/slug.js";
+import { urlFrontend } from "../lib/urlsPublicas.js";
 
 /**
  * Tope de URLs de producto en el sitemap. El endpoint es público, sin auth y
@@ -25,7 +26,7 @@ function entrada(loc, lastmod) {
 
 export async function servirSitemap(req, res, next) {
   try {
-    const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
+    const frontendUrl = urlFrontend();
 
     // Las dos consultas son independientes: en paralelo.
     const [productos, categorias] = await Promise.all([
