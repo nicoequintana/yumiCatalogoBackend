@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { servirOgProducto } from "../controllers/og.controller.js";
+import { servirSeoProducto } from "../controllers/seo.controller.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 
 const router = Router();
@@ -16,6 +16,6 @@ const limitadorOg = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 
-router.get("/producto/:id", limitadorOg, servirOgProducto);
+router.get("/producto/:idSlug", limitadorOg, servirSeoProducto);
 
 export default router;
