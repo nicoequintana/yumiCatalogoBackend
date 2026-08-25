@@ -79,21 +79,36 @@ export function construirHojaListas(wb, categorias) {
  * Aplica las validaciones de Excel a todo el rango editable de cada columna.
  *
  * `columnas` generaliza el cálculo de índice para que sirva tanto para
- * `COLUMNAS` (alta) como para `COLUMNAS_ACTUALIZACION` (actualización, `sku`
- * primero). `ultimaFila` generaliza el rango de filas: la plantilla de alta
- * cubre hasta `MAX_FILAS` (el admin todavía no sabe cuántas va a cargar),
- * pero la exportación para actualizar conoce de antemano la cantidad exacta
- * de productos y no tiene sentido validar miles de filas vacías de más.
+ * `COLUMNAS` (alta, quince columnas) como para `COLUMNAS_ACTUALIZACION`
+ * (actualización, cuatro columnas con `sku` primero). `ultimaFila` generaliza
+ * el rango de filas: la plantilla de alta cubre hasta `MAX_FILAS` (el admin
+ * todavía no sabe cuántas va a cargar), pero la exportación para actualizar
+ * conoce de antemano la cantidad exacta de productos y no tiene sentido
+ * validar miles de filas vacías de más.
+ *
+ * **Una columna que no esté en `columnas` se saltea en silencio.** Hace falta
+ * desde que `COLUMNAS_ACTUALIZACION` dejó de ser un superset de `COLUMNAS`
+ * (25/08/2026): la exportación no tiene `categoria` ni `etiqueta`, y sin esta
+ * guarda `indexOf` devuelve `-1`, el `+ 1` lo convierte en `0`, y
+ * `hoja.getCell(fila, 0)` es una celda que no existe. El salteo es silencioso
+ * a propósito: no es un error configurar menos columnas, es el caso de uso.
  */
 export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNAS, ultimaFila = ULTIMA_FILA) {
-  const indice = (columna) => columnas.indexOf(columna) + 1;
+  const posicion = (columna) => columnas.indexOf(columna) + 1;
+
+  /** Aplica una validación solo si la columna existe en este layout. */
+  const validar = (fila, columna, validacion) => {
+    const indiceColumna = posicion(columna);
+    if (indiceColumna === 0) return;
+    hoja.getCell(fila, indiceColumna).dataValidation = validacion;
+  };
 
   for (let fila = 2; fila <= ultimaFila; fila++) {
     // `whole` y no `decimal`: la columna `Product.precio` es `Decimal(10, 0)`,
     // así que un precio con centavos lo rechaza `normalizarPrecio`
     // (`lib/importProductos.js`) recién al importar. Que Excel lo frene al
     // tipearlo le ahorra al admin descubrirlo con el archivo entero cargado.
-    hoja.getCell(fila, indice("precio")).dataValidation = {
+    validar(fila, "precio", {
       type: "whole",
       operator: "greaterThan",
       formulae: [0],
@@ -101,9 +116,9 @@ export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNA
       showErrorMessage: true,
       errorTitle: "Precio inválido",
       error: "El precio tiene que ser un número entero mayor a 0, sin decimales.",
-    };
+    });
 
-    hoja.getCell(fila, indice("stock")).dataValidation = {
+    validar(fila, "stock", {
       type: "whole",
       operator: "greaterThanOrEqual",
       formulae: [0],
@@ -111,28 +126,28 @@ export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNA
       showErrorMessage: true,
       errorTitle: "Stock inválido",
       error: "El stock tiene que ser un número entero mayor o igual a 0.",
-    };
+    });
 
     // Estricto: `categoria` es una FK, un valor inventado no se puede importar.
     // Se omite si no hay categorías cargadas — un rango vacío rompe el archivo.
     if (cantidadCategorias > 0) {
-      hoja.getCell(fila, indice("categoria")).dataValidation = {
+      validar(fila, "categoria", {
         type: "list",
         allowBlank: true,
         formulae: [`${HOJA_LISTAS}!$A$2:$A$${cantidadCategorias + 1}`],
         showErrorMessage: true,
         errorTitle: "Categoría inválida",
         error: "Elegí una categoría de la lista o dejá la celda vacía.",
-      };
+      });
     }
 
     // Permisivo: en el formulario `etiqueta` es texto libre con sugerencias
     // (un `<datalist>`), no un enum. El desplegable sugiere pero no bloquea.
-    hoja.getCell(fila, indice("etiqueta")).dataValidation = {
+    validar(fila, "etiqueta", {
       type: "list",
       allowBlank: true,
       formulae: [`${HOJA_LISTAS}!$B$2:$B$${ETIQUETAS_SUGERIDAS.length + 1}`],
       showErrorMessage: false,
-    };
+    });
   }
 }

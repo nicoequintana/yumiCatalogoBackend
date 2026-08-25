@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
-import { COLUMNAS_ACTUALIZACION, NOMBRE_HOJA, serializarEspecificaciones, serializarLista } from "./importProductos.js";
-import { aplicarValidaciones, construirHojaListas } from "./plantillaProductos.js";
+import { COLUMNAS_ACTUALIZACION, NOMBRE_HOJA } from "./importProductos.js";
+import { aplicarValidaciones } from "./plantillaProductos.js";
 
 /**
  * Exportación del catálogo a `.xlsx`, para el flujo de ACTUALIZACIÓN masiva
@@ -9,74 +9,59 @@ import { aplicarValidaciones, construirHojaListas } from "./plantillaProductos.j
  *
  * Es la contracara exacta de `importProductos.js`: donde ese módulo lee un
  * `.xlsx` y produce datos de producto, este toma un producto y produce la
- * fila de `.xlsx` que, leída de nuevo, tiene que devolver el mismo dato. Por
- * eso las listas y especificaciones se serializan con `serializarLista`/
- * `serializarEspecificaciones` (las inversas exactas de `parsearLista`/
- * `parsearEspecificaciones`, ambas en `importProductos.js`) en vez de
- * reimplementar el formato del separador acá.
+ * fila de `.xlsx` que, leída de nuevo, tiene que devolver el mismo dato.
+ *
+ * **Desde el 25/08/2026 son cuatro columnas: `sku`, `nombre`, `precio` y
+ * `stock`.** El archivo existe para retocar precios y stock de un catálogo ya
+ * cargado; las dieciséis columnas anteriores obligaban a scrollear entre
+ * textos largos para llegar al número que se quería cambiar. Lo que NO viaja
+ * en el archivo queda intacto al actualizar (ver `COLUMNAS_ACTUALIZACION` en
+ * `importProductos.js`), así que este recorte es también la garantía de que
+ * una subida no pisa la descripción ni el contenido comercial.
  */
 
 /**
- * Convierte un producto (con sus relaciones ya cargadas y las listas
- * agrupadas por tipo) al array de valores en el MISMO orden que
+ * Convierte un producto al array de valores en el MISMO orden que
  * `COLUMNAS_ACTUALIZACION`.
  *
  * Función pura: no sabe nada de Prisma ni de Excel más allá del array que
- * devuelve. El caller (`generarExportacion`, o el controller antes de
- * llamarlo) es quien agrupa `listas` en `beneficios`/`usos`/`idealPara`/
- * `incluye` — mismo criterio de agrupación que `agruparListasPorTipo` en
- * `products.mapper.js`, pero no se comparte ese helper porque es privado a
- * ese módulo y este archivo no depende de Prisma.
+ * devuelve.
  *
- * @param {object} producto
+ * `precio` sale como `Number` y no como string para que Excel lo trate como
+ * número de verdad — un string en la celda rompe la validación `whole` que
+ * aplica `aplicarValidaciones` y deja el archivo con el aviso de "número
+ * almacenado como texto" en cada fila.
+ *
+ * @param {{sku?: string, nombre?: string, precio?: unknown, stock?: number}} producto
  * @returns {Array<string|number|null>}
  */
 export function productoAFila(producto) {
   return [
     producto.sku ?? "",
     producto.nombre ?? "",
-    producto.descripcion ?? "",
     producto.precio === null || producto.precio === undefined ? null : Number(producto.precio),
     producto.stock ?? 0,
-    producto.categoria?.nombre ?? null,
-    producto.etiqueta ?? null,
-    producto.fraseComercial ?? null,
-    producto.porQueLoVasAQuerer ?? null,
-    producto.tePasaEsto ?? null,
-    serializarLista(producto.caracteristicas),
-    serializarLista(producto.beneficios),
-    serializarLista(producto.usos),
-    serializarLista(producto.idealPara),
-    serializarLista(producto.incluye),
-    serializarEspecificaciones(producto.especificaciones),
   ];
 }
 
 /**
- * Genera el buffer del `.xlsx` de exportación: misma hoja `Listas` con
- * categorías y etiquetas sugeridas que la plantilla de alta, y la hoja
- * `Productos` con encabezado `COLUMNAS_ACTUALIZACION` y UNA FILA POR
- * PRODUCTO real (no una fila de ejemplo, a diferencia de `generarPlantilla`).
+ * Genera el buffer del `.xlsx` de exportación: una sola hoja `Productos`, con
+ * encabezado `COLUMNAS_ACTUALIZACION` y UNA FILA POR PRODUCTO real (no una
+ * fila de ejemplo, a diferencia de `generarPlantilla`).
  *
- * Reusa `aplicarValidaciones` para los mismos desplegables/validaciones de
- * Excel que la plantilla de alta, pero acotados al rango real de filas
- * (2..productos.length+1) en vez de `MAX_FILAS`: acá se conoce de antemano
- * cuántas filas va a tener el archivo.
+ * **Ya no lleva la hoja `Listas`**: alimentaba los desplegables de `categoria`
+ * y `etiqueta`, y esas dos columnas dejaron de existir en este archivo. Una
+ * hoja oculta con datos que ningún desplegable referencia es peso muerto que
+ * confunde a quien abra el archivo.
  *
- * @param {object[]} productos productos con relaciones ya cargadas y listas agrupadas (ver `productoAFila`)
- * @param {string[]} categorias nombres de categoría existentes
+ * Las validaciones se acotan al rango real de filas (2..productos.length+1) en
+ * vez de `MAX_FILAS`: acá se conoce de antemano cuántas filas va a tener.
+ *
+ * @param {object[]} productos productos con `sku`, `nombre`, `precio` y `stock`
  * @returns {Promise<Buffer>}
  */
-export async function generarExportacion(productos, categorias) {
+export async function generarExportacion(productos) {
   const wb = new ExcelJS.Workbook();
-
-  // Oculta a propósito: alimenta los desplegables de categoría/etiqueta (la
-  // fórmula de `aplicarValidaciones` sigue apuntando acá aunque no se vea),
-  // pero acá el admin solo tiene que ver sus productos, no la hoja de apoyo
-  // que sí es visible en la plantilla de alta. `"hidden"` (no `"veryHidden"`):
-  // se puede recuperar con click derecho en la barra de pestañas > Mostrar,
-  // si alguna vez hace falta revisarla.
-  construirHojaListas(wb, categorias).state = "hidden";
 
   const hoja = wb.addWorksheet(NOMBRE_HOJA);
   hoja.addRow(COLUMNAS_ACTUALIZACION);
@@ -87,7 +72,11 @@ export async function generarExportacion(productos, categorias) {
     hoja.addRow(productoAFila(producto));
   }
 
-  aplicarValidaciones(hoja, categorias.length, COLUMNAS_ACTUALIZACION, productos.length + 1);
+  // `0` categorías: sin la hoja `Listas` no hay rango al que apuntar, y
+  // `aplicarValidaciones` ya omite el desplegable de categoría con ese valor.
+  // Las columnas `categoria`/`etiqueta` tampoco están en `COLUMNAS_ACTUALIZACION`,
+  // así que se saltean solas.
+  aplicarValidaciones(hoja, 0, COLUMNAS_ACTUALIZACION, productos.length + 1);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -66,29 +66,6 @@ export function parsearEspecificaciones(celda) {
     });
 }
 
-/**
- * Convierte una lista de ítems `{ texto }` de vuelta al texto multilínea que
- * `parsearLista` espera leer — es su inversa exacta, así el flujo de
- * exportación (`exportarProductos.js`) no tiene que reinventar el separador.
- *
- * Devuelve `null` (no `""`) para una lista vacía o ausente: una celda `null`
- * queda realmente en blanco en el `.xlsx`, en vez de una celda con texto
- * vacío que se ve distinto en Excel.
- */
-export function serializarLista(items) {
-  if (!items || items.length === 0) return null;
-  return items.map((item) => item.texto).join("\n");
-}
-
-/**
- * Inversa exacta de `parsearEspecificaciones`: un renglón `"Nombre: Valor"`
- * por especificación.
- */
-export function serializarEspecificaciones(especificaciones) {
-  if (!especificaciones || especificaciones.length === 0) return null;
-  return especificaciones.map((e) => `${e.nombre}: ${e.valor}`).join("\n");
-}
-
 /** Devuelve el texto trimmeado de una celda, o `null` si está vacía. */
 function textoOpcional(celda) {
   if (celda === null || celda === undefined) return null;
@@ -219,51 +196,105 @@ export function validarFila(fila, numeroFila, categoriasPorNombre) {
 }
 
 /**
- * Valida una fila de la planilla de ACTUALIZACIÓN/ALTA MIXTA: las mismas
- * reglas de campo que `validarFila` MÁS la resolución del `sku` — que ahora
- * decide entre tres ramas, no solo dos:
+ * Reglas de campo de una fila de ACTUALIZACIÓN: `nombre`, `precio` y `stock`.
  *
- * - `sku` vacío → fila de ALTA: `accion: "crear"`, `id: null`.
- * - `sku` presente y existe en `idsPorSku` → fila de ACTUALIZACIÓN:
- *   `accion: "actualizar"`, `id` resuelto.
- * - `sku` presente pero NO existe → error de fila, igual que antes. Esto es
- *   a propósito y no cambia: un SKU mal tipeado tiene que avisar, no crear
- *   un producto duplicado por accidente.
+ * Es un núcleo aparte de `validarCamposDeProducto` (el del alta) y no una
+ * variante suya con banderas, porque no comparten el contrato: el alta valida
+ * quince campos y **exige** descripción; la actualización valida tres y no
+ * conoce los otros doce. Meter las dos reglas en una función con condicionales
+ * es lo que hace que un día alguien afloje una validación del alta creyendo
+ * que ajusta la de actualización.
+ *
+ * A diferencia del alta, `stock` es **obligatorio**: una celda vacía en el
+ * alta significa "arranca en 0", pero acá significaría "poné en 0 el stock
+ * de un producto que ya tenía existencias", que casi nunca es lo que quiso
+ * quien dejó la celda sin tocar. Se pide explícito.
+ *
+ * Acumula TODOS los errores de la fila antes de devolver, mismo criterio que
+ * el alta: el admin ve todos los problemas de una sola pasada.
+ *
+ * @param {object} fila valores crudos de la fila, indexados por nombre de columna
+ * @param {number} numeroFila número de fila TAL COMO SE VE EN EXCEL (encabezado = 1)
+ * @returns {{ datos: object|null, errores: Array<{fila:number,columna:string,valor:*,motivo:string}> }}
+ */
+function validarCamposDeActualizacion(fila, numeroFila) {
+  const errores = [];
+  const error = (columna, valor, motivo) => errores.push({ fila: numeroFila, columna, valor, motivo });
+
+  const nombre = textoOpcional(fila.nombre);
+  if (nombre === null) error("nombre", fila.nombre ?? "", "El nombre es obligatorio.");
+
+  const precio = normalizarPrecio(fila.precio);
+  if (precio === null) {
+    error("precio", fila.precio ?? "", "El precio debe ser un número entero mayor a 0, sin decimales.");
+  }
+
+  let stock = null;
+  if (fila.stock === null || fila.stock === undefined || fila.stock === "") {
+    error("stock", fila.stock ?? "", "El stock es obligatorio.");
+  } else {
+    const parseado = Number(fila.stock);
+    if (!Number.isInteger(parseado) || parseado < 0) {
+      error("stock", fila.stock, "El stock debe ser un número entero mayor o igual a 0.");
+    } else {
+      stock = parseado;
+    }
+  }
+
+  if (errores.length > 0) return { datos: null, errores };
+
+  return { datos: { nombre, precio, stock }, errores: [] };
+}
+
+/**
+ * Valida una fila de la planilla de ACTUALIZACIÓN y resuelve su `sku` contra
+ * un producto existente. Dos ramas, no tres:
+ *
+ * - `sku` presente y existe en `idsPorSku` → `id` resuelto.
+ * - `sku` vacío o inexistente → error de fila.
+ *
+ * **La rama de ALTA por `sku` vacío se eliminó el 25/08/2026**, junto con el
+ * recorte de `COLUMNAS_ACTUALIZACION` a cuatro columnas. No fue una decisión
+ * de gusto: `Product.descripcion` es `NOT NULL` y la planilla ya no trae esa
+ * columna, así que un producto nuevo creado desde este archivo no puede
+ * existir. Las altas van por `POST /products/import` (pantalla
+ * `/catalogo/admin/productos/importar`), que sigue usando la plantilla
+ * completa de quince campos.
+ *
+ * Que un `sku` inexistente sea error tampoco cambia, y es la misma protección
+ * de siempre: un SKU mal tipeado tiene que avisar, no crear un duplicado.
  *
  * El `sku` se valida por separado y sus errores se anteponen a los de campo,
  * mismo orden que su columna (primera de `COLUMNAS_ACTUALIZACION`).
  *
  * @param {object} fila valores crudos de la fila, indexados por nombre de columna
  * @param {number} numeroFila número de fila TAL COMO SE VE EN EXCEL (encabezado = 1)
- * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
  * @param {Map<string, number>} idsPorSku sku -> id de producto existente
- * @returns {{ datos: object|null, id: number|null, accion: ("crear"|"actualizar"|null), errores: Array<{fila:number,columna:string,valor:*,motivo:string}> }}
+ * @returns {{ datos: object|null, id: number|null, errores: Array<{fila:number,columna:string,valor:*,motivo:string}> }}
  */
-export function validarFilaActualizacion(fila, numeroFila, categoriasPorNombre, idsPorSku) {
+export function validarFilaActualizacion(fila, numeroFila, idsPorSku) {
   const erroresSku = [];
   const errorSku = (columna, valor, motivo) => erroresSku.push({ fila: numeroFila, columna, valor, motivo });
 
   const sku = textoOpcional(fila.sku);
   let id = null;
-  let accion = null;
   if (sku === null) {
-    accion = "crear";
+    errorSku("sku", fila.sku ?? "", "El SKU es obligatorio. Este archivo solo actualiza productos que ya existen.");
   } else {
     const encontrado = idsPorSku.get(sku);
     if (encontrado === undefined) {
       errorSku("sku", fila.sku, "No existe ningún producto con este SKU.");
     } else {
       id = encontrado;
-      accion = "actualizar";
     }
   }
 
-  const { datos, errores } = validarCamposDeProducto(fila, numeroFila, categoriasPorNombre);
+  const { datos, errores } = validarCamposDeActualizacion(fila, numeroFila);
   const erroresTotales = [...erroresSku, ...errores];
 
-  if (erroresTotales.length > 0) return { datos: null, id: null, accion: null, errores: erroresTotales };
+  if (erroresTotales.length > 0) return { datos: null, id: null, errores: erroresTotales };
 
-  return { datos, id, accion, errores: [] };
+  return { datos, id, errores: [] };
 }
 
 /**
@@ -295,12 +326,24 @@ export const COLUMNAS = [
 ];
 
 /**
- * Columnas de la hoja de ACTUALIZACIÓN masiva: las mismas de `COLUMNAS` más
- * `sku` al frente, que es la clave de matcheo contra un producto existente.
- * Es lo que exporta `GET /products/export` y lo que vuelve a leer
+ * Columnas de la hoja de ACTUALIZACIÓN masiva. Es lo que exporta
+ * `GET /products/export` y lo que vuelve a leer
  * `POST /products/actualizar-masivo`.
+ *
+ * **Es un subconjunto chico y deliberado de `COLUMNAS`, NO `["sku", ...COLUMNAS]`
+ * como era hasta el 25/08/2026.** El flujo existe para retocar precios y stock
+ * de un catálogo ya cargado, y para eso la planilla completa de 16 columnas
+ * era más estorbo que ayuda: hay que scrollear entre textos largos para
+ * llegar al número que se quiere cambiar.
+ *
+ * La consecuencia importante NO es cosmética: al no viajar en el archivo,
+ * descripción, categoría, etiqueta, contenido comercial, listas y
+ * especificaciones **quedan intactas** en la actualización. Antes viajaban
+ * todas y se reescribían enteras en cada subida. Ver `dataDeActualizacion` en
+ * `controllers/productsImport.controller.js`, que es donde esa garantía se
+ * cumple o se rompe.
  */
-export const COLUMNAS_ACTUALIZACION = ["sku", ...COLUMNAS];
+export const COLUMNAS_ACTUALIZACION = ["sku", "nombre", "precio", "stock"];
 
 export const NOMBRE_HOJA = "Productos";
 
@@ -427,26 +470,26 @@ export async function procesarArchivo(buffer, categoriasPorNombre) {
 }
 
 /**
- * Pipeline completo de la ACTUALIZACIÓN/ALTA masiva: mismo espíritu que
- * `procesarArchivo`, pero lee `COLUMNAS_ACTUALIZACION` y por cada fila decide
- * entre crear (sku vacío) o actualizar (sku existente) — ver
- * `validarFilaActualizacion`. Es lo que permite reusar el mismo `.xlsx`
- * exportado tanto para editar productos existentes como para agregar filas
- * nuevas al final, sin pasar por la pantalla de alta clásica.
+ * Pipeline completo de la ACTUALIZACIÓN masiva: mismo espíritu que
+ * `procesarArchivo`, pero lee `COLUMNAS_ACTUALIZACION` (cuatro columnas) y
+ * resuelve cada fila contra un producto existente por `sku` — ver
+ * `validarFilaActualizacion`.
+ *
+ * Ya no crea productos: la rama de alta por `sku` vacío se eliminó el
+ * 25/08/2026 porque la planilla dejó de traer `descripcion`, que es `NOT NULL`.
  *
  * Todo o nada, igual que el alta: si hay al menos un error de fila,
  * `operaciones` viene vacío.
  *
  * @param {Buffer} buffer
- * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
  * @param {Map<string, number>} idsPorSku sku -> id de producto existente
- * @returns {Promise<{ operaciones: Array<{accion:("crear"|"actualizar"), id:number|null, datos:object}>, errores: Array }>}
+ * @returns {Promise<{ operaciones: Array<{id:number, datos:object}>, errores: Array }>}
  */
-export async function procesarArchivoActualizacion(buffer, categoriasPorNombre, idsPorSku) {
+export async function procesarArchivoActualizacion(buffer, idsPorSku) {
   const filas = await leerArchivo(buffer, COLUMNAS_ACTUALIZACION);
 
   if (filas.length === 0) {
-    throw new Error("El archivo no tiene ninguna fila para actualizar o crear.");
+    throw new Error("El archivo no tiene ninguna fila para actualizar.");
   }
   if (filas.length > MAX_FILAS_ACTUALIZACION) {
     throw new Error(`El archivo tiene más de ${MAX_FILAS_ACTUALIZACION} filas. Dividilo en varios archivos.`);
@@ -456,9 +499,9 @@ export async function procesarArchivoActualizacion(buffer, categoriasPorNombre, 
   const errores = [];
 
   for (const { numeroFila, valores } of filas) {
-    const resultado = validarFilaActualizacion(valores, numeroFila, categoriasPorNombre, idsPorSku);
+    const resultado = validarFilaActualizacion(valores, numeroFila, idsPorSku);
     if (resultado.errores.length > 0) errores.push(...resultado.errores);
-    else operaciones.push({ accion: resultado.accion, id: resultado.id, datos: resultado.datos });
+    else operaciones.push({ id: resultado.id, datos: resultado.datos });
   }
 
   return errores.length > 0 ? { operaciones: [], errores } : { operaciones, errores: [] };

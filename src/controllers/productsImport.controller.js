@@ -17,24 +17,6 @@ import { httpError } from "../lib/httpError.js";
 import { PRODUCT_INCLUDE, mapProducto } from "./products.mapper.js";
 
 /**
- * Agrupa `listas` (forma cruda de Prisma: `{tipo, texto}`) en los cuatro
- * baldes que espera `productoAFila`. Mismo criterio que
- * `agruparListasPorTipo` de `products.mapper.js`, pero ese helper es privado
- * a ese módulo — se repite acá en vez de exportarlo porque son solo cuatro
- * líneas y este controller no necesita el resto de `products.mapper.js` para
- * esto.
- */
-function agruparListasParaExportar(listas) {
-  const porTipo = { BENEFICIO: [], USO: [], IDEAL_PARA: [], INCLUYE: [] };
-  for (const item of listas) porTipo[item.tipo]?.push({ texto: item.texto });
-  return {
-    beneficios: porTipo.BENEFICIO,
-    usos: porTipo.USO,
-    idealPara: porTipo.IDEAL_PARA,
-    incluye: porTipo.INCLUYE,
-  };
-}
-/**
  * `GET /api/products/import/template` — devuelve el `.xlsx` de plantilla con
  * los desplegables poblados con las categorías que existen ahora mismo.
  *
@@ -131,32 +113,16 @@ export async function importar(req, res, next) {
  */
 export async function exportar(_req, res, next) {
   try {
-    const [productos, categorias] = await Promise.all([
-      prisma.product.findMany({
-        select: {
-          sku: true,
-          nombre: true,
-          descripcion: true,
-          precio: true,
-          stock: true,
-          etiqueta: true,
-          fraseComercial: true,
-          porQueLoVasAQuerer: true,
-          tePasaEsto: true,
-          categoria: { select: { nombre: true } },
-          caracteristicas: { select: { texto: true }, orderBy: { id: "asc" } },
-          listas: { select: { tipo: true, texto: true, orden: true }, orderBy: { orden: "asc" } },
-          especificaciones: { select: { nombre: true, valor: true, orden: true }, orderBy: { orden: "asc" } },
-        },
-        orderBy: { id: "asc" },
-      }),
-      prisma.categoria.findMany({ select: { nombre: true }, orderBy: { nombre: "asc" } }),
-    ]);
+    // Cuatro columnas, cuatro campos: desde el 25/08/2026 el archivo de
+    // actualización no lleva descripción, categoría, etiqueta, contenido
+    // comercial, listas ni especificaciones, así que traerlas de la base era
+    // pagar los joins de todo el catálogo para descartarlas.
+    const productos = await prisma.product.findMany({
+      select: { sku: true, nombre: true, precio: true, stock: true },
+      orderBy: { id: "asc" },
+    });
 
-    const buffer = await generarExportacion(
-      productos.map((p) => ({ ...p, ...agruparListasParaExportar(p.listas) })),
-      categorias.map((c) => c.nombre),
-    );
+    const buffer = await generarExportacion(productos);
 
     res.setHeader(
       "Content-Type",
@@ -197,71 +163,67 @@ function dataDeAlta(datos, sku) {
   };
 }
 
-/** Arma el `data` de actualización de un producto existente. Mismo shape que la versión anterior de `actualizarMasivo`. */
+/**
+ * Arma el `data` de actualización de un producto existente.
+ *
+ * **Solo `nombre`, `precio` y `stock`.** Es EXACTAMENTE lo que viaja en el
+ * `.xlsx` (`COLUMNAS_ACTUALIZACION` en `lib/importProductos.js`), y esa
+ * correspondencia es la garantía central de este flujo: lo que el archivo no
+ * trae, la actualización no toca.
+ *
+ * Hasta el 25/08/2026 esta función escribía quince campos y **reemplazaba
+ * enteras** las relaciones de contenido con `deleteMany` + `create`. Sumarle
+ * acá un campo que la planilla no trae reintroduce ese modo de falla en su
+ * peor forma: llegaría `undefined`/`null` en cada fila y le vaciaría ese
+ * campo a todo el catálogo de una, sin error y sin nada en pantalla que lo
+ * delate. Si hace falta actualizar un campo nuevo por planilla, se agrega
+ * primero a `COLUMNAS_ACTUALIZACION` y a la validación de fila — nunca solo
+ * acá.
+ *
+ * `sku`, `visibleEnCatalogo`, `destacado`, `orden`, fotos y video tampoco
+ * aparecen, por la misma razón de siempre: al no estar en `data`, Prisma las
+ * deja intactas. Se editan por otras vías (el listado del admin, el editor
+ * con media).
+ */
 function dataDeActualizacion(datos) {
   return {
     nombre: datos.nombre,
-    descripcion: datos.descripcion,
     precio: datos.precio,
     stock: datos.stock,
-    etiqueta: datos.etiqueta,
-    categoriaId: datos.categoriaId,
-    fraseComercial: datos.fraseComercial,
-    porQueLoVasAQuerer: datos.porQueLoVasAQuerer,
-    tePasaEsto: datos.tePasaEsto,
-    // Reemplazo total de las relaciones de contenido, mismo patrón que
-    // `actualizar` en `products.controller.js`. `sku`, `visibleEnCatalogo`,
-    // `destacado`, `orden` y las relaciones de media NO aparecen acá a
-    // propósito: al no estar en `data`, Prisma las deja intactas.
-    caracteristicas: { deleteMany: {}, create: datos.caracteristicas },
-    listas: {
-      deleteMany: {},
-      create: [
-        ...datos.beneficios.map((item, i) => ({ ...item, tipo: "BENEFICIO", orden: i })),
-        ...datos.usos.map((item, i) => ({ ...item, tipo: "USO", orden: i })),
-        ...datos.idealPara.map((item, i) => ({ ...item, tipo: "IDEAL_PARA", orden: i })),
-        ...datos.incluye.map((item, i) => ({ ...item, tipo: "INCLUYE", orden: i })),
-      ],
-    },
-    especificaciones: {
-      deleteMany: {},
-      create: datos.especificaciones.map((e, i) => ({ ...e, orden: i })),
-    },
   };
 }
 
 /**
  * `POST /api/products/actualizar-masivo` — sube el mismo `.xlsx` que exporta
- * `GET /products/export` y hace un UPSERT por fila, matcheado por `sku`:
+ * `GET /products/export` y actualiza los productos matcheados por `sku`.
  *
- * - `sku` vacío → CREA el producto (mismo criterio que `importar`: oculto,
- *   sin media, sku nuevo generado acá).
- * - `sku` presente y existente → ACTUALIZA ese producto. Nunca toca `sku`,
- *   `visibleEnCatalogo`, `destacado`, `orden`, fotos ni video — son
- *   invariantes de seguridad de este flujo, no un detalle de implementación.
- *   Esos campos se editan por otras vías (el listado del admin, el editor
- *   con media).
- * - `sku` presente pero inexistente → error de fila (typo). Es la protección
- *   contra que un SKU mal tipeado cree un duplicado por accidente en vez de
- *   avisar; sigue sin crear en ese caso.
+ * Cuatro columnas: `sku`, `nombre`, `precio`, `stock`. Solo esos tres últimos
+ * campos se escriben. **Todo lo demás del producto queda intacto** —
+ * descripción, categoría, etiqueta, contenido comercial, características,
+ * listas, especificaciones, `sku`, `visibleEnCatalogo`, `destacado`, `orden`,
+ * fotos y video. Ver `dataDeActualizacion`, que es donde esa garantía vive.
  *
- * Es upsert desde el pedido explícito de reusar el mismo Excel exportado
- * para agregar productos nuevos al final del catálogo, sin tener que ir a la
- * pantalla de alta clásica (`AdminImportarProductos`, que sigue existiendo
- * tal cual para la carga inicial en frío).
+ * **Este flujo ya NO crea productos** (cambio del 25/08/2026, junto con el
+ * recorte de columnas). Antes un `sku` vacío daba de alta un producto; hoy es
+ * error de fila, porque `Product.descripcion` es `NOT NULL` y la planilla dejó
+ * de traer esa columna. Las altas van por `POST /products/import`
+ * (`AdminImportarProductos`), que sigue usando la plantilla completa.
  *
- * Todo o nada, mismo criterio que `importar`: si una sola fila es inválida
- * no se escribe nada.
+ * Un `sku` inexistente sigue siendo error de fila: es la protección contra que
+ * un SKU mal tipeado pase por otro producto en vez de avisar.
+ *
+ * Todo o nada, mismo criterio que `importar`: si una sola fila es inválida no
+ * se escribe nada.
  */
 export async function actualizarMasivo(req, res, next) {
   try {
     if (!req.file) throw httpError(400, "Subí un archivo .xlsx con los productos.");
 
-    const [categorias, productosExistentes] = await Promise.all([
-      prisma.categoria.findMany({ select: { id: true, nombre: true } }),
-      prisma.product.findMany({ select: { id: true, sku: true, precio: true, stock: true } }),
-    ]);
-    const categoriasPorNombre = new Map(categorias.map((c) => [c.nombre.toLowerCase(), c.id]));
+    // Sin la consulta de categorías: la planilla ya no tiene esa columna, así
+    // que no hay nada que resolver contra ella.
+    const productosExistentes = await prisma.product.findMany({
+      select: { id: true, sku: true, precio: true, stock: true },
+    });
     const idsPorSku = new Map(productosExistentes.map((p) => [p.sku, p.id]));
     // Snapshot previo, para que la auditoría pueda mostrar precio/stock
     // antes -> después de cada producto tocado.
@@ -271,7 +233,7 @@ export async function actualizarMasivo(req, res, next) {
 
     let procesado;
     try {
-      procesado = await procesarArchivoActualizacion(req.file.buffer, categoriasPorNombre, idsPorSku);
+      procesado = await procesarArchivoActualizacion(req.file.buffer, idsPorSku);
     } catch (err) {
       // Problema del ARCHIVO (vacío, sin la hoja, supera el límite): no tiene
       // fila a la que apuntar, así que es un 400 con mensaje suelto.
@@ -285,67 +247,34 @@ export async function actualizarMasivo(req, res, next) {
       });
     }
 
-    // Los sku de las filas nuevas se generan ANTES de la transacción, todos
-    // juntos, para que `generarSkusUnicos` los resuelva sin colisionar entre
-    // sí ni contra los que ya existen en la base. Se consumen con un cursor
-    // en vez de reordenar `operaciones`: el orden importa para poder auditar
-    // después con el mismo índice que devolvió `$transaction`.
-    const nombresACrear = procesado.operaciones
-      .filter((op) => op.accion === "crear")
-      .map((op) => op.datos.nombre);
-    const skusGenerados = generarSkusUnicos(nombresACrear, new Set(idsPorSku.keys()));
-    let cursorSku = 0;
-
     const resultados = await prisma.$transaction(
       procesado.operaciones.map((op) =>
-        op.accion === "crear"
-          ? prisma.product.create({
-              data: dataDeAlta(op.datos, skusGenerados[cursorSku++]),
-              include: PRODUCT_INCLUDE,
-            })
-          : prisma.product.update({
-              where: { id: op.id },
-              data: dataDeActualizacion(op.datos),
-              include: PRODUCT_INCLUDE,
-            }),
+        prisma.product.update({
+          where: { id: op.id },
+          data: dataDeActualizacion(op.datos),
+          include: PRODUCT_INCLUDE,
+        }),
       ),
     );
 
-    let creados = 0;
-    let actualizados = 0;
-
-    // Mismo índice en `operaciones` y `resultados`: `$transaction` preserva
-    // el orden del array que recibe. Un renglón de auditoría POR PRODUCTO,
-    // no uno por lote — mismo criterio que
-    // `eliminarMasivo`/`actualizarVisibilidadMasiva` en
+    // Un renglón de auditoría POR PRODUCTO, no uno por lote — mismo criterio
+    // que `eliminarMasivo`/`actualizarVisibilidadMasiva` en
     // `products.controller.js`: la pregunta que se le hace después a
     // `AuditLog` es "¿quién tocó ESTE producto?".
-    procesado.operaciones.forEach((op, indice) => {
-      const resultado = resultados[indice];
-      if (op.accion === "crear") {
-        creados += 1;
-        logAudit(req, {
-          accion: "IMPORTAR_MASIVO",
-          entidad: "Producto",
-          entidadId: resultado.id,
-          detalle: { sku: resultado.sku },
-        });
-      } else {
-        actualizados += 1;
-        const antes = antesPorId.get(resultado.id);
-        logAudit(req, {
-          accion: "ACTUALIZAR_MASIVO",
-          entidad: "Producto",
-          entidadId: resultado.id,
-          detalle: {
-            precio: { antes: antes?.precio ?? null, despues: resultado.precio.toString() },
-            stock: { antes: antes?.stock ?? null, despues: resultado.stock },
-          },
-        });
-      }
-    });
+    for (const resultado of resultados) {
+      const antes = antesPorId.get(resultado.id);
+      logAudit(req, {
+        accion: "ACTUALIZAR_MASIVO",
+        entidad: "Producto",
+        entidadId: resultado.id,
+        detalle: {
+          precio: { antes: antes?.precio ?? null, despues: resultado.precio.toString() },
+          stock: { antes: antes?.stock ?? null, despues: resultado.stock },
+        },
+      });
+    }
 
-    res.json({ creados, actualizados, productos: resultados.map(mapProducto) });
+    res.json({ actualizados: resultados.length, productos: resultados.map(mapProducto) });
   } catch (err) {
     next(err);
   }
