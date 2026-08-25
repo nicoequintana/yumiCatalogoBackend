@@ -1,0 +1,11 @@
+node_modules
+src/generated
+.env
+.env.local
+*.log
+npm-debug.log*
+.git
+.vscode
+.idea
+**/*.test.js
+coverage
