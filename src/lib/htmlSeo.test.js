@@ -92,4 +92,34 @@ describe("renderHtmlSeo", () => {
     expect(html).toContain('<html lang="es">');
     expect(html).toContain('<meta charset="UTF-8" />');
   });
+
+  // Sin este tag, un buscador no tiene de dónde sacar el favicon del resultado
+  // —`/favicon.ico` acá devuelve el index.html de la SPA, no una imagen— y el
+  // resultado sale con el globo gris genérico.
+  it("emite el link del favicon en el origen del canonical", () => {
+    const html = renderHtmlSeo(base);
+    expect(html).toContain(
+      '<link rel="icon" type="image/png" sizes="144x144" href="https://yima.example.com/favicon.png" />',
+    );
+  });
+
+  it("apunta el favicon a la raíz del sitio, no a la ruta de la página", () => {
+    const html = renderHtmlSeo({
+      ...base,
+      canonical: "https://yima.example.com/coleccion/categoria/cocina",
+    });
+    expect(html).toContain('href="https://yima.example.com/favicon.png"');
+  });
+
+  it("también lo emite en el documento noindex", () => {
+    const html = renderHtmlSeo({ ...base, noindex: true });
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain('<meta name="robots" content="noindex, follow" />');
+  });
+
+  it("omite el tag sin romper el documento si el canonical es inservible", () => {
+    const html = renderHtmlSeo({ ...base, canonical: "no-es-una-url" });
+    expect(html).not.toContain('rel="icon"');
+    expect(html).toContain("<title>Set de cuchillos — YIMA</title>");
+  });
 });

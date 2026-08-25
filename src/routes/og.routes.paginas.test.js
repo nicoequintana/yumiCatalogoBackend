@@ -45,6 +45,17 @@ describe("GET /og/home", () => {
     expect(res.text).not.toContain("noindex");
   });
 
+  // La home es el documento del que Google saca el favicon del resultado de
+  // búsqueda, y Googlebot recibe ESTE HTML, no el `index.html` de la SPA
+  // (nginx lo desvía por User-Agent). Sin el tag acá, el resultado sale con el
+  // globo gris por más que `frontend/index.html` sí lo declare.
+  it("declara el favicon en el dominio del frontend", async () => {
+    const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain('rel="icon"');
+    expect(res.text).toContain('href="https://yima.example.com/favicon.png"');
+  });
+
   it("emite el MISMO <h1> y el mismo copy que la home real, no un resumen (regla de cloaking)", async () => {
     const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
 
