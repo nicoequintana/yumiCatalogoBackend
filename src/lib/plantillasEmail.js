@@ -48,21 +48,34 @@ export function escaparHtml(valor) {
 }
 
 /**
- * Formatea un `Decimal` como moneda argentina: punto para miles, coma para
- * decimales, siempre dos decimales.
+ * Formatea un `Decimal` como moneda argentina: punto para miles, SIN decimales.
+ *
+ * Los montos del sistema son enteros (`Product.precio` e
+ * `ItemOrden.precioUnitario` son `Decimal(10, 0)`), así que un `,00` fijo al
+ * final sería ruido constante. `toFixed(0)` igual redondea por las dudas: si
+ * alguna vez entra un `Decimal` con parte fraccionaria por una vía que no pasa
+ * por la validación, es preferible un monto redondeado a uno con cola.
  *
  * A mano y no con `Intl.NumberFormat`: la salida de Intl depende de la
  * versión de ICU del runtime (incluido el tipo de espacio que mete después
  * del símbolo), así que un test que la afirme pasa en una máquina y falla en
  * otra. Un mail no necesita localización configurable.
  *
+ * ESPEJO MANUAL de `formatPrecio` en `frontend/src/utils/formato.js` — los dos
+ * repos se publican por separado. La salida difiere en un detalle a propósito:
+ * el frontend separa el símbolo con un espacio (`"$ 45.000"`) y acá va pegado
+ * (`"$45.000"`), como ya venía siendo. Lo que SÍ tiene que coincidir es la
+ * cantidad de decimales, porque `controllers/seo.cuerpo.js` usa esta función
+ * para el precio que ve un crawler y ese texto no puede diferir del que
+ * muestra `FichaProducto.jsx` (regla de cloaking).
+ *
  * @param {import("@prisma/client/runtime/client.js").Decimal} decimal
  * @returns {string}
  */
 export function formatearMonto(decimal) {
-  const [entero, decimales] = decimal.toFixed(2).split(".");
+  const entero = decimal.toFixed(0);
   const conMiles = entero.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  return `$${conMiles},${decimales}`;
+  return `$${conMiles}`;
 }
 
 /** Detalle de los items en texto plano, una línea por item. */

@@ -175,20 +175,38 @@ describe("validarFila", () => {
     expect(errores.map((e) => e.columna)).toEqual(["nombre", "descripcion", "precio"]);
   });
 
-  it("rechaza precio no numérico, cero o negativo", () => {
-    for (const precio of ["abc", 0, -5]) {
+  it("rechaza precio no numérico, cero, negativo o con centavos", () => {
+    // "1500,50" y "1500.50" son el MISMO caso: la coma se sigue interpretando
+    // como separador decimal, pero solo para poder detectar los centavos y
+    // rechazarlos. `Product.precio` es `Decimal(10, 0)`.
+    for (const precio of ["abc", 0, -5, "1500,50", "1500.50", 0.5]) {
       const { errores } = validarFila(filaValida({ precio }), 4, CATEGORIAS);
       expect(errores).toEqual([
-        { fila: 4, columna: "precio", valor: precio, motivo: "El precio debe ser un número mayor a 0." },
+        {
+          fila: 4,
+          columna: "precio",
+          valor: precio,
+          motivo: "El precio debe ser un número entero mayor a 0, sin decimales.",
+        },
       ]);
     }
   });
 
-  it("acepta el precio como texto con coma decimal (Excel en configuración regional)", () => {
-    const { datos, errores } = validarFila(filaValida({ precio: "1500,50" }), 2, CATEGORIAS);
+  it("acepta el precio como texto con separador de miles ausente y lo normaliza a entero", () => {
+    const { datos, errores } = validarFila(filaValida({ precio: "1500" }), 2, CATEGORIAS);
 
     expect(errores).toEqual([]);
-    expect(datos.precio).toBe("1500.50");
+    expect(datos.precio).toBe("1500");
+  });
+
+  // Excel guarda un 1500 tipeado en una celda con formato de moneda como
+  // `1500` a secas, pero un archivo generado por otra herramienta puede traer
+  // "1500,00". Los centavos en cero NO son centavos: se acepta y se normaliza.
+  it("acepta decimales en cero y los normaliza sin cola", () => {
+    const { datos, errores } = validarFila(filaValida({ precio: "1500,00" }), 2, CATEGORIAS);
+
+    expect(errores).toEqual([]);
+    expect(datos.precio).toBe("1500");
   });
 
   it("rechaza stock negativo o no entero", () => {
@@ -495,7 +513,12 @@ describe("validarFilaActualizacion", () => {
     expect(accion).toBeNull();
     expect(errores).toEqual([
       { fila: 3, columna: "nombre", valor: "", motivo: "El nombre es obligatorio." },
-      { fila: 3, columna: "precio", valor: "abc", motivo: "El precio debe ser un número mayor a 0." },
+      {
+        fila: 3,
+        columna: "precio",
+        valor: "abc",
+        motivo: "El precio debe ser un número entero mayor a 0, sin decimales.",
+      },
     ]);
   });
 

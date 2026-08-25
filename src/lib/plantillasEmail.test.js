@@ -20,22 +20,31 @@ const ORDEN = {
     email: "juan@gmail.com",
   },
   items: [
-    { nombreProducto: "Lámpara de sal", precioUnitario: "12500.50", cantidad: 2 },
-    { nombreProducto: "Difusor", precioUnitario: "8000.00", cantidad: 1 },
+    // Enteros: `ItemOrden.precioUnitario` es `Decimal(10, 0)`, un snapshot con
+    // centavos ya no es un caso alcanzable.
+    { nombreProducto: "Lámpara de sal", precioUnitario: "12500", cantidad: 2 },
+    { nombreProducto: "Difusor", precioUnitario: "8000", cantidad: 1 },
   ],
 };
 
 describe("formatearMonto", () => {
-  it("usa punto para miles y coma para decimales", () => {
-    expect(formatearMonto(new Decimal("1234567.5"))).toBe("$1.234.567,50");
-  });
-
-  it("siempre muestra dos decimales", () => {
-    expect(formatearMonto(new Decimal("100"))).toBe("$100,00");
+  it("usa punto para miles y no emite decimales", () => {
+    expect(formatearMonto(new Decimal("1234567"))).toBe("$1.234.567");
   });
 
   it("no agrega separador por debajo de mil", () => {
-    expect(formatearMonto(new Decimal("999.99"))).toBe("$999,99");
+    expect(formatearMonto(new Decimal("999"))).toBe("$999");
+  });
+
+  // Los montos del sistema son enteros, así que esto no debería pasar nunca.
+  // Se fija igual porque la alternativa — emitir la cola de decimales tal
+  // cual — sacaría un `$999,99` en un mail donde todo el resto de los montos
+  // va sin centavos, y ese es justo el tipo de detalle que hace dudar de un
+  // total. Un valor así solo puede llegar por una vía que no pasa por la
+  // validación (un UPDATE a mano en la base).
+  it("redondea un valor con centavos en vez de arrastrarlos", () => {
+    expect(formatearMonto(new Decimal("999.99"))).toBe("$1.000");
+    expect(formatearMonto(new Decimal("1234.4"))).toBe("$1.234");
   });
 });
 
@@ -66,8 +75,8 @@ describe("plantillaOrdenCreadaCliente", () => {
   it("calcula el total con Decimal, no con float", () => {
     // 12500.50 * 2 + 8000 = 33001.00 exacto. Con float el .50 * 2 arrastra.
     const { texto, html } = plantillaOrdenCreadaCliente(ORDEN);
-    expect(texto).toContain("$33.001,00");
-    expect(html).toContain("$33.001,00");
+    expect(texto).toContain("$33.000");
+    expect(html).toContain("$33.000");
   });
 
   it("incluye las notas cuando la orden las tiene", () => {
@@ -129,7 +138,7 @@ describe("plantillaOrdenCreadaAdmin", () => {
   });
 
   it("calcula el total con Decimal", () => {
-    expect(plantillaOrdenCreadaAdmin(ORDEN, OPCIONES).texto).toContain("$33.001,00");
+    expect(plantillaOrdenCreadaAdmin(ORDEN, OPCIONES).texto).toContain("$33.000");
   });
 });
 
@@ -158,6 +167,6 @@ describe("plantillaCambioEstadoCliente", () => {
   it("repite el detalle de la orden para que el mail se entienda solo", () => {
     const { texto } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" });
     expect(texto).toContain("Lámpara de sal");
-    expect(texto).toContain("$33.001,00");
+    expect(texto).toContain("$33.000");
   });
 });

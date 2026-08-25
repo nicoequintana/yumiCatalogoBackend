@@ -58,15 +58,30 @@ describe("parseEspecificaciones", () => {
 
 describe("validarCamposBase — precio", () => {
   // Mismo criterio que `normalizarPrecio` del importador de planillas
-  // (`lib/importProductos.js`): finito y mayor a 0. Antes el formulario era
-  // más laxo que el `.xlsx`: un precio negativo entraba a la base (y de ahí a
-  // los snapshots de `ItemOrden` de futuras órdenes), y `"Infinity"` pasaba el
-  // chequeo de NaN y reventaba contra el `Decimal` de Prisma con un 500.
+  // (`lib/importProductos.js`): entero, finito y mayor a 0. Antes el formulario
+  // era más laxo que el `.xlsx`: un precio negativo entraba a la base (y de ahí
+  // a los snapshots de `ItemOrden` de futuras órdenes), y `"Infinity"` pasaba
+  // el chequeo de NaN y reventaba contra el `Decimal` de Prisma con un 500.
   const base = { nombre: "Vela", descripcion: "Aromática" };
 
-  it("acepta un precio positivo (número o string multipart)", () => {
-    expect(() => validarCamposBase({ ...base, precio: "1500.50" }, { esCreacion: true })).not.toThrow();
+  it("acepta un precio entero positivo (número o string multipart)", () => {
+    expect(() => validarCamposBase({ ...base, precio: "1500" }, { esCreacion: true })).not.toThrow();
     expect(() => validarCamposBase({ ...base, precio: 100 }, { esCreacion: true })).not.toThrow();
+    // Un entero escrito con decimales en cero sigue siendo entero: lo que se
+    // rechaza son los centavos, no la notación.
+    expect(() => validarCamposBase({ ...base, precio: "1500.00" }, { esCreacion: true })).not.toThrow();
+  });
+
+  // La columna es `Decimal(10, 0)`: si esto pasara, SQL Server guardaría 1501
+  // sin avisar y el admin vería un precio que no cargó. El 400 es lo único que
+  // convierte esa corrección silenciosa en algo que se puede ver y corregir.
+  it("rechaza un precio con centavos con 400", () => {
+    expect(() => validarCamposBase({ ...base, precio: "1500.60" }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+    expect(() => validarCamposBase({ ...base, precio: 0.5 }, { esCreacion: true })).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
   });
 
   it("rechaza un precio negativo con 400", () => {

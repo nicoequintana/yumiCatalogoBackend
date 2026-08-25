@@ -80,7 +80,7 @@ const TOP_RANKING = 10;
 
 /**
  * Tope de días que puede abarcar el período. La serie temporal rellena con
- * `0.00` los días sin ventas (para que el gráfico no comprima el eje y
+ * `"0"` los días sin ventas (para que el gráfico no comprima el eje y
  * disimule un bache), así que el largo de la respuesta lo fija el rango, no
  * el volumen de datos: pedir 10 años devolvía ~3650 puntos y ~150KB casi
  * todos vacíos. Un poco más de un año cubre cualquier comparación
@@ -168,12 +168,18 @@ export function parsearPeriodo(query) {
  * `router.use(requireAuth)` de `admin.routes.js`, igual que los otros feeds.
  *
  * **Precisión monetaria**: los montos se calculan con `Decimal` (el mismo tipo
- * que Prisma devuelve para `precioUnitario`, que es `Decimal(10,2)`), nunca con
+ * que Prisma devuelve para `precioUnitario`, que es `Decimal(10,0)`), nunca con
  * aritmética float. Acumular en `number` deriva: sumar `0.10 * 7` diez veces da
- * `7.000000000000001` en float y `7.00` exacto en Decimal. Los montos salen
- * serializados como string con dos decimales (`.toFixed(2)`), siguiendo el
- * precedente de `mapProducto` en `products.controller.js` — el frontend ya
- * espera precios como string y los formatea con `formatPrecio`.
+ * `7.000000000000001` en float y `7.00` exacto en Decimal. Que los montos hoy
+ * sean enteros NO vuelve seguro el float: los promedios (`ticketPromedio`,
+ * `valorPromedioPorCliente`) dividen, y ahí la parte fraccionaria vuelve a
+ * aparecer antes de redondearse.
+ *
+ * Los montos salen serializados como string ENTERO (`.toFixed(0)`), siguiendo
+ * el precedente de `mapProducto` en `products.controller.js` — el frontend ya
+ * espera precios como string y los formatea con `formatPrecio`. Ese `toFixed(0)`
+ * es además el redondeo real de los promedios: un ticket promedio de
+ * `1500.5` se publica como `"1501"`, no como `"1500.5"`.
  *
  * **Origen de los montos**: siempre los snapshots de `ItemOrden`
  * (`precioUnitario * cantidad`), nunca el `precio` vivo del `Product`. Un
@@ -307,7 +313,7 @@ export async function resumenVentas(req, res, next) {
         productId: producto.productId,
         nombre: producto.nombre,
         unidades: producto.unidades,
-        facturacion: producto.facturacion.toFixed(2),
+        facturacion: producto.facturacion.toFixed(0),
       }));
 
     // La serie incluye TODOS los días del rango, también los que no tuvieron
@@ -318,14 +324,14 @@ export async function resumenVentas(req, res, next) {
       const clave = aClaveDia(dia);
       serieTemporal.push({
         fecha: clave,
-        ingresos: (porDia.get(clave) ?? new Decimal(0)).toFixed(2),
+        ingresos: (porDia.get(clave) ?? new Decimal(0)).toFixed(0),
       });
     }
 
     // Divisiones protegidas: sin órdenes en el período todo da 0, nunca
     // NaN/Infinity (que romperían el formateo en el frontend).
     const ticketPromedio =
-      cantidadOrdenes > 0 ? ingresosTotales.div(cantidadOrdenes).toFixed(2) : "0.00";
+      cantidadOrdenes > 0 ? ingresosTotales.div(cantidadOrdenes).toFixed(0) : "0";
     const productosPorOrden =
       cantidadOrdenes > 0 ? Math.round((itemsFacturados / cantidadOrdenes) * 100) / 100 : 0;
     const tasaCancelacion =
@@ -342,14 +348,14 @@ export async function resumenVentas(req, res, next) {
         tope: MAX_ORDENES_HISTORICO,
         recortado: historicoRecortado,
       },
-      ingresosTotales: ingresosTotales.toFixed(2),
+      ingresosTotales: ingresosTotales.toFixed(0),
       cantidadOrdenes,
       ticketPromedio,
       unidadesVendidas,
       productosPorOrden,
       pipeline: {
         cantidadOrdenes: pipelineOrdenes,
-        valorTotal: pipelineValor.toFixed(2),
+        valorTotal: pipelineValor.toFixed(0),
       },
       ordenesCanceladas,
       tasaCancelacion,

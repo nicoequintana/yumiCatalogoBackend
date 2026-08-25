@@ -72,12 +72,15 @@ describe("generarPlantilla", () => {
     expect(estricta.dataValidation.showErrorMessage).toBe(true);
   });
 
-  it("bloquea precios <= 0 y stock negativo o decimal", async () => {
+  it("bloquea precios <= 0 o con decimales, y stock negativo o decimal", async () => {
     const wb = await abrir(await generarPlantilla(["Velas"]));
     const hoja = wb.getWorksheet("Productos");
 
     const precio = hoja.getCell(2, COLUMNAS.indexOf("precio") + 1).dataValidation;
-    expect(precio.type).toBe("decimal");
+    // `whole`, no `decimal`: la columna de la base es `Decimal(10, 0)` y el
+    // importador rechaza los centavos. Que Excel los frene al tipearlos evita
+    // descubrirlo con la planilla entera cargada.
+    expect(precio.type).toBe("whole");
     expect(precio.operator).toBe("greaterThan");
     expect(precio.showErrorMessage).toBe(true);
 

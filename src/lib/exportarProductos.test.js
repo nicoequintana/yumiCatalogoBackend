@@ -12,7 +12,7 @@ function productoDePrueba(extra = {}) {
     sku: "VEL-1234",
     nombre: "Vela de soja",
     descripcion: "Aroma lavanda",
-    precio: 1500.5,
+    precio: 1500,
     stock: 12,
     categoria: { nombre: "Velas" },
     etiqueta: "Nuevo",
@@ -35,7 +35,7 @@ describe("productoAFila", () => {
 
     expect(fila[COLUMNAS_ACTUALIZACION.indexOf("sku")]).toBe("VEL-1234");
     expect(fila[COLUMNAS_ACTUALIZACION.indexOf("nombre")]).toBe("Vela de soja");
-    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("precio")]).toBe(1500.5);
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("precio")]).toBe(1500);
     expect(fila[COLUMNAS_ACTUALIZACION.indexOf("categoria")]).toBe("Velas");
     expect(fila[COLUMNAS_ACTUALIZACION.indexOf("beneficios")]).toBe("Dura 40 h\nSin humo");
     expect(fila[COLUMNAS_ACTUALIZACION.indexOf("especificaciones")]).toBe("Material: Soja");
@@ -84,7 +84,7 @@ describe("generarExportacion — round trip", () => {
     expect(datos).toEqual({
       nombre: producto.nombre,
       descripcion: producto.descripcion,
-      precio: "1500.50",
+      precio: "1500",
       stock: producto.stock,
       etiqueta: producto.etiqueta,
       categoriaId: 7,

@@ -172,7 +172,7 @@ export async function resumenOperacion(req, res, next) {
         estado: orden.estado,
         diasSinCambios: diasDesde(orden.updatedAt, ahora),
         clienteNombre: orden.cliente?.nombre ?? "Sin cliente",
-        total: totalDeItems(orden.items).toFixed(2),
+        total: totalDeItems(orden.items).toFixed(0),
       }))
       .sort((a, b) => b.diasSinCambios - a.diasSinCambios);
 

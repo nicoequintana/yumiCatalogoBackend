@@ -89,14 +89,18 @@ export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNA
   const indice = (columna) => columnas.indexOf(columna) + 1;
 
   for (let fila = 2; fila <= ultimaFila; fila++) {
+    // `whole` y no `decimal`: la columna `Product.precio` es `Decimal(10, 0)`,
+    // así que un precio con centavos lo rechaza `normalizarPrecio`
+    // (`lib/importProductos.js`) recién al importar. Que Excel lo frene al
+    // tipearlo le ahorra al admin descubrirlo con el archivo entero cargado.
     hoja.getCell(fila, indice("precio")).dataValidation = {
-      type: "decimal",
+      type: "whole",
       operator: "greaterThan",
       formulae: [0],
       allowBlank: true,
       showErrorMessage: true,
       errorTitle: "Precio inválido",
-      error: "El precio tiene que ser un número mayor a 0.",
+      error: "El precio tiene que ser un número entero mayor a 0, sin decimales.",
     };
 
     hoja.getCell(fila, indice("stock")).dataValidation = {

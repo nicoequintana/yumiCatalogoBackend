@@ -16,7 +16,10 @@ model Product {
   id                 Int              @id @default(autoincrement())
   nombre             String
   descripcion        String           @db.NVarChar(Max)
-  precio             Decimal          @db.Decimal(10, 2)
+  // Entero, sin centavos: el catálogo no cotiza en fracciones de peso. La
+  // escala 0 es lo que hace que `precio.toString()` salga `"45000"` y no
+  // `"45000.00"`, de ahí que el JSON-LD y los mappers no necesiten formatear.
+  precio             Decimal          @db.Decimal(10, 0)
   etiqueta           String?
   fraseComercial     String?
   porQueLoVasAQuerer String?          @db.NVarChar(Max)
@@ -209,7 +212,7 @@ model ItemOrden {
   productId      Int?
   product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   nombreProducto String // snapshot, no se recalcula
-  precioUnitario Decimal @db.Decimal(10, 2) // snapshot, no se recalcula
+  precioUnitario Decimal @db.Decimal(10, 0) // snapshot entero, no se recalcula
   cantidad       Int
 
   @@index([ordenId])

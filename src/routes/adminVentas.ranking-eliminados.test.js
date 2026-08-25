@@ -59,7 +59,7 @@ describe("ranking de ventas con productos eliminados", () => {
         id: 1,
         estado: "ENTREGADA",
         createdAt: new Date(),
-        items: [item(null, "Termo borrado", "100.00", 2), item(null, "Mate borrado", "50.00", 1)],
+        items: [item(null, "Termo borrado", "100", 2), item(null, "Mate borrado", "50", 1)],
       },
     ]);
 
@@ -72,8 +72,8 @@ describe("ranking de ventas con productos eliminados", () => {
     const porNombre = Object.fromEntries(
       res.body.rankingProductos.map((p) => [p.nombre, p.facturacion]),
     );
-    expect(porNombre["Termo borrado"]).toBe("200.00");
-    expect(porNombre["Mate borrado"]).toBe("50.00");
+    expect(porNombre["Termo borrado"]).toBe("200");
+    expect(porNombre["Mate borrado"]).toBe("50");
   });
 
   it("acumula las lineas del MISMO producto borrado en una sola fila", async () => {
@@ -82,13 +82,13 @@ describe("ranking de ventas con productos eliminados", () => {
         id: 1,
         estado: "ENTREGADA",
         createdAt: new Date(),
-        items: [item(null, "Termo borrado", "100.00", 2)],
+        items: [item(null, "Termo borrado", "100", 2)],
       },
       {
         id: 2,
         estado: "ENTREGADA",
         createdAt: new Date(),
-        items: [item(null, "Termo borrado", "100.00", 3)],
+        items: [item(null, "Termo borrado", "100", 3)],
       },
     ]);
 
@@ -96,7 +96,7 @@ describe("ranking de ventas con productos eliminados", () => {
 
     expect(res.body.rankingProductos).toHaveLength(1);
     expect(res.body.rankingProductos[0]).toEqual(
-      expect.objectContaining({ nombre: "Termo borrado", unidades: 5, facturacion: "500.00" }),
+      expect.objectContaining({ nombre: "Termo borrado", unidades: 5, facturacion: "500" }),
     );
   });
 
@@ -106,7 +106,7 @@ describe("ranking de ventas con productos eliminados", () => {
         id: 1,
         estado: "ENTREGADA",
         createdAt: new Date(),
-        items: [item(null, "Termo borrado", "100.00", 1), item(7, "Mate vivo", "100.00", 1)],
+        items: [item(null, "Termo borrado", "100", 1), item(7, "Mate vivo", "100", 1)],
       },
     ]);
 

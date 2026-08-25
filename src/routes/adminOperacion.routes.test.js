@@ -144,14 +144,14 @@ describe("GET /api/admin/operacion", () => {
           estado: "PENDIENTE",
           updatedAt: haceDias(12),
           cliente: { nombre: "Ana Gómez" },
-          items: [{ precioUnitario: "100.00", cantidad: 2 }],
+          items: [{ precioUnitario: "100", cantidad: 2 }],
         },
         {
           id: 4,
           estado: "CONFIRMADA",
           updatedAt: haceDias(5),
           cliente: { nombre: "Luis Paz" },
-          items: [{ precioUnitario: "50.00", cantidad: 1 }],
+          items: [{ precioUnitario: "50", cantidad: 1 }],
         },
       ];
     });
@@ -168,11 +168,11 @@ describe("GET /api/admin/operacion", () => {
     expect(primera.estado).toBe("PENDIENTE");
     expect(primera.diasSinCambios).toBe(12);
     expect(primera.clienteNombre).toBe("Ana Gómez");
-    expect(primera.total).toBe("200.00");
+    expect(primera.total).toBe("200");
 
     expect(segunda.id).toBe(4);
     expect(segunda.diasSinCambios).toBe(5);
-    expect(segunda.total).toBe("50.00");
+    expect(segunda.total).toBe("50");
 
     // Más estancada primero: es la que más urge destrabar.
     expect(primera.diasSinCambios).toBeGreaterThan(segunda.diasSinCambios);

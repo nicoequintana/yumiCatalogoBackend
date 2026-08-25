@@ -82,21 +82,21 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "ENTREGADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "200.00", cantidad: 1 }],
+        items: [{ precioUnitario: "200", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "CONFIRMADA",
         createdAt: "2026-08-11T12:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "50.00", cantidad: 1 }],
+        items: [{ precioUnitario: "50", cantidad: 1 }],
       }),
     ]);
 
@@ -119,14 +119,14 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-01-05T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -147,7 +147,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -164,7 +164,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     expect(args.where.estado.in).not.toContain("CANCELADA");
 
     expect(res.body.totalClientes).toBe(1);
-    expect(res.body.ingresosPeriodo).toBe("100.00");
+    expect(res.body.ingresosPeriodo).toBe("100");
   });
 
   it("calcula el valor promedio por cliente desde los snapshots de los items", async () => {
@@ -175,8 +175,8 @@ describe("GET /api/admin/clientes-resumen", () => {
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [
-          { precioUnitario: "1000.00", cantidad: 2 },
-          { precioUnitario: "500.50", cantidad: 1 },
+          { precioUnitario: "1000", cantidad: 2 },
+          { precioUnitario: "501", cantidad: 1 },
         ],
       }),
       orden({
@@ -184,7 +184,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "ENTREGADA",
         createdAt: "2026-08-11T12:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "999.50", cantidad: 1 }],
+        items: [{ precioUnitario: "999", cantidad: 1 }],
       }),
     ]);
 
@@ -192,31 +192,40 @@ describe("GET /api/admin/clientes-resumen", () => {
       .get("/api/admin/clientes-resumen?desde=2026-08-01&hasta=2026-08-15")
       .set("Authorization", authHeader);
 
-    // 2500.50 + 999.50 = 3500.00 sobre 2 clientes = 1750.00
-    expect(res.body.ingresosPeriodo).toBe("3500.00");
-    expect(res.body.valorPromedioPorCliente).toBe("1750.00");
+    // 2501 + 999 = 3500 sobre 2 clientes = 1750
+    expect(res.body.ingresosPeriodo).toBe("3500");
+    expect(res.body.valorPromedioPorCliente).toBe("1750");
   });
 
-  it("no pierde precisión acumulando montos con decimales", async () => {
-    // 0.10 * 7, diez veces. En float esto da 7.000000000000001.
+  // El promedio es la única métrica de esta pantalla que DIVIDE, y por eso es
+  // la única donde la parte fraccionaria reaparece aunque todos los montos de
+  // entrada sean enteros. Se serializa redondeada, como el resto: la respuesta
+  // no publica centavos por ningún camino.
+  //
+  // (El guard de "Decimal y no float" en la aritmética de montos vive ahora en
+  // `lib/dinero.test.js`, que afirma sobre el `Decimal` sin redondear. Acá ya
+  // no se puede: con montos enteros, float y Decimal dan el mismo resultado.)
+  it("redondea el valor promedio por cliente cuando la división no es exacta", async () => {
     ordenFindManyMock.mockResolvedValue(
-      Array.from({ length: 10 }, (_unused, indice) =>
-        orden({
-          id: indice + 1,
-          estado: "CONFIRMADA",
-          createdAt: "2026-08-10T12:00:00Z",
-          cliente: ANA,
-          items: [{ precioUnitario: "0.10", cantidad: 7 }],
-        }),
-      ),
+      // 1000 + 1000 + 1000 = 3000 sobre 2 clientes distintos = 1500 exacto...
+      // salvo que ANA aporta una orden más: 4000 / 3 clientes no existe.
+      [
+        orden({ id: 1, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: ANA,
+          items: [{ precioUnitario: "1000", cantidad: 1 }] }),
+        orden({ id: 2, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: BETO,
+          items: [{ precioUnitario: "1000", cantidad: 1 }] }),
+        orden({ id: 3, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: CARLA,
+          items: [{ precioUnitario: "1001", cantidad: 1 }] }),
+      ],
     );
 
     const res = await request(buildApp())
       .get("/api/admin/clientes-resumen?desde=2026-08-01&hasta=2026-08-15")
       .set("Authorization", authHeader);
 
-    expect(res.body.ingresosPeriodo).toBe("7.00");
-    expect(res.body.valorPromedioPorCliente).toBe("7.00");
+    // 3001 / 3 = 1000.333... -> "1000", nunca "1000.33" ni "1000.3333333333".
+    expect(res.body.ingresosPeriodo).toBe("3001");
+    expect(res.body.valorPromedioPorCliente).toBe("1000");
   });
 
   it("rankea a los mejores clientes por facturación de por vida", async () => {
@@ -227,7 +236,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "5000.00", cantidad: 1 }],
+        items: [{ precioUnitario: "5000", cantidad: 1 }],
       }),
       // Ana: dos órdenes que suman más que la de Beto.
       orden({
@@ -235,14 +244,14 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "4000.00", cantidad: 1 }],
+        items: [{ precioUnitario: "4000", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "ENTREGADA",
         createdAt: "2026-08-11T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "3000.00", cantidad: 1 }],
+        items: [{ precioUnitario: "3000", cantidad: 1 }],
       }),
       // Carla: la más chica.
       orden({
@@ -250,7 +259,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-12T12:00:00Z",
         cliente: CARLA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -264,14 +273,14 @@ describe("GET /api/admin/clientes-resumen", () => {
       dni: ANA.dni,
       nombre: "Ana",
       cantidadOrdenes: 2,
-      facturacion: "7000.00",
+      facturacion: "7000",
     });
     expect(ranking[1]).toMatchObject({
       dni: BETO.dni,
       cantidadOrdenes: 1,
-      facturacion: "5000.00",
+      facturacion: "5000",
     });
-    expect(ranking[2]).toMatchObject({ dni: CARLA.dni, facturacion: "100.00" });
+    expect(ranking[2]).toMatchObject({ dni: CARLA.dni, facturacion: "100" });
   });
 
   it("corta el ranking en 10 clientes", async () => {
@@ -293,7 +302,7 @@ describe("GET /api/admin/clientes-resumen", () => {
 
     expect(res.body.rankingClientes).toHaveLength(10);
     // El más grande primero: el índice 14 factura 1500.
-    expect(res.body.rankingClientes[0].facturacion).toBe("1500.00");
+    expect(res.body.rankingClientes[0].facturacion).toBe("1500");
   });
 
   it("calcula la tasa de recompra como proporción de clientes que repitieron", async () => {
@@ -304,28 +313,28 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CONFIRMADA",
         createdAt: "2026-08-05T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "CONFIRMADA",
         createdAt: "2026-08-06T12:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 4,
         estado: "CONFIRMADA",
         createdAt: "2026-08-07T12:00:00Z",
         cliente: CARLA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -346,21 +355,21 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CONFIRMADA",
         createdAt: "2026-08-05T12:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "CONFIRMADA",
         createdAt: "2026-08-07T12:00:00Z",
         cliente: CARLA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -381,21 +390,21 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CONFIRMADA",
         createdAt: "2026-08-11T00:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "CONFIRMADA",
         createdAt: "2026-08-21T00:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       // Beto: 01 -> 05, un intervalo de 4 días.
       orden({
@@ -403,14 +412,14 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 5,
         estado: "CONFIRMADA",
         createdAt: "2026-08-05T00:00:00Z",
         cliente: BETO,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       // Carla no repitió: no aporta ningún intervalo.
       orden({
@@ -418,7 +427,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-03T00:00:00Z",
         cliente: CARLA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -439,14 +448,14 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-21T00:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -468,9 +477,9 @@ describe("GET /api/admin/clientes-resumen", () => {
     expect(res.body.totalClientes).toBe(0);
     expect(res.body.clientesNuevos).toBe(0);
     expect(res.body.clientesRecurrentes).toBe(0);
-    expect(res.body.ingresosPeriodo).toBe("0.00");
+    expect(res.body.ingresosPeriodo).toBe("0");
     // División por cero protegida: promedio y tasa en 0, nunca NaN.
-    expect(res.body.valorPromedioPorCliente).toBe("0.00");
+    expect(res.body.valorPromedioPorCliente).toBe("0");
     expect(res.body.tasaRecompra).toBe(0);
     expect(Number.isNaN(res.body.tasaRecompra)).toBe(false);
     // El tiempo entre compras sigue siendo null: no hay dato, no es un cero.
@@ -530,7 +539,7 @@ describe("GET /api/admin/clientes-resumen", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
-        items: [{ precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -553,7 +562,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       estado: "CONFIRMADA",
       createdAt: "2026-08-10T12:00:00Z",
       cliente: ANA,
-      items: [{ precioUnitario: "100.00", cantidad: 1 }],
+      items: [{ precioUnitario: "100", cantidad: 1 }],
     });
     ordenFindManyMock.mockResolvedValue(Array.from({ length: MAX_ORDENES_HISTORICO + 1 }, () => unaOrden));
 
@@ -565,7 +574,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     expect(res.body.historico.recortado).toBe(true);
     // La fila extra solo sirve para detectar el corte: no entra en el cálculo.
     expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
-    expect(res.body.ingresosPeriodo).toBe((100 * MAX_ORDENES_HISTORICO).toFixed(2));
+    expect(res.body.ingresosPeriodo).toBe((100 * MAX_ORDENES_HISTORICO).toFixed(0));
   });
 
   it("cae al período por defecto si las fechas son inválidas, sin tirar 500", async () => {

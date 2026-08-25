@@ -97,12 +97,19 @@ function textoOpcional(celda) {
 }
 
 /**
- * Normaliza el precio a string con punto decimal, que es lo que espera Prisma
- * para una columna `Decimal` (mismo formato que usa `crear` con `String(precio)`).
+ * Normaliza el precio a string entero, que es lo que espera Prisma para la
+ * columna `Decimal(10, 0)` (mismo formato que usa `crear` con `String(precio)`).
  *
  * ExcelJS devuelve un número real cuando la celda es numérica, pero un archivo
  * editado en otra herramienta puede traerlo como texto con coma decimal
- * ("1500,50") — se acepta y se normaliza en vez de rechazarlo.
+ * ("1500,50") — la coma se sigue interpretando como separador decimal para
+ * poder DETECTARLA, no para aceptarla.
+ *
+ * Un precio con decimales se RECHAZA (mismo criterio que `validarCamposBase`
+ * en `controllers/products.input.js`): la columna es entera, así que
+ * redondear acá le cambiaría el precio a un producto sin que la planilla ni
+ * el informe de importación lo mencionen. Un error de fila que nombra el
+ * problema es lo único que le da al admin la chance de corregir el archivo.
  *
  * @returns {string|null} el precio normalizado, o `null` si no es válido
  */
@@ -111,9 +118,9 @@ function normalizarPrecio(celda) {
 
   const numero = typeof celda === "number" ? celda : Number(String(celda).trim().replace(",", "."));
 
-  if (!Number.isFinite(numero) || numero <= 0) return null;
+  if (!Number.isFinite(numero) || numero <= 0 || !Number.isInteger(numero)) return null;
 
-  return numero.toFixed(2).replace(/\.00$/, "");
+  return String(numero);
 }
 
 /**
@@ -143,7 +150,7 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
 
   const precio = normalizarPrecio(fila.precio);
   if (precio === null) {
-    error("precio", fila.precio ?? "", "El precio debe ser un número mayor a 0.");
+    error("precio", fila.precio ?? "", "El precio debe ser un número entero mayor a 0, sin decimales.");
   }
 
   let stock = 0;

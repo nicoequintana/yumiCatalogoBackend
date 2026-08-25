@@ -75,7 +75,7 @@ const MS_POR_DIA = 24 * 60 * 60 * 1000;
  *
  * **Precisión monetaria**: montos en `Decimal`, nunca float (acumular
  * `0.10 * 7` diez veces da `7.000000000000001` en float y `7.00` exacto en
- * Decimal), serializados como string con dos decimales igual que `mapProducto`
+ * Decimal), serializados como string ENTERO igual que `mapProducto`
  * y `resumenVentas`. El frontend ya espera precios como string.
  *
  * **Estrategia de consulta**: UNA sola query trae las órdenes facturables con
@@ -160,7 +160,7 @@ export async function resumenClientes(req, res, next) {
     // Divisiones protegidas: sin clientes en el período todo da 0, nunca
     // NaN/Infinity (que romperían el formateo en el frontend).
     const valorPromedioPorCliente =
-      totalClientes > 0 ? ingresosPeriodo.div(totalClientes).toFixed(2) : "0.00";
+      totalClientes > 0 ? ingresosPeriodo.div(totalClientes).toFixed(0) : "0";
     const tasaRecompra =
       totalClientes > 0 ? Math.round((clientesRecurrentes / totalClientes) * 10000) / 10000 : 0;
 
@@ -171,7 +171,7 @@ export async function resumenClientes(req, res, next) {
         dni: cliente.dni,
         nombre: cliente.nombre,
         cantidadOrdenes: cliente.cantidadOrdenes,
-        facturacion: cliente.facturacion.toFixed(2),
+        facturacion: cliente.facturacion.toFixed(0),
       }));
 
     /*
@@ -218,7 +218,7 @@ export async function resumenClientes(req, res, next) {
       totalClientes,
       clientesNuevos,
       clientesRecurrentes,
-      ingresosPeriodo: ingresosPeriodo.toFixed(2),
+      ingresosPeriodo: ingresosPeriodo.toFixed(0),
       valorPromedioPorCliente,
       tasaRecompra,
       tiempoEntreCompras,

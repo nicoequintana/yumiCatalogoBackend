@@ -131,13 +131,22 @@ export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion 
   }
   if (esCreacion || precio !== undefined) {
     // Mismo criterio que `normalizarPrecio` en `lib/importProductos.js`:
-    // finito y mayor a 0. El chequeo viejo (`!Number.isNaN`) dejaba entrar
-    // precios negativos a la base (y de ahí a los snapshots de `ItemOrden` de
-    // futuras órdenes) y aceptaba `"Infinity"`, que no es NaN pero revienta
-    // contra el `Decimal` de Prisma con un 500.
+    // entero, finito y mayor a 0. El chequeo viejo (`!Number.isNaN`) dejaba
+    // entrar precios negativos a la base (y de ahí a los snapshots de
+    // `ItemOrden` de futuras órdenes) y aceptaba `"Infinity"`, que no es NaN
+    // pero revienta contra el `Decimal` de Prisma con un 500.
+    //
+    // El decimal se RECHAZA, no se redondea. La columna es `Decimal(10, 0)`:
+    // si esto dejara pasar `1500.60`, SQL Server lo guardaría como `1501`
+    // sin avisarle a nadie, y el admin vería en el listado un precio que no
+    // es el que cargó. Un 400 que nombra el problema es mejor que una
+    // corrección silenciosa de la plata.
     const numero = Number(precio);
     if (precio === undefined || precio === null || precio === "" || !Number.isFinite(numero) || numero <= 0) {
       throw httpError(400, "El precio del producto debe ser un número mayor a 0.");
+    }
+    if (!Number.isInteger(numero)) {
+      throw httpError(400, "El precio del producto debe ser un número entero, sin decimales.");
     }
   }
 }

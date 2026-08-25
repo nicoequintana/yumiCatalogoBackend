@@ -74,26 +74,26 @@ describe("GET /api/admin/ventas", () => {
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
         items: [
-          { productId: 1, nombreProducto: "Vela", precioUnitario: "1000.00", cantidad: 2 },
-          { productId: 2, nombreProducto: "Difusor", precioUnitario: "500.50", cantidad: 1 },
+          { productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 2 },
+          { productId: 2, nombreProducto: "Difusor", precioUnitario: "500", cantidad: 1 },
         ],
       }),
       orden({
         id: 2,
         estado: "ENTREGADA",
         createdAt: "2026-08-11T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 1 }],
       }),
     ]);
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
     expect(res.status).toBe(200);
-    // 1000*2 + 500.50 + 1000 = 3500.50
-    expect(res.body.ingresosTotales).toBe("3500.50");
+    // 1000*2 + 500 + 1000 = 3500
+    expect(res.body.ingresosTotales).toBe("3500");
     expect(res.body.cantidadOrdenes).toBe(2);
-    // 3500.50 / 2 = 1750.25
-    expect(res.body.ticketPromedio).toBe("1750.25");
+    // 3500 / 2 = 1750
+    expect(res.body.ticketPromedio).toBe("1750");
     expect(res.body.unidadesVendidas).toBe(4);
     // 3 items / 2 órdenes = 1.5
     expect(res.body.productosPorOrden).toBe(1.5);
@@ -105,25 +105,25 @@ describe("GET /api/admin/ventas", () => {
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "ENTREGADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
-    expect(res.body.ingresosTotales).toBe("300.00");
+    expect(res.body.ingresosTotales).toBe("300");
     expect(res.body.cantidadOrdenes).toBe(3);
   });
 
@@ -133,22 +133,22 @@ describe("GET /api/admin/ventas", () => {
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "PENDIENTE",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 2, nombreProducto: "Difusor", precioUnitario: "999.99", cantidad: 2 }],
+        items: [{ productId: 2, nombreProducto: "Difusor", precioUnitario: "999", cantidad: 2 }],
       }),
     ]);
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
-    expect(res.body.ingresosTotales).toBe("100.00");
+    expect(res.body.ingresosTotales).toBe("100");
     expect(res.body.cantidadOrdenes).toBe(1);
     expect(res.body.pipeline.cantidadOrdenes).toBe(1);
-    expect(res.body.pipeline.valorTotal).toBe("1999.98");
+    expect(res.body.pipeline.valorTotal).toBe("1998");
     // El pipeline no debe aparecer en el ranking ni en la serie de ingresos.
     expect(res.body.rankingProductos.some((p) => p.nombre === "Difusor")).toBe(false);
   });
@@ -159,31 +159,31 @@ describe("GET /api/admin/ventas", () => {
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CANCELADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 5 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 5 }],
       }),
       orden({
         id: 3,
         estado: "CANCELADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 5 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 5 }],
       }),
       orden({
         id: 4,
         estado: "PENDIENTE",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
-    expect(res.body.ingresosTotales).toBe("100.00");
+    expect(res.body.ingresosTotales).toBe("100");
     expect(res.body.ordenesCanceladas).toBe(2);
     // 2 canceladas sobre 4 órdenes totales del período = 0.5
     expect(res.body.tasaCancelacion).toBe(0.5);
@@ -197,9 +197,9 @@ describe("GET /api/admin/ventas", () => {
         createdAt: "2026-08-10T12:00:00Z",
         items: [
           // Barato pero muchas unidades: 10 * 10 = 100
-          { productId: 1, nombreProducto: "Jabón", precioUnitario: "10.00", cantidad: 10 },
+          { productId: 1, nombreProducto: "Jabón", precioUnitario: "10", cantidad: 10 },
           // Caro con pocas unidades: 2 * 500 = 1000 -> debe ir primero
-          { productId: 2, nombreProducto: "Perfume", precioUnitario: "500.00", cantidad: 2 },
+          { productId: 2, nombreProducto: "Perfume", precioUnitario: "500", cantidad: 2 },
         ],
       }),
     ]);
@@ -210,13 +210,13 @@ describe("GET /api/admin/ventas", () => {
       productId: 2,
       nombre: "Perfume",
       unidades: 2,
-      facturacion: "1000.00",
+      facturacion: "1000",
     });
     expect(res.body.rankingProductos[1]).toMatchObject({
       productId: 1,
       nombre: "Jabón",
       unidades: 10,
-      facturacion: "100.00",
+      facturacion: "100",
     });
   });
 
@@ -226,19 +226,19 @@ describe("GET /api/admin/ventas", () => {
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T09:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T20:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "50.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "50", cantidad: 1 }],
       }),
       orden({
         id: 3,
         estado: "ENTREGADA",
         createdAt: "2026-08-12T10:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "25.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "25", cantidad: 1 }],
       }),
     ]);
 
@@ -249,13 +249,13 @@ describe("GET /api/admin/ventas", () => {
     const serie = res.body.serieTemporal;
     // Los dos del 10 se suman en un único punto.
     const dia10 = serie.find((punto) => punto.fecha === "2026-08-10");
-    expect(dia10.ingresos).toBe("150.00");
+    expect(dia10.ingresos).toBe("150");
     const dia12 = serie.find((punto) => punto.fecha === "2026-08-12");
-    expect(dia12.ingresos).toBe("25.00");
+    expect(dia12.ingresos).toBe("25");
     // Un día sin ventas dentro del rango sigue presente, en cero, para que
     // el gráfico no comprima el eje temporal.
     const dia11 = serie.find((punto) => punto.fecha === "2026-08-11");
-    expect(dia11.ingresos).toBe("0.00");
+    expect(dia11.ingresos).toBe("0");
   });
 
   it("devuelve ceros (no null ni NaN) cuando el período no tiene órdenes", async () => {
@@ -264,34 +264,53 @@ describe("GET /api/admin/ventas", () => {
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
     expect(res.status).toBe(200);
-    expect(res.body.ingresosTotales).toBe("0.00");
+    expect(res.body.ingresosTotales).toBe("0");
     expect(res.body.cantidadOrdenes).toBe(0);
     // División por cero: ticket promedio y productos por orden deben ser 0.
-    expect(res.body.ticketPromedio).toBe("0.00");
+    expect(res.body.ticketPromedio).toBe("0");
     expect(res.body.productosPorOrden).toBe(0);
     expect(res.body.unidadesVendidas).toBe(0);
     expect(res.body.tasaCancelacion).toBe(0);
-    expect(res.body.pipeline).toMatchObject({ cantidadOrdenes: 0, valorTotal: "0.00" });
+    expect(res.body.pipeline).toMatchObject({ cantidadOrdenes: 0, valorTotal: "0" });
     expect(res.body.rankingProductos).toEqual([]);
     expect(Number.isNaN(res.body.tasaCancelacion)).toBe(false);
   });
 
-  it("no pierde precisión acumulando montos con decimales", async () => {
-    // 0.10 * 7, diez veces. En aritmética float esto da 7.000000000000001.
-    ordenFindManyMock.mockResolvedValue(
-      Array.from({ length: 10 }, (_unused, indice) =>
-        orden({
-          id: indice + 1,
-          estado: "CONFIRMADA",
-          createdAt: "2026-08-10T12:00:00Z",
-          items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "0.10", cantidad: 7 }],
-        }),
-      ),
-    );
+  // El ticket promedio es la única métrica de este feed que DIVIDE, así que es
+  // la única donde reaparece una parte fraccionaria aunque todos los montos de
+  // entrada sean enteros. Se serializa redondeada, igual que el resto: la
+  // respuesta no publica centavos por ningún camino.
+  //
+  // (El guard de "Decimal y no float" en la aritmética de montos vive ahora en
+  // `lib/dinero.test.js`, que afirma sobre el `Decimal` sin redondear. Acá ya
+  // no se puede: con montos enteros, float y Decimal dan el mismo resultado.)
+  it("redondea el ticket promedio cuando la división no es exacta", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 1,
+        estado: "CONFIRMADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 1 }],
+      }),
+      orden({
+        id: 2,
+        estado: "CONFIRMADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1001", cantidad: 1 }],
+      }),
+      orden({
+        id: 3,
+        estado: "CONFIRMADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 1 }],
+      }),
+    ]);
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
-    expect(res.body.ingresosTotales).toBe("7.00");
+    // 3001 / 3 = 1000.333... -> "1000", nunca "1000.33" ni la cola de flotante.
+    expect(res.body.ingresosTotales).toBe("3001");
+    expect(res.body.ticketPromedio).toBe("1000");
   });
 
   it("filtra por rango desde/hasta pasándoselo a la query", async () => {
@@ -384,7 +403,7 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
         id: 1,
         estado: "CONFIRMADA",
         createdAt: "2026-08-10T12:00:00Z",
-        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
     ]);
 
@@ -404,7 +423,7 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
       id: 1,
       estado: "CONFIRMADA",
       createdAt: "2026-08-10T12:00:00Z",
-      items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100.00", cantidad: 1 }],
+      items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
     });
     ordenFindManyMock.mockResolvedValue(Array.from({ length: MAX_ORDENES_HISTORICO + 1 }, () => unaOrden));
 
