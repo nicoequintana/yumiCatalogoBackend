@@ -10,6 +10,16 @@ import { rutaProducto, rutaCategoria } from "./slug.js";
  * Los valores ausentes se OMITEN de la salida en vez de emitirse como `null`:
  * un `"category": null` es un dato inválido para el validador de Google, y
  * una propiedad ausente es simplemente una propiedad ausente.
+ *
+ * SYNC MANUAL con `frontend/src/utils/jsonLd.js`: los dos repos se publican
+ * por separado, así que no hay forma de compartir el módulo. Mismo trade-off
+ * documentado que `slug.js` en los dos lados y que `botDetector.js` <->
+ * `nginx.conf`. Los dos archivos de test tienen el MISMO set de casos: al
+ * tocar una copia, tocar la otra. La copia del frontend recibe el producto
+ * con la forma de `mapProducto` (`precio` ya es un string, no un `Decimal`
+ * de Prisma) — es indiferente para este archivo porque `.toString()` sobre
+ * un string es la identidad; ver el comentario de cabecera de la otra copia
+ * para el detalle.
  */
 
 const MARCA = "YIMA";
