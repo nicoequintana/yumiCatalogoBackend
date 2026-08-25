@@ -30,6 +30,10 @@ describe("esBot", () => {
     expect(esBot("Googlebot-Image/1.0")).toBe(true);
   });
 
+  it("reconoce Google-InspectionTool (Prueba de Resultados Enriquecidos)", () => {
+    expect(esBot("Mozilla/5.0 (compatible; Google-InspectionTool/1.0;)")).toBe(true);
+  });
+
   it("reconoce el resto de los buscadores", () => {
     expect(esBot("Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)")).toBe(true);
     expect(esBot("DuckDuckBot/1.1; (+http://duckduckgo.com/duckduckbot.html)")).toBe(true);

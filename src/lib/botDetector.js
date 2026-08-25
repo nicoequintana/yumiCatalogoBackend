@@ -27,6 +27,12 @@ const BOT_USER_AGENTS = [
   // Buscadores. `googlebot` matchea también Googlebot-Image y Googlebot-News,
   // que es lo correcto: todos deben recibir el HTML server-side.
   "googlebot",
+  // La Prueba de Resultados Enriquecidos de Google (search.google.com/test/
+  // rich-results) NO usa el UA `googlebot`: usa este. Sin esta línea, la
+  // herramienta recibe la SPA cruda en vez del HTML server-side con el
+  // JSON-LD, y el validador reporta "No se ha detectado ningún elemento"
+  // aunque el rastreo real de Googlebot ande bien.
+  "google-inspectiontool",
   "bingbot",
   "duckduckbot",
   "applebot",
