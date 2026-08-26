@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   escaparHtml,
+  formatearFecha,
+  formatearFechaHora,
   formatearMonto,
   plantillaCambioEstadoCliente,
   plantillaOrdenCreadaAdmin,
@@ -168,5 +170,145 @@ describe("plantillaCambioEstadoCliente", () => {
     const { texto } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" });
     expect(texto).toContain("Lámpara de sal");
     expect(texto).toContain("$33.000");
+  });
+});
+
+describe("formatearFecha", () => {
+  it("escribe el mes en palabras, en castellano", () => {
+    expect(formatearFecha(new Date("2026-08-26T15:00:00Z"))).toBe("26 de agosto de 2026");
+  });
+
+  // El contenedor corre en UTC y el negocio vive en Argentina (UTC-3, sin
+  // horario de verano desde 2009). Un pedido de las 21:30 de Buenos Aires es
+  // 00:30 UTC del día siguiente: leer la fecha en UTC le pondría al cliente el
+  // día equivocado en su propio comprobante.
+  it("usa la hora de Argentina, no la del servidor", () => {
+    expect(formatearFecha(new Date("2026-08-27T00:30:00Z"))).toBe("26 de agosto de 2026");
+  });
+
+  it("devuelve null ante una fecha ausente o ilegible", () => {
+    expect(formatearFecha(null)).toBeNull();
+    expect(formatearFecha(undefined)).toBeNull();
+    expect(formatearFecha(new Date("no es una fecha"))).toBeNull();
+  });
+
+  it("acepta el string ISO que devuelve una API además del Date de Prisma", () => {
+    expect(formatearFecha("2026-01-05T12:00:00Z")).toBe("5 de enero de 2026");
+  });
+});
+
+describe("formatearFechaHora", () => {
+  it("agrega la hora de Argentina con dos dígitos", () => {
+    expect(formatearFechaHora(new Date("2026-08-26T22:42:00Z"))).toBe(
+      "26 de agosto de 2026, 19:42",
+    );
+  });
+
+  it("devuelve null ante una fecha ilegible", () => {
+    expect(formatearFechaHora(null)).toBeNull();
+  });
+});
+
+describe("documento HTML de los mails", () => {
+  const OPCIONES = { urlSitio: "https://yima.test" };
+
+  it("emite un documento completo, no un fragmento suelto", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, OPCIONES);
+    expect(html.trimStart().startsWith("<!DOCTYPE html>")).toBe(true);
+    expect(html).toContain('<html lang="es"');
+    expect(html).toContain("</html>");
+  });
+
+  // Sin esto, Gmail y Apple Mail invierten los colores por su cuenta y la
+  // paleta de la marca sale embarrada — el fondo crema se vuelve gris sucio y
+  // el terracota pierde contraste contra él.
+  it("declara el esquema de color claro para frenar la inversión automática", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, OPCIONES);
+    expect(html).toContain('name="color-scheme"');
+    expect(html).toContain('name="supported-color-schemes"');
+  });
+
+  it("sirve el logo desde el sitio público", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, OPCIONES);
+    expect(html).toContain('src="https://yima.test/logo-yima-160.png"');
+    expect(html).toContain('alt="YIMA"');
+  });
+
+  // Las imágenes bloqueadas son el estado por defecto de Outlook. El `alt` es
+  // lo único que queda en pantalla, así que va estilado como wordmark en vez
+  // de quedar como texto suelto del navegador.
+  it("estila el texto alternativo del logo para el cliente que bloquea imágenes", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, OPCIONES);
+    const tagLogo = html.match(/<img[^>]*alt="YIMA"[^>]*>/)?.[0] ?? "";
+    expect(tagLogo).toContain("letter-spacing");
+    expect(tagLogo).toContain("font-weight:bold");
+  });
+
+  it("cae al wordmark de texto cuando no hay sitio público configurado", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN);
+    expect(html).not.toContain("<img");
+    expect(html).toContain("YIMA");
+  });
+
+  it("abre con un texto de vista previa oculto", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, OPCIONES);
+    const preheader = html.match(/<div[^>]*max-height:0[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "";
+    expect(preheader).toContain("$33.000");
+  });
+
+  it("no usa CSS moderno ni hojas externas en ninguna de las tres plantillas", () => {
+    const htmls = [
+      plantillaOrdenCreadaCliente(ORDEN, OPCIONES).html,
+      plantillaOrdenCreadaAdmin(ORDEN, { ...OPCIONES, urlOrden: "https://yima.test/x" }).html,
+      plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" }, OPCIONES).html,
+    ];
+    for (const html of htmls) {
+      expect(html).not.toContain("display:flex");
+      expect(html).not.toContain("display:grid");
+      expect(html).not.toContain("<link");
+    }
+  });
+});
+
+describe("detalle de items", () => {
+  it("muestra el precio unitario debajo del nombre, además del subtotal", () => {
+    const { html } = plantillaOrdenCreadaCliente(ORDEN, { urlSitio: "https://yima.test" });
+    expect(html).toContain("$12.500 c/u");
+    expect(html).toContain("$25.000");
+  });
+});
+
+describe("estado en el mail de cambio de estado", () => {
+  const OPCIONES = { urlSitio: "https://yima.test" };
+
+  it("le da a cada estado su propio color de chip", () => {
+    const colores = ESTADOS_ORDEN.map((estado) => {
+      const { html } = plantillaCambioEstadoCliente({ ...ORDEN, estado }, OPCIONES);
+      return html.match(/border-radius:999px;padding:9px 20px;background-color:(#[0-9a-f]{6})/)?.[1];
+    });
+    expect(colores.every(Boolean)).toBe(true);
+    // CANCELADA no puede leerse con el mismo color que ENTREGADA.
+    expect(new Set(colores).size).toBeGreaterThan(1);
+    const cancelada = colores[ESTADOS_ORDEN.indexOf("CANCELADA")];
+    const entregada = colores[ESTADOS_ORDEN.indexOf("ENTREGADA")];
+    expect(cancelada).not.toBe(entregada);
+  });
+
+  it("avanza la barra de progreso un paso por estado", () => {
+    const pasosCompletos = (estado) => {
+      const { html } = plantillaCambioEstadoCliente({ ...ORDEN, estado }, OPCIONES);
+      return (html.match(/background-color:#9d3e1d;border-radius:2px/g) ?? []).length;
+    };
+    expect(pasosCompletos("PENDIENTE")).toBe(1);
+    expect(pasosCompletos("CONFIRMADA")).toBe(2);
+    expect(pasosCompletos("EN_PREPARACION")).toBe(3);
+    expect(pasosCompletos("ENTREGADA")).toBe(4);
+  });
+
+  // Una orden cancelada no está "a un paso de entregarse": mostrar la barra
+  // sugeriría que el pedido sigue en curso.
+  it("no muestra la barra de progreso en una orden cancelada", () => {
+    const { html } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CANCELADA" }, OPCIONES);
+    expect(html).not.toContain("border-radius:2px");
   });
 });

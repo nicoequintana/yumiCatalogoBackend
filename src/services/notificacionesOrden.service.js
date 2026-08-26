@@ -22,15 +22,26 @@ import {
  */
 
 /**
- * URL absoluta al detalle de la orden en el panel.
+ * Origen público del sitio, sin barra final.
  *
- * Se le saca la barra final a `FRONTEND_URL` porque en EasyPanel es fácil
- * cargarla con una, y `https://yima.test//catalogo/...` es un link feo que
- * además rompe en algunos clientes de correo.
+ * Se la saca porque en EasyPanel es fácil cargar `FRONTEND_URL` con una, y
+ * `https://yima.test//catalogo/...` es un link feo que además rompe en algunos
+ * clientes de correo. Con el logo del mail servido desde este mismo origen, una
+ * barra de más ya no sería solo fealdad: `//logo-yima-160.png` es una URL
+ * protocol-relative y el cliente de correo la resolvería contra un host que no
+ * existe, dejando el encabezado sin marca.
+ *
+ * Es la misma normalización que hace `lib/urlsPublicas.js`, repetida acá a
+ * propósito: ese módulo sirve al camino de SEO (canonical, sitemap, JSON-LD) y
+ * este al de correo, con superficies de riesgo distintas.
  */
+function urlSitio() {
+  return (process.env.FRONTEND_URL ?? "").replace(/\/+$/, "");
+}
+
+/** URL absoluta al detalle de la orden en el panel. */
 function urlDeOrden(id) {
-  const base = (process.env.FRONTEND_URL ?? "").replace(/\/+$/, "");
-  return `${base}/catalogo/admin/ordenes/${id}`;
+  return `${urlSitio()}/catalogo/admin/ordenes/${id}`;
 }
 
 /**
@@ -90,7 +101,7 @@ export async function notificarOrdenCreada(orden) {
     envios.push(
       enviarYRegistrar({
         para: orden.cliente.email,
-        armarPlantilla: () => plantillaOrdenCreadaCliente(orden),
+        armarPlantilla: () => plantillaOrdenCreadaCliente(orden, { urlSitio: urlSitio() }),
         descripcion: `confirmación de la orden ${orden.id} al cliente`,
       }),
     );
@@ -101,7 +112,11 @@ export async function notificarOrdenCreada(orden) {
     envios.push(
       enviarYRegistrar({
         para: destinoAdmin,
-        armarPlantilla: () => plantillaOrdenCreadaAdmin(orden, { urlOrden: urlDeOrden(orden.id) }),
+        armarPlantilla: () =>
+          plantillaOrdenCreadaAdmin(orden, {
+            urlOrden: urlDeOrden(orden.id),
+            urlSitio: urlSitio(),
+          }),
         descripcion: `aviso interno de la orden ${orden.id}`,
       }),
     );
@@ -134,7 +149,7 @@ export async function notificarCambioEstado(orden) {
 
   const resultado = await enviarYRegistrar({
     para: email,
-    armarPlantilla: () => plantillaCambioEstadoCliente(orden),
+    armarPlantilla: () => plantillaCambioEstadoCliente(orden, { urlSitio: urlSitio() }),
     descripcion: `cambio de estado de la orden ${orden.id}`,
   });
 
