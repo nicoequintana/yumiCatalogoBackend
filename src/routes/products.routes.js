@@ -3,6 +3,7 @@ import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
 import * as productsMediaController from "../controllers/productsMedia.controller.js";
 import * as productsImportController from "../controllers/productsImport.controller.js";
+import * as imagenesGeneradasController from "../controllers/productsImagenesGeneradas.controller.js";
 import { authOpcional, requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTOS, MAX_VIDEOS, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
@@ -168,6 +169,11 @@ router.post("/:id/favorito", limitadorInteraccionesPublicas, authOpcional, produ
 // con ninguna otra ruta POST: las que existen son `/`, `/import`,
 // `/eliminar-masivo`, `/actualizar-masivo`, `/:id/compartir` y `/:id/favorito`.
 router.post("/:id/generar-imagenes", requireAuth, uploadReferencias, productsController.generarImagenes);
+// Carpeta de imágenes generadas por n8n (`productos/{sku}`). El DELETE NO
+// borra las que ya son fotos del producto: son el mismo archivo.
+router.get("/:id/imagenes-generadas", requireAuth, imagenesGeneradasController.listar);
+router.post("/:id/imagenes-generadas/adoptar", requireAuth, imagenesGeneradasController.adoptar);
+router.delete("/:id/imagenes-generadas", requireAuth, imagenesGeneradasController.borrar);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);
