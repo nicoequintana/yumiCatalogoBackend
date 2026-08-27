@@ -77,6 +77,22 @@ export const PAGE_SIZE_CATALOGO = 12;
 const ORDENES_LISTADO = {
   merchandising: [{ orden: "asc" }, { createdAt: "desc" }],
   vistas: [{ vistas: "desc" }, { id: "asc" }],
+  nombre: [{ nombre: "asc" }, { id: "asc" }],
+  "nombre-desc": [{ nombre: "desc" }, { id: "asc" }],
+  "precio-asc": [{ precio: "asc" }, { id: "asc" }],
+  "precio-desc": [{ precio: "desc" }, { id: "asc" }],
+  "stock-asc": [{ stock: "asc" }, { id: "asc" }],
+  "stock-desc": [{ stock: "desc" }, { id: "asc" }],
+  // `fotos._count` y no una columna: la cantidad de fotos es una relación, no
+  // un campo del producto. Ordena en la base (el connector mssql lo soporta,
+  // verificado contra SQL Server 2022), así que "sin fotos primero" recorre el
+  // catálogo entero y no la página que se está viendo.
+  "fotos-asc": [{ fotos: { _count: "asc" } }, { id: "asc" }],
+  "fotos-desc": [{ fotos: { _count: "desc" } }, { id: "asc" }],
+  // Desempate por `id` DESCENDENTE: dentro del mismo instante de creación, el
+  // id más alto es el más nuevo. Con `asc` la fila más reciente de un lote
+  // cargado de una sola vez quedaría última dentro de su propio grupo.
+  recientes: [{ createdAt: "desc" }, { id: "desc" }],
 };
 
 function elegirOrden(valor) {
