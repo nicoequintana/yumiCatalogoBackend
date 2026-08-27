@@ -116,3 +116,47 @@ export async function eliminarCarpeta(folder) {
     throw error;
   }
 }
+
+/**
+ * Lista las imágenes que hay dentro de una carpeta de Cloudinary.
+ *
+ * Usa la Admin API (`api.resources`), no la de entrega: es la única que sabe
+ * enumerar. Devuelve solo `image` — el flujo de n8n no genera video.
+ *
+ * El prefijo lleva **barra final a propósito**: sin ella,
+ * `productos/YIMA-ABC` también matchearía `productos/YIMA-ABCD-123` y traería
+ * la media de otro producto. Ese error no falla, devuelve de más.
+ *
+ * Una carpeta inexistente devuelve `[]` y no lanza: es el estado normal de un
+ * producto al que todavía no se le generó nada, mismo criterio de "lo que no
+ * está no es un error" que ya usan `eliminarArchivo` y `eliminarCarpeta`.
+ *
+ * @param {string} folder ruta de la carpeta, sin barra final
+ * @returns {Promise<Array<{publicId: string, url: string, nombre: string}>>}
+ */
+export async function listarImagenesDeCarpeta(folder) {
+  configurar();
+
+  let respuesta;
+  try {
+    respuesta = await cloudinary.api.resources({
+      type: "upload",
+      resource_type: "image",
+      prefix: `${folder}/`,
+      max_results: 100,
+    });
+  } catch (error) {
+    if (error?.error?.http_code === 404) return [];
+    throw error;
+  }
+
+  return (respuesta.resources ?? [])
+    .map((recurso) => ({
+      publicId: recurso.public_id,
+      url: recurso.secure_url,
+      nombre: recurso.public_id.split("/").pop(),
+    }))
+    // Por nombre de archivo: el flujo los numera `{sku}-1` … `{sku}-5` y ese
+    // número ES el rol de cada imagen (portada, en uso, beneficio…).
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { numeric: true }));
+}
