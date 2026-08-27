@@ -1203,6 +1203,12 @@ export async function generarImagenes(req, res, next) {
       // Cloudinary: es temporal y reintentable, y el código lo dice. Para el
       // resto, 502 — el que falló es un servicio de arriba, no este backend. En
       // los dos casos el mensaje del servicio ya es legible y viaja tal cual.
+      //
+      // OJO al diagnosticar: un 400 de n8n también cae en este 502, y ese caso
+      // NO es un problema de n8n — significa que el payload que armó YIMA está
+      // mal. Se muestra como 502 porque no es algo que el admin pueda arreglar,
+      // pero si aparecen 400s en producción el lugar donde mirar es
+      // `mapProductoParaN8n` y el armado del FormData, no el flujo.
       throw httpError(err.esReintentable ? 503 : 502, err.message);
     }
 
