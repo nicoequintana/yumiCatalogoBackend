@@ -75,7 +75,10 @@ describe("imágenes generadas de un producto", () => {
     productFindUniqueMock.mockResolvedValue(producto());
     listarMock.mockResolvedValue(GENERADAS);
     transactionMock.mockImplementation(async (fn) =>
-      fn({ foto: { createMany: (...a) => fotoCreateManyMock(...a) } }),
+      fn({
+        product: { findUnique: (...a) => productFindUniqueMock(...a) },
+        foto: { createMany: (...a) => fotoCreateManyMock(...a) },
+      }),
     );
   });
 
@@ -216,6 +219,49 @@ describe("imágenes generadas de un producto", () => {
         entidad: "Producto",
         entidadId: 7,
       });
+    });
+
+    it("deduplica publicIds repetidos antes de crear filas", async () => {
+      // Sin esto, dos filas Foto apuntan al mismo archivo de Cloudinary:
+      // quitar una destruye el archivo que la otra sigue usando.
+      const res = await request(buildApp())
+        .post(`${BASE}/adoptar`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ publicIds: [GENERADAS[0].publicId, GENERADAS[0].publicId] });
+
+      expect(res.status).toBe(200);
+      expect(fotoCreateManyMock.mock.calls[0][0].data).toHaveLength(1);
+      expect(res.body.agregadas).toBe(1);
+    });
+
+    it("lee las fotos del producto DENTRO de la transacción, no antes", async () => {
+      // El tope (`libres`/`desde`) tiene que calcularse con el mismo estado que
+      // ve la inserción. Leer `producto.fotos` afuera del `$transaction` deja a
+      // dos `adoptar` concurrentes viendo el mismo conteo viejo.
+      transactionMock.mockImplementation(async (fn) => {
+        expect(productFindUniqueMock).not.toHaveBeenCalled();
+        return fn({
+          product: { findUnique: (...a) => productFindUniqueMock(...a) },
+          foto: { createMany: (...a) => fotoCreateManyMock(...a) },
+        });
+      });
+
+      const res = await request(buildApp())
+        .post(`${BASE}/adoptar`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ publicIds: [GENERADAS[0].publicId] });
+
+      expect(res.status).toBe(200);
+      expect(productFindUniqueMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("corre en una transacción Serializable", async () => {
+      await request(buildApp())
+        .post(`${BASE}/adoptar`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ publicIds: [GENERADAS[0].publicId] });
+
+      expect(transactionMock.mock.calls[0][1]).toEqual({ isolationLevel: "Serializable" });
     });
   });
 

@@ -66,61 +66,91 @@ export async function listar(req, res, next) {
  * El tope se valida contra el total resultante y rechaza la selección ENTERA:
  * adoptar las primeras N en silencio es lo que hace dudar de si el sistema
  * funcionó.
+ *
+ * La lectura de `producto.fotos` (de la que salen `desde` y `libres`) pasa
+ * DENTRO del `$transaction`, no antes: afuera, dos `adoptar` concurrentes leen
+ * el mismo conteo, calculan el mismo `desde` y pueden terminar con `orden`
+ * duplicado o más de `MAX_FOTOS` fotos. `Serializable` es lo que hace que uno
+ * de los dos se aborte en vez de commitear sobre un conteo ya viejo — mismo
+ * criterio que el borrado del único usuario admin en `usuarios.controller.js`.
  */
 export async function adoptar(req, res, next) {
   try {
-    const producto = await traerProducto(Number(req.params.id));
-    const pedidos = Array.isArray(req.body?.publicIds) ? req.body.publicIds : [];
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+
+    const crudos = Array.isArray(req.body?.publicIds) ? req.body.publicIds : [];
+    // Dedupe preservando el primer orden: un publicId repetido en el mismo
+    // request crearía dos filas Foto sobre el mismo archivo de Cloudinary —
+    // quitar una destruiría el archivo que la otra sigue usando.
+    const pedidos = [...new Set(crudos)];
 
     if (pedidos.length === 0) {
       throw httpError(400, "Elegí al menos una imagen para agregar a la ficha.");
     }
 
-    const carpeta = carpetaDeGeneradas(producto.sku);
-    const disponibles = await listarImagenesDeCarpeta(carpeta);
-    const porId = new Map(disponibles.map((i) => [i.publicId, i]));
-    const enUso = new Set(producto.fotos.map((f) => f.cloudinaryPublicId).filter(Boolean));
+    const filas = await prisma.$transaction(
+      async (tx) => {
+        const producto = await tx.product.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            sku: true,
+            fotos: { select: { id: true, cloudinaryPublicId: true, orden: true } },
+          },
+        });
+        if (!producto) throw httpError(404, "Producto no encontrado.");
 
-    for (const publicId of pedidos) {
-      // Sin esta guarda, un request armado a mano adoptaría la imagen de otro
-      // producto: el public id viene del cliente.
-      if (!porId.has(publicId)) {
-        throw httpError(400, "Alguna de las imágenes elegidas no está en la carpeta de este producto.");
-      }
-      if (enUso.has(publicId)) {
-        throw httpError(400, "Alguna de las imágenes elegidas ya es una foto del producto.");
-      }
-    }
+        const carpeta = carpetaDeGeneradas(producto.sku);
+        const disponibles = await listarImagenesDeCarpeta(carpeta);
+        const porId = new Map(disponibles.map((i) => [i.publicId, i]));
+        const enUso = new Set(producto.fotos.map((f) => f.cloudinaryPublicId).filter(Boolean));
 
-    const libres = MAX_FOTOS - producto.fotos.length;
-    if (pedidos.length > libres) {
-      throw httpError(
-        400,
-        libres === 0
-          ? `El producto ya tiene ${MAX_FOTOS} fotos. Quitá alguna antes de agregar más.`
-          : `Elegiste ${pedidos.length} imágenes y solo entran ${libres}. Quitá algunas de la selección.`,
-      );
-    }
+        for (const publicId of pedidos) {
+          // Sin esta guarda, un request armado a mano adoptaría la imagen de
+          // otro producto: el public id viene del cliente.
+          if (!porId.has(publicId)) {
+            throw httpError(
+              400,
+              "Alguna de las imágenes elegidas no está en la carpeta de este producto.",
+            );
+          }
+          if (enUso.has(publicId)) {
+            throw httpError(400, "Alguna de las imágenes elegidas ya es una foto del producto.");
+          }
+        }
 
-    // `orden` es una secuencia compacta sin huecos: las nuevas continúan desde
-    // el final. Empezar en 0 duplicaría la portada.
-    const desde = producto.fotos.length;
-    const filas = pedidos.map((publicId, indice) => ({
-      productId: producto.id,
-      url: porId.get(publicId).url,
-      cloudinaryPublicId: publicId,
-      cloudinaryResourceType: "image",
-      orden: desde + indice,
-    }));
+        const libres = MAX_FOTOS - producto.fotos.length;
+        if (pedidos.length > libres) {
+          throw httpError(
+            400,
+            libres === 0
+              ? `El producto ya tiene ${MAX_FOTOS} fotos. Quitá alguna antes de agregar más.`
+              : `Elegiste ${pedidos.length} imágenes y solo entran ${libres}. Quitá algunas de la selección.`,
+          );
+        }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.foto.createMany({ data: filas });
-    });
+        // `orden` es una secuencia compacta sin huecos: las nuevas continúan
+        // desde el final. Empezar en 0 duplicaría la portada.
+        const desde = producto.fotos.length;
+        const filasNuevas = pedidos.map((publicId, indice) => ({
+          productId: producto.id,
+          url: porId.get(publicId).url,
+          cloudinaryPublicId: publicId,
+          cloudinaryResourceType: "image",
+          orden: desde + indice,
+        }));
+
+        await tx.foto.createMany({ data: filasNuevas });
+        return filasNuevas;
+      },
+      { isolationLevel: "Serializable" },
+    );
 
     logAudit(req, {
       accion: "ADOPTAR_IMAGENES",
       entidad: "Producto",
-      entidadId: producto.id,
+      entidadId: id,
       detalle: { cantidad: filas.length, publicIds: pedidos },
     });
 
