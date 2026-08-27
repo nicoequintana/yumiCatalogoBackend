@@ -104,6 +104,10 @@ router.get("/import/template", requireAuth, productsImportController.descargarPl
 // mano -> volver a subir). Va ANTES de `GET /:id`, mismo motivo que
 // `/import/template`: si no, Express matchea "export" como el `:id`.
 router.get("/export", requireAuth, productsImportController.exportar);
+// Conteos de catálogo del encabezado del listado del admin. Va ANTES de
+// `GET /:id` por el mismo pisotón que `/import/template` y `/export`: si no,
+// Express matchea "resumen" como el `:id` y el detalle contesta 404.
+router.get("/resumen", requireAuth, productsController.resumen);
 // Los dos proxies de media también llevan `authOpcional`: la media de un
 // producto oculto no puede seguir siendo pública solo porque se la pida por
 // otra URL. Siguen sirviendo a visitantes anónimos —las fotos de un producto

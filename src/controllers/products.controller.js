@@ -250,6 +250,49 @@ export async function listar(req, res, next) {
 }
 
 /**
+ * GET /resumen — conteos de catálogo para el encabezado del listado del admin.
+ *
+ * Son conteos GLOBALES: no los toca el `?search=` ni la página que el admin
+ * esté mirando. La pregunta que contestan es "cuánto catálogo tengo", no
+ * "cuánto entró en esta tabla" — esa segunda ya la contesta el `total` del
+ * listado paginado.
+ *
+ * **`visibles` y `publicados` son dos números distintos a propósito.**
+ * `visibleEnCatalogo: true` es el toggle "Catálogo" de la tabla, y es lo que
+ * el admin cruza contra estos números. Pero el listado público además excluye
+ * los agotados (ver `construirFiltrosListado`), así que un producto visible sin
+ * stock NO se ve en `/coleccion`. Publicar un solo número obligaría a elegir
+ * entre coincidir con el toggle o coincidir con la tienda, y cualquiera de las
+ * dos lecturas engaña la mitad de las veces. Se emiten los dos y la pantalla
+ * muestra la diferencia.
+ *
+ * `destacadosPublicados` sigue el mismo criterio y contesta la pregunta que
+ * hace un admin cuando el carrusel "Hallazgos del día" no aparece: la home lo
+ * esconde por debajo de cuatro destacados **visibles y con stock**, no cuatro
+ * con el flag encendido.
+ *
+ * Requiere auth: `total` y `visibles` incluyen los productos ocultos, que es
+ * justamente lo que la vista pública no puede ver.
+ */
+export async function resumen(req, res, next) {
+  try {
+    const publicado = { visibleEnCatalogo: true, stock: { gt: 0 } };
+
+    const [total, visibles, publicados, destacados, destacadosPublicados] = await Promise.all([
+      prisma.product.count(),
+      prisma.product.count({ where: { visibleEnCatalogo: true } }),
+      prisma.product.count({ where: publicado }),
+      prisma.product.count({ where: { destacado: true } }),
+      prisma.product.count({ where: { destacado: true, ...publicado } }),
+    ]);
+
+    res.json({ total, visibles, publicados, destacados, destacadosPublicados });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Fetches up to 4 related products for the detail page: same categoriaId OR
  * same etiqueta as the current product (either match counts, not both),
  * excluding the product itself. Short-circuits to `[]` without a DB
