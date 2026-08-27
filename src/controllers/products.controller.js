@@ -7,7 +7,14 @@ import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { httpError } from "../lib/httpError.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
-import { LIST_SELECT, PRODUCT_INCLUDE, mapProducto, mapProductoListado } from "./products.mapper.js";
+import {
+  LIST_SELECT,
+  PRODUCT_INCLUDE,
+  mapProducto,
+  mapProductoListado,
+  mapProductoParaN8n,
+} from "./products.mapper.js";
+import { enviarPedidoDeImagenes, estaConfigurado as n8nEstaConfigurado } from "../services/n8n.service.js";
 import {
   parseCaracteristicas,
   parseEspecificaciones,
@@ -1138,6 +1145,78 @@ export async function eliminarFoto(req, res, next) {
 
     const productoActualizado = await prisma.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
     res.json(mapProducto(productoActualizado));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Dispara el flujo de generación de imágenes de n8n para un producto.
+ *
+ * Las referencias NO se persisten: llegan en memoria por multer, se reenvían a
+ * n8n y se descartan. No tocan Cloudinary ni la tabla `Foto`.
+ *
+ * El payload sale de `mapProductoParaN8n`, no de `mapProducto`: el consumidor
+ * es un agente de IA y todo lo que no describe al producto (ids de filas,
+ * contadores, estado comercial) es ruido que le cuesta en cada ejecución.
+ *
+ * Responde cuando el webhook confirma la RECEPCIÓN, no cuando las imágenes
+ * están listas — n8n responde de inmediato y sigue procesando por su cuenta.
+ * Por eso el `estado` viaja en la respuesta: `already_processed` significa que
+ * n8n NO generó nada, y la pantalla tiene que poder decirlo.
+ */
+export async function generarImagenes(req, res, next) {
+  try {
+    // Se chequea antes de leer la base: un deploy sin la variable tiene que
+    // enterarse por el mensaje, no por un fallo opaco después del trabajo.
+    if (!n8nEstaConfigurado()) {
+      throw httpError(
+        400,
+        "La integración con n8n no está configurada. Falta N8N_WEBHOOK_IMAGENES en el servidor.",
+      );
+    }
+
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+
+    const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
+    if (!producto) throw httpError(404, "Producto no encontrado.");
+
+    const referencias = req.files?.referencias ?? [];
+
+    // El flujo de n8n usa `gpt-image-1` en operación `edit`, que NO puede
+    // trabajar sin imagen de entrada: sin referencias responde 400. Se corta
+    // acá para no gastar un viaje y para que el mensaje sea el de YIMA y no el
+    // de un servicio que el admin no conoce.
+    if (referencias.length === 0) {
+      throw httpError(400, "Elegí al menos una imagen de referencia para generar.");
+    }
+
+    let resultado;
+    try {
+      resultado = await enviarPedidoDeImagenes({
+        producto: mapProductoParaN8n(producto),
+        referencias,
+      });
+    } catch (err) {
+      // 503 cuando n8n avisó que abortó sin generar nada por no poder verificar
+      // Cloudinary: es temporal y reintentable, y el código lo dice. Para el
+      // resto, 502 — el que falló es un servicio de arriba, no este backend. En
+      // los dos casos el mensaje del servicio ya es legible y viaja tal cual.
+      throw httpError(err.esReintentable ? 503 : 502, err.message);
+    }
+
+    // Después del éxito, nunca antes — mismo contrato que el resto de las
+    // mutaciones auditadas. El estado entra en el detalle porque un
+    // `already_processed` NO generó nada: sin eso, la traza haría creer que sí.
+    logAudit(req, {
+      accion: "GENERAR_IMAGENES",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: { referenciasEnviadas: referencias.length, estado: resultado.estado },
+    });
+
+    res.json({ enviado: true, estado: resultado.estado, carpeta: resultado.carpeta });
   } catch (err) {
     next(err);
   }

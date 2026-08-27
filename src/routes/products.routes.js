@@ -5,7 +5,8 @@ import * as productsMediaController from "../controllers/productsMedia.controlle
 import * as productsImportController from "../controllers/productsImport.controller.js";
 import { authOpcional, requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
-import { MAX_FOTOS, MAX_VIDEOS } from "../lib/limitesMedios.js";
+import { MAX_FOTOS, MAX_VIDEOS, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
+import { MAX_REFERENCIAS } from "../services/n8n.service.js";
 
 const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
@@ -75,6 +76,35 @@ const uploadXlsx = multer({
   },
 }).single("archivo");
 
+// Multer propio para las referencias del flujo de generación de imágenes de
+// n8n. No se puede reusar `uploadFields`: su `fileFilter` rechaza cualquier
+// campo que no sea `fotos` o `video` con "Campo de archivo inesperado".
+//
+// El tope de tamaño es `MAX_FOTO_BYTES` —el mismo de las fotos del producto— y
+// acá SÍ se puede poner en multer, porque este uploader no maneja videos y
+// entonces no tiene el conflicto de un `fileSize` único por instancia que
+// obliga a validar a mano en el alta de producto.
+const uploadReferencias = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FOTO_BYTES, files: MAX_REFERENCIAS },
+  fileFilter(_req, file, cb) {
+    if (file.fieldname !== "referencias") {
+      const err = new Error("Campo de archivo inesperado.");
+      err.status = 400;
+      return cb(err);
+    }
+    if (!ALLOWED_PHOTO_MIMES.includes(file.mimetype)) {
+      // `status` explícito por el mismo motivo que los otros filtros de este
+      // archivo: sin él, el error handler central lo trata como interno y el
+      // admin ve un 500 en vez del mensaje que le dice qué formatos sirven.
+      const err = new Error("Tipo de imagen no permitido. Use JPEG, PNG o WEBP.");
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  },
+}).fields([{ name: "referencias", maxCount: MAX_REFERENCIAS }]);
+
 // `POST /:id/compartir` y `POST /:id/favorito` son públicos, sin auth, y
 // además de insertar en `EventoTrafico` incrementan contadores persistidos en
 // `Product` (`compartidos` / `favoritosCount`). Sin limitador, cualquiera
@@ -134,6 +164,10 @@ router.post("/", requireAuth, uploadFields, productsController.crear);
 // inexistente, y solo un JWT verificado levanta esa guarda.
 router.post("/:id/compartir", limitadorInteraccionesPublicas, authOpcional, productsController.compartir);
 router.post("/:id/favorito", limitadorInteraccionesPublicas, authOpcional, productsController.favorito);
+// Dispara el flujo de n8n que genera las imágenes del producto. No colisiona
+// con ninguna otra ruta POST: las que existen son `/`, `/import`,
+// `/eliminar-masivo`, `/actualizar-masivo`, `/:id/compartir` y `/:id/favorito`.
+router.post("/:id/generar-imagenes", requireAuth, uploadReferencias, productsController.generarImagenes);
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);
