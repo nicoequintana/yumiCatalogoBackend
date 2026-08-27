@@ -27,7 +27,7 @@ vi.mock("../lib/prisma.js", () => ({
 vi.mock("../services/n8n.service.js", () => ({
   enviarPedidoDeImagenes: (...args) => enviarPedidoMock(...args),
   estaConfigurado: (...args) => estaConfiguradoMock(...args),
-  MAX_REFERENCIAS: 2,
+  MAX_REFERENCIAS: 4,
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 vi.mock("../services/googleDrive.service.js", () => ({ eliminarArchivo: vi.fn() }));
@@ -159,13 +159,15 @@ describe("POST /products/:id/generar-imagenes", () => {
     expect(res.body.carpeta).toBe("productos/YIMA-TERMOM-8189");
   });
 
-  it("rechaza una tercera referencia", async () => {
+  it("rechaza una quinta referencia (el tope es 4)", async () => {
     const res = await request(buildApp())
       .post("/api/products/7/generar-imagenes")
       .set("Authorization", `Bearer ${token}`)
       .attach("referencias", imagen, { filename: "a.jpg", contentType: "image/jpeg" })
       .attach("referencias", imagen, { filename: "b.jpg", contentType: "image/jpeg" })
-      .attach("referencias", imagen, { filename: "c.jpg", contentType: "image/jpeg" });
+      .attach("referencias", imagen, { filename: "c.jpg", contentType: "image/jpeg" })
+      .attach("referencias", imagen, { filename: "d.jpg", contentType: "image/jpeg" })
+      .attach("referencias", imagen, { filename: "e.jpg", contentType: "image/jpeg" });
 
     expect(res.status).toBe(400);
     expect(enviarPedidoMock).not.toHaveBeenCalled();

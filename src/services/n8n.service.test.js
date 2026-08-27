@@ -98,10 +98,13 @@ describe("n8n.service", () => {
     it("descarta las referencias que exceden el máximo", async () => {
       const { enviarPedidoDeImagenes, MAX_REFERENCIAS } = await import("./n8n.service.js");
 
-      await enviarPedidoDeImagenes({
-        producto: { sku: "X" },
-        referencias: [referenciaFalsa("a.jpg"), referenciaFalsa("b.jpg"), referenciaFalsa("c.jpg")],
-      });
+      // Una de más que el tope, para que el recorte sea observable sin
+      // hardcodear el número (el tope subió de 2 a 4 el 27/08/2026).
+      const referencias = Array.from({ length: MAX_REFERENCIAS + 1 }, (_, i) =>
+        referenciaFalsa(`ref-${i}.jpg`),
+      );
+
+      await enviarPedidoDeImagenes({ producto: { sku: "X" }, referencias });
 
       const claves = [...fetch.mock.calls[0][1].body.keys()].filter((k) => k !== "producto");
       expect(claves).toHaveLength(MAX_REFERENCIAS);

@@ -27,7 +27,7 @@ const TIMEOUT_MS = 15_000;
  * `products.routes.js`: si se desincronizan, multer acepta un archivo que este
  * servicio después descarta en silencio.
  */
-export const MAX_REFERENCIAS = 2;
+export const MAX_REFERENCIAS = 4;
 
 /**
  * Nombre por defecto del header de autenticación. Se puede pisar con

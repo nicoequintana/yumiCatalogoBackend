@@ -41,7 +41,7 @@ vi.mock("../services/googleDrive.service.js", () => ({ eliminarArchivo: vi.fn() 
 vi.mock("../services/n8n.service.js", () => ({
   enviarPedidoDeImagenes: vi.fn(),
   estaConfigurado: () => true,
-  MAX_REFERENCIAS: 2,
+  MAX_REFERENCIAS: 4,
 }));
 vi.mock("../lib/logAudit.js", () => ({ logAudit: (...args) => logAuditMock(...args) }));
 
