@@ -35,3 +35,18 @@ export const MAX_FOTOS = 10;
  * base es la última.
  */
 export const MAX_VIDEOS = 1;
+
+/**
+ * Tamaño máximo por imagen, en bytes.
+ *
+ * Vivía como const privada en `controllers/products.input.js`. Se movió acá
+ * cuando el endpoint de generación de imágenes (`POST /:id/generar-imagenes`)
+ * necesitó el MISMO tope para sus referencias: dos números iguales en dos
+ * archivos son dos números que en algún momento dejan de ser iguales.
+ *
+ * NO confundir con el `fileSize` global de multer en `products.routes.js`
+ * (100MB): ese es el techo del video. Multer no sabe aplicar un `fileSize`
+ * distinto por campo, así que en el alta/edición de producto el tope por
+ * imagen se valida a mano en el controller.
+ */
+export const MAX_FOTO_BYTES = 15 * 1024 * 1024;

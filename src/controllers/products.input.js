@@ -7,9 +7,7 @@
  */
 
 import { httpError } from "../lib/httpError.js";
-import { MAX_FOTOS } from "../lib/limitesMedios.js";
-
-const MAX_FOTO_BYTES = 15 * 1024 * 1024; // 15MB per-field cap (design: multer's global limit can't differ per field)
+import { MAX_FOTOS, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
 
 export function parseCaracteristicas(raw) {
   if (raw === undefined) return undefined;
