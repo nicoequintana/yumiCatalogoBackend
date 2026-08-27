@@ -187,3 +187,46 @@ export function mapProducto(producto) {
     updatedAt: producto.updatedAt,
   };
 }
+
+/**
+ * Forma del producto que recibe el flujo de generación de imágenes de n8n.
+ *
+ * Se deriva de `mapProducto` y se queda SOLO con lo que describe al producto.
+ * El consumidor es un agente de IA: los ids de cada fila de lista, los
+ * contadores de tráfico y el estado comercial no ayudan a entender qué ES el
+ * producto, le cuestan tokens en cada ejecución y encima los ids le sugieren
+ * que esos números significan algo.
+ *
+ * Las cinco listas se aplanan a arrays de strings para que entren directo en un
+ * prompt con un `join`, sin mapear `.texto` del otro lado. `categoria` se emite
+ * como nombre por el mismo motivo.
+ *
+ * `sku` es lo único no descriptivo que se conserva: nombra la carpeta y los
+ * archivos generados del lado de n8n. `id` se omite por redundante con él.
+ *
+ * ⚠️ A diferencia de `mapProducto`, este mapper NO se actualiza solo: un campo
+ * de contenido nuevo en `Product` hay que sumarlo acá a mano o no llega a n8n.
+ * Es el precio deliberado de un payload sin ruido — ver la spec
+ * `docs/superpowers/specs/2026-08-26-webhook-generacion-imagenes-n8n-design.md`, §4.3.
+ */
+export function mapProductoParaN8n(producto) {
+  const completo = mapProducto(producto);
+  const soloTexto = (items) => items.map((item) => item.texto);
+
+  return {
+    sku: completo.sku,
+    nombre: completo.nombre,
+    descripcion: completo.descripcion,
+    categoria: completo.categoria?.nombre ?? null,
+    etiqueta: completo.etiqueta,
+    fraseComercial: completo.fraseComercial,
+    porQueLoVasAQuerer: completo.porQueLoVasAQuerer,
+    tePasaEsto: completo.tePasaEsto,
+    caracteristicas: soloTexto(completo.caracteristicas),
+    beneficios: soloTexto(completo.beneficios),
+    usos: soloTexto(completo.usos),
+    idealPara: soloTexto(completo.idealPara),
+    incluye: soloTexto(completo.incluye),
+    especificaciones: completo.especificaciones.map((e) => ({ nombre: e.nombre, valor: e.valor })),
+  };
+}
