@@ -120,12 +120,33 @@ export async function eliminarCarpeta(folder) {
 /**
  * Lista las imágenes que hay dentro de una carpeta de Cloudinary.
  *
- * Usa la Admin API (`api.resources`), no la de entrega: es la única que sabe
- * enumerar. Devuelve solo `image` — el flujo de n8n no genera video.
+ * Usa `api.resources_by_asset_folder`, **NO** `api.resources({ prefix })`, y
+ * la diferencia no es de estilo: esta cuenta está en modo **dynamic folders**,
+ * donde la carpeta es un ATRIBUTO del asset (`asset_folder`) y no forma parte
+ * del `public_id`. Las imágenes que deja n8n se llaman `YIMA-BOTELL-3088-1` a
+ * secas, sin ninguna ruta adentro, así que un filtro por prefijo de
+ * `public_id` devuelve **cero resultados sin ningún error**: la consulta es
+ * válida, solo pregunta por algo que en esta cuenta no existe. Ese fue
+ * exactamente el modo de falla del 28/08/2026 — "Todavía no hay imágenes
+ * generadas" sobre una carpeta con cinco archivos adentro.
  *
- * El prefijo lleva **barra final a propósito**: sin ella,
- * `productos/YIMA-ABC` también matchearía `productos/YIMA-ABCD-123` y traería
- * la media de otro producto. Ese error no falla, devuelve de más.
+ * **Los dos productores escriben distinto, y por eso se pregunta por el
+ * atributo y no por el nombre.** El catálogo sube con `folder:` y sus assets
+ * SÍ llevan la ruta en el `public_id`
+ * (`productos/28-Botella…/cteevhwzrhzll3mb4qyh`); n8n deja el `public_id`
+ * pelado. `resources_by_asset_folder` encuentra las dos formas.
+ *
+ * **La coincidencia es EXACTA, no por prefijo**: una carpeta truncada
+ * (`productos/YIMA-BOTELL-308`) responde 404 en vez de traer de más. Por eso
+ * ya no hace falta la barra final que necesitaba el filtro anterior para que
+ * `productos/YIMA-ABC` no matcheara `productos/YIMA-ABCD-123` — pero el
+ * parámetro sigue recibiéndose SIN barra final, que es como lo arma
+ * `carpetaDeGeneradas`.
+ *
+ * El filtro a `image` se hace acá y no como opción de la API: una carpeta de
+ * assets puede contener tipos mezclados y no está verificado que el endpoint
+ * respete ese parámetro. El flujo de n8n no genera video, así que hoy no
+ * descarta nada; es la red por si alguna vez cae otra cosa ahí.
  *
  * Una carpeta inexistente devuelve `[]` y no lanza: es el estado normal de un
  * producto al que todavía no se le generó nada, mismo criterio de "lo que no
@@ -139,10 +160,7 @@ export async function listarImagenesDeCarpeta(folder) {
 
   let respuesta;
   try {
-    respuesta = await cloudinary.api.resources({
-      type: "upload",
-      resource_type: "image",
-      prefix: `${folder}/`,
+    respuesta = await cloudinary.api.resources_by_asset_folder(folder, {
       max_results: 100,
     });
   } catch (error) {
@@ -151,9 +169,13 @@ export async function listarImagenesDeCarpeta(folder) {
   }
 
   return (respuesta.resources ?? [])
+    .filter((recurso) => recurso.resource_type === "image")
     .map((recurso) => ({
       publicId: recurso.public_id,
       url: recurso.secure_url,
+      // `split("/").pop()` sirve para las DOS formas de `public_id`: devuelve
+      // el último segmento cuando trae ruta, y el id entero cuando viene
+      // pelado, que es como llegan los de n8n.
       nombre: recurso.public_id.split("/").pop(),
     }))
     // Por nombre de archivo: el flujo los numera `{sku}-1` … `{sku}-5` y ese
