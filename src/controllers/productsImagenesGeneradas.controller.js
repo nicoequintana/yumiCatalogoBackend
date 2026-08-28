@@ -35,6 +35,18 @@ async function traerProducto(id) {
 }
 
 /**
+ * Solo el `sku` — para armar la carpeta de generadas ANTES de la transacción
+ * de `adoptar`. El sku no cambia una vez generado, así que leerlo afuera no
+ * compromete la carrera de conteo que sí importa (ver `adoptar`).
+ */
+async function traerSku(id) {
+  if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+  const producto = await prisma.product.findUnique({ where: { id }, select: { sku: true } });
+  if (!producto) throw httpError(404, "Producto no encontrado.");
+  return producto.sku;
+}
+
+/**
  * Lista lo que hay en la carpeta generada, marcando cuáles ya son fotos del
  * producto.
  *
@@ -67,12 +79,23 @@ export async function listar(req, res, next) {
  * adoptar las primeras N en silencio es lo que hace dudar de si el sistema
  * funcionó.
  *
- * La lectura de `producto.fotos` (de la que salen `desde` y `libres`) pasa
- * DENTRO del `$transaction`, no antes: afuera, dos `adoptar` concurrentes leen
- * el mismo conteo, calculan el mismo `desde` y pueden terminar con `orden`
- * duplicado o más de `MAX_FOTOS` fotos. `Serializable` es lo que hace que uno
- * de los dos se aborte en vez de commitear sobre un conteo ya viejo — mismo
- * criterio que el borrado del único usuario admin en `usuarios.controller.js`.
+ * La lectura de `producto.fotos` (de la que salen `desde`, `libres` y `enUso`)
+ * pasa DENTRO del `$transaction`, no antes: afuera, dos `adoptar` concurrentes
+ * leen el mismo conteo, calculan el mismo `desde` y pueden terminar con
+ * `orden` duplicado o más de `MAX_FOTOS` fotos. `Serializable` es lo que hace
+ * que uno de los dos se aborte en vez de commitear sobre un conteo ya viejo —
+ * mismo criterio que el borrado del único usuario admin en
+ * `usuarios.controller.js`.
+ *
+ * El `sku` (para armar la carpeta) y el listado de Cloudinary se leen AFUERA,
+ * a propósito: `listarImagenesDeCarpeta` es HTTP externo —el SDK de
+ * Cloudinary usa un timeout de 60s—, y el default de Prisma para
+ * transacciones interactivas es 5s. Meter esa llamada adentro aborta la
+ * transacción con `P2028` apenas la Admin API tarda un poco, un código que el
+ * error handler central no mapea (sale 500 genérico) sobre una operación que
+ * antes andaba — y de paso alarga de milisegundos a segundos la ventana en la
+ * que la transacción tiene locks tomados, sin necesidad: el sku no cambia, no
+ * es parte de la carrera que `Serializable` tiene que resolver.
  */
 export async function adoptar(req, res, next) {
   try {
@@ -89,21 +112,22 @@ export async function adoptar(req, res, next) {
       throw httpError(400, "Elegí al menos una imagen para agregar a la ficha.");
     }
 
+    const sku = await traerSku(id);
+    const carpeta = carpetaDeGeneradas(sku);
+    const disponibles = await listarImagenesDeCarpeta(carpeta);
+    const porId = new Map(disponibles.map((i) => [i.publicId, i]));
+
     const filas = await prisma.$transaction(
       async (tx) => {
         const producto = await tx.product.findUnique({
           where: { id },
           select: {
             id: true,
-            sku: true,
             fotos: { select: { id: true, cloudinaryPublicId: true, orden: true } },
           },
         });
         if (!producto) throw httpError(404, "Producto no encontrado.");
 
-        const carpeta = carpetaDeGeneradas(producto.sku);
-        const disponibles = await listarImagenesDeCarpeta(carpeta);
-        const porId = new Map(disponibles.map((i) => [i.publicId, i]));
         const enUso = new Set(producto.fotos.map((f) => f.cloudinaryPublicId).filter(Boolean));
 
         for (const publicId of pedidos) {

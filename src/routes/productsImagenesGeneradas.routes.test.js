@@ -234,12 +234,20 @@ describe("imágenes generadas de un producto", () => {
       expect(res.body.agregadas).toBe(1);
     });
 
-    it("lee las fotos del producto DENTRO de la transacción, no antes", async () => {
+    it("lee las FOTOS del producto DENTRO de la transacción, no antes", async () => {
       // El tope (`libres`/`desde`) tiene que calcularse con el mismo estado que
       // ve la inserción. Leer `producto.fotos` afuera del `$transaction` deja a
       // dos `adoptar` concurrentes viendo el mismo conteo viejo.
+      //
+      // El sku SÍ puede leerse afuera (no cambia, no es parte de la carrera):
+      // por eso acá solo se exige que, para cuando entra a la transacción, la
+      // llamada que trae `fotos` (identificable por su `select`) todavía no
+      // se hizo.
       transactionMock.mockImplementation(async (fn) => {
-        expect(productFindUniqueMock).not.toHaveBeenCalled();
+        const yaLeyoFotos = productFindUniqueMock.mock.calls.some(
+          (llamada) => llamada[0]?.select?.fotos,
+        );
+        expect(yaLeyoFotos).toBe(false);
         return fn({
           product: { findUnique: (...a) => productFindUniqueMock(...a) },
           foto: { createMany: (...a) => fotoCreateManyMock(...a) },
@@ -252,7 +260,33 @@ describe("imágenes generadas de un producto", () => {
         .send({ publicIds: [GENERADAS[0].publicId] });
 
       expect(res.status).toBe(200);
-      expect(productFindUniqueMock).toHaveBeenCalledTimes(1);
+      // Una lectura afuera (sku, para armar la carpeta) y una adentro (fotos,
+      // para el conteo) — dos en total, y la segunda es la que trae `fotos`.
+      expect(productFindUniqueMock).toHaveBeenCalledTimes(2);
+      expect(productFindUniqueMock.mock.calls[1][0].select).toHaveProperty("fotos");
+    });
+
+    it("consulta Cloudinary AFUERA de la transacción", async () => {
+      // `listarImagenesDeCarpeta` es HTTP externo (el SDK de Cloudinary usa un
+      // timeout de 60s) y no puede correr dentro del `$transaction`: el
+      // default de Prisma para transacciones interactivas es 5s, así que una
+      // respuesta lenta abortaría la transacción con P2028 — no mapeado por
+      // el error handler central, un 500 sobre una operación que antes andaba.
+      transactionMock.mockImplementation(async (fn) => {
+        expect(listarMock).toHaveBeenCalledTimes(1);
+        return fn({
+          product: { findUnique: (...a) => productFindUniqueMock(...a) },
+          foto: { createMany: (...a) => fotoCreateManyMock(...a) },
+        });
+      });
+
+      const res = await request(buildApp())
+        .post(`${BASE}/adoptar`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ publicIds: [GENERADAS[0].publicId] });
+
+      expect(res.status).toBe(200);
+      expect(listarMock).toHaveBeenCalledTimes(1);
     });
 
     it("corre en una transacción Serializable", async () => {
