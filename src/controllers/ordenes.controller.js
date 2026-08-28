@@ -1,5 +1,9 @@
+import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
+import { subtotalDeItem } from "../lib/dinero.js";
+import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitados.js";
+import { MAX_ORDENES_HISTORICO } from "./admin.controller.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
@@ -296,6 +300,157 @@ export async function listar(req, res, next) {
     ]);
 
     res.json({ data: ordenes, page, pageSize, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Estado que NO cuenta como producto solicitado.
+ *
+ * Es una regla distinta de `ESTADOS_FACTURABLES` (`admin.controller.js`) y no
+ * hay que confundirlas: aquella responde "¿esto es plata ganada?" y por eso
+ * deja afuera también a PENDIENTE. Acá la pregunta es "¿cuánta mercadería me
+ * están pidiendo?", y una orden pendiente ES demanda real — todavía no
+ * descontó stock, pero alguien la va a querer. La cancelada, en cambio, no es
+ * mercadería a preparar ni a reponer: sumarla infla el total y hace comprar de
+ * más.
+ */
+const ESTADO_EXCLUIDO_SOLICITADOS = "CANCELADA";
+
+/**
+ * Agrupa por producto todo lo que los clientes vienen pidiendo, a través de
+ * TODAS las órdenes (sin filtro de fecha) salvo las canceladas.
+ *
+ * La calculan las DOS rutas del reporte — la grilla y su exportación a
+ * `.xlsx`— porque un Excel que no coincide con la pantalla que lo ofrece es
+ * peor que no tener Excel: nadie se entera de que difieren.
+ *
+ * **La clave de agrupamiento cae al snapshot `nombreProducto` cuando no hay
+ * `productId`.** Desde que borrar un producto desliga sus líneas
+ * (`onDelete: SetNull`), agrupar por `productId` a secas mete a todos los
+ * borrados en la clave `null` y suma sus unidades en una sola fila, bajo el
+ * nombre del primero. Sin error y sin aviso. Mismo cuidado que el ranking de
+ * `resumenVentas`.
+ *
+ * Sin filtro de fecha, pero no sin techo: la consulta crece para siempre y se
+ * reduce entera en memoria, así que lleva el mismo tope y la misma detección
+ * de corte que `clientes-resumen` (`MAX_ORDENES_HISTORICO`, una fila de más
+ * para saber si hubo recorte, se conservan las MÁS RECIENTES). Con
+ * `recortado: true` los totales son un PISO y la pantalla lo declara.
+ *
+ * @returns {Promise<{data: object[], historico: {ordenesAnalizadas: number, tope: number, recortado: boolean}}>}
+ */
+export async function calcularProductosSolicitados() {
+  const filas = await prisma.orden.findMany({
+    where: { estado: { not: ESTADO_EXCLUIDO_SOLICITADOS } },
+    orderBy: { createdAt: "desc" },
+    take: MAX_ORDENES_HISTORICO + 1,
+    select: {
+      id: true,
+      items: {
+        select: {
+          productId: true,
+          nombreProducto: true,
+          precioUnitario: true,
+          cantidad: true,
+          // El SKU no está en `ItemOrden` — vive en `Product`, así que sale
+          // del join. Un producto borrado no tiene ninguno, y esa fila se
+          // reporta sin SKU en vez de inventarle uno.
+          product: { select: { sku: true } },
+        },
+      },
+    },
+  });
+
+  const recortado = filas.length > MAX_ORDENES_HISTORICO;
+  const ordenes = recortado ? filas.slice(0, MAX_ORDENES_HISTORICO) : filas;
+
+  // clave -> { productId, sku, nombre, unidades, facturacion, ordenesVistas }
+  const porProducto = new Map();
+
+  for (const orden of ordenes) {
+    for (const item of orden.items) {
+      // El prefijo evita que el nombre "7" de un producto borrado colisione
+      // con el `productId` 7 de uno vivo.
+      const clave = item.productId ?? `nombre:${item.nombreProducto}`;
+
+      let acumulado = porProducto.get(clave);
+      if (!acumulado) {
+        acumulado = {
+          productId: item.productId ?? null,
+          sku: item.product?.sku ?? null,
+          // Las órdenes vienen de la más reciente a la más vieja, así que la
+          // primera línea que se ve de un producto trae el nombre snapshot
+          // más nuevo — el que la persona reconoce hoy.
+          nombre: item.nombreProducto,
+          unidades: 0,
+          facturacion: new Decimal(0),
+          // Un producto puede aparecer en dos líneas de la MISMA orden: el
+          // conteo es de órdenes distintas, no de líneas.
+          ordenesVistas: new Set(),
+        };
+        porProducto.set(clave, acumulado);
+      }
+
+      acumulado.unidades += item.cantidad;
+      acumulado.facturacion = acumulado.facturacion.plus(subtotalDeItem(item));
+      acumulado.ordenesVistas.add(orden.id);
+    }
+  }
+
+  // Desempate por nombre: sin él, dos productos con las mismas unidades pueden
+  // salir en distinto orden entre la grilla y el Excel de la misma pantalla.
+  const data = [...porProducto.values()]
+    .sort((a, b) => b.unidades - a.unidades || a.nombre.localeCompare(b.nombre))
+    .map((acumulado) => ({
+      productId: acumulado.productId,
+      sku: acumulado.sku,
+      nombre: acumulado.nombre,
+      unidades: acumulado.unidades,
+      ordenes: acumulado.ordenesVistas.size,
+      facturacion: acumulado.facturacion.toFixed(0),
+    }));
+
+  return {
+    data,
+    historico: {
+      ordenesAnalizadas: ordenes.length,
+      tope: MAX_ORDENES_HISTORICO,
+      recortado,
+    },
+  };
+}
+
+/**
+ * GET /api/ordenes/productos-solicitados — la grilla agrupada por producto.
+ *
+ * Es una LECTURA: sin `logAudit`, mismo criterio que `GET /ordenes`.
+ */
+export async function listarProductosSolicitados(_req, res, next) {
+  try {
+    res.json(await calcularProductosSolicitados());
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/ordenes/productos-solicitados/export — la MISMA grilla, como
+ * `.xlsx` descargable.
+ */
+export async function exportarProductosSolicitados(_req, res, next) {
+  try {
+    const { data } = await calcularProductosSolicitados();
+    const buffer = await generarExportacionSolicitados(data);
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", 'attachment; filename="productos-solicitados.xlsx"');
+    res.setHeader("Cache-Control", "no-store");
+    res.send(buffer);
   } catch (err) {
     next(err);
   }

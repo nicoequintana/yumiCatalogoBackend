@@ -23,6 +23,19 @@ router.post("/", limitadorCrearOrden, ordenesController.crear);
 // Gestión admin de órdenes — todas protegidas con requireAuth (a diferencia
 // del checkout de invitado arriba, que es público).
 router.get("/", requireAuth, ordenesController.listar);
+
+// DECLARADAS ANTES DE `/:id`: Express matchea por orden de registro, así que
+// puestas después, `obtenerPorId` se quedaría con "productos-solicitados" como
+// si fuera un id. Es el mismo pisotón que evitan `/products/import` y
+// `/products/eliminar-masivo`. La ruta más específica (`/export`) va primero
+// por el mismo motivo.
+router.get(
+  "/productos-solicitados/export",
+  requireAuth,
+  ordenesController.exportarProductosSolicitados,
+);
+router.get("/productos-solicitados", requireAuth, ordenesController.listarProductosSolicitados);
+
 router.get("/:id", requireAuth, ordenesController.obtenerPorId);
 router.patch("/:id/estado", requireAuth, ordenesController.actualizarEstado);
 
