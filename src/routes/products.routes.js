@@ -6,10 +6,9 @@ import * as productsImportController from "../controllers/productsImport.control
 import * as imagenesGeneradasController from "../controllers/productsImagenesGeneradas.controller.js";
 import { authOpcional, requireAuth } from "../middlewares/auth.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
-import { MAX_FOTOS, MAX_VIDEOS, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
+import { MAX_FOTOS, MAX_VIDEOS, MAX_FOTO_BYTES, ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { MAX_REFERENCIAS } from "../services/n8n.service.js";
 
-const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_VIDEO_MIMES = ["video/mp4", "video/webm"];
 
 // Global multer limit is the video ceiling (design: ~100MB video / ~15MB

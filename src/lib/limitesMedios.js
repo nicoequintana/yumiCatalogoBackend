@@ -50,3 +50,18 @@ export const MAX_VIDEOS = 1;
  * imagen se valida a mano en el controller.
  */
 export const MAX_FOTO_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Tipos MIME de imagen aceptados en cualquier subida del proyecto.
+ *
+ * Vivía como const privada en `routes/products.routes.js`, donde ya la usaban
+ * dos `fileFilter` distintos. Se movió acá al sumarse un tercer consumidor —la
+ * imagen de una categoría (`routes/categorias.routes.js`)— por el mismo
+ * criterio que `MAX_FOTO_BYTES`: tres listas iguales en dos archivos son tres
+ * listas que en algún momento dejan de ser iguales, y el síntoma sería que un
+ * formato se acepta en una pantalla del panel y se rechaza en otra.
+ *
+ * `MediaUploader.jsx` del frontend espeja estos valores para rechazar antes de
+ * subir; ese sí es un sync manual entre repos, documentado en CLAUDE.md.
+ */
+export const ALLOWED_PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];

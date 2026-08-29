@@ -14,7 +14,16 @@ const categoriaMock = {
   delete: vi.fn(),
 };
 const productCountMock = vi.fn();
+const productGroupByMock = vi.fn();
 const auditCreateMock = vi.fn();
+const txMock = vi.fn();
+const subirArchivoMock = vi.fn();
+const eliminarArchivoMock = vi.fn();
+
+vi.mock("../services/cloudinary.service.js", () => ({
+  subirArchivo: (...args) => subirArchivoMock(...args),
+  eliminarArchivo: (...args) => eliminarArchivoMock(...args),
+}));
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -25,8 +34,12 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => categoriaMock.update(...args),
       delete: (...args) => categoriaMock.delete(...args),
     },
-    product: { count: (...args) => productCountMock(...args) },
+    product: {
+      count: (...args) => productCountMock(...args),
+      groupBy: (...args) => productGroupByMock(...args),
+    },
     auditLog: { create: (...args) => auditCreateMock(...args) },
+    $transaction: (...args) => txMock(...args),
   },
 }));
 
@@ -46,6 +59,19 @@ const authHeader = `Bearer ${token}`;
 beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
+  // El listado hace un groupBy aparte para contar los productos PUBLICADOS de
+  // cada categoría; por defecto, ninguna tiene.
+  productGroupByMock.mockResolvedValue([]);
+  eliminarArchivoMock.mockResolvedValue(undefined);
+  // `$transaction` acepta las dos formas que usa el controller: callback (el
+  // tope de destacadas, que necesita leer y escribir bajo el mismo aislamiento)
+  // y arreglo de operaciones (la reescritura del orden).
+  txMock.mockImplementation(async (arg) => {
+    if (typeof arg === "function") {
+      return arg({ categoria: categoriaMock });
+    }
+    return Promise.all(arg);
+  });
 });
 
 describe("GET /api/categorias (público)", () => {
@@ -57,7 +83,9 @@ describe("GET /api/categorias (público)", () => {
     const res = await request(buildApp()).get("/api/categorias");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: 1, nombre: "Velas", cantidadProductos: 3 }]);
+    expect(res.body).toEqual([
+      { id: 1, nombre: "Velas", cantidadProductos: 3, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+    ]);
   });
 });
 
@@ -79,7 +107,7 @@ describe("POST /api/categorias (protegido)", () => {
       .send({ nombre: "Velas" });
 
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ id: 5, nombre: "Velas", cantidadProductos: 0 });
+    expect(res.body).toEqual({ id: 5, nombre: "Velas", cantidadProductos: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 });
   });
 });
 
@@ -101,7 +129,7 @@ describe("PUT /api/categorias/:id (protegido)", () => {
       .send({ nombre: "Aromas" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ id: 1, nombre: "Aromas", cantidadProductos: 2 });
+    expect(res.body).toEqual({ id: 1, nombre: "Aromas", cantidadProductos: 2, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 });
   });
 });
 
@@ -189,5 +217,59 @@ describe("auditoría de categorías", () => {
     await request(buildApp()).get("/api/categorias");
 
     expect(auditCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/categorias — cantidadPublicados", () => {
+  it("cuenta aparte los productos que un visitante realmente ve", async () => {
+    // `cantidadProductos` cuenta TODO (ocultos y agotados incluidos) porque el
+    // panel lo usa para decidir si una categoría se puede borrar. La home
+    // rankea con `cantidadPublicados`: sin ese segundo número, podía destacar
+    // una categoría cuyos productos están todos ocultos y mandar al visitante
+    // a una grilla vacía, sin ningún error.
+    categoriaMock.findMany.mockResolvedValue([
+      { id: 1, nombre: "Cocina", _count: { productos: 10 } },
+      { id: 2, nombre: "Hogar", _count: { productos: 4 } },
+    ]);
+    productGroupByMock.mockResolvedValue([{ categoriaId: 1, _count: { _all: 3 } }]);
+
+    const res = await request(buildApp()).get("/api/categorias");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      { id: 1, nombre: "Cocina", cantidadProductos: 10, cantidadPublicados: 3, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+      // Sin fila en el groupBy = cero publicados, no "sin dato".
+      { id: 2, nombre: "Hogar", cantidadProductos: 4, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+    ]);
+  });
+
+  it("cuenta sólo lo visible y con stock, y descarta los productos sin categoría", async () => {
+    categoriaMock.findMany.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/categorias");
+
+    expect(productGroupByMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ["categoriaId"],
+        where: {
+          visibleEnCatalogo: true,
+          stock: { gt: 0 },
+          categoriaId: { not: null },
+        },
+      }),
+    );
+  });
+
+  it("crear NO emite cantidadPublicados: un 0 se leería como dato, y es «no lo sé»", async () => {
+    categoriaMock.findUnique.mockResolvedValue(null);
+    categoriaMock.create.mockResolvedValue({ id: 9, nombre: "Nueva", _count: { productos: 0 } });
+
+    const res = await request(buildApp())
+      .post("/api/categorias")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Nueva" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).not.toHaveProperty("cantidadPublicados");
   });
 });
