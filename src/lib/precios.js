@@ -3,7 +3,7 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 /**
  * Cálculo del precio de venta a partir del costo de adquisición.
  *
- *     precio = redondearACentenaArriba(costo × coeficiente)
+ *     precio = redondearAEntero(costo × coeficiente)
  *
  * **`coeficiente` es un MULTIPLICADOR, no un porcentaje.** Un 2,05 significa
  * "×2,05" — el aumento real es del 105 %. Se llama así justamente para que un
@@ -11,10 +11,11 @@ import { Decimal } from "@prisma/client/runtime/client.js";
  * dos lecturas equivocadas de un campo llamado `porcentaje`.
  *
  * **Aritmética con `Decimal`, nunca con float** — misma regla invariable que
- * `lib/dinero.js`. Acá el riesgo es concreto y no teórico: `14504 * 2.05` en
- * punto flotante da `29733.200000000004`, y el día que un producto caiga justo
- * sobre un múltiplo de 100 esa basura lo empuja a la centena siguiente y le
- * suma $100 al precio de venta sin que nadie lo pida.
+ * `lib/dinero.js`. `14504 * 2.05` en punto flotante da `29733.200000000004`, y
+ * aunque con el redondeo al entero esa basura ya no cambia el resultado, un
+ * valor que caiga sobre el medio peso exacto sí queda a merced de cómo el float
+ * lo haya representado: `6457.5` puede venir como `6457.499999…` y redondear
+ * para el lado equivocado.
  *
  * ⚠️ **Espejo manual de `frontend/src/utils/precios.js`.** Los dos repos se
  * publican por separado (ver CLAUDE.md, "Deploy"), así que no hay forma de
@@ -58,21 +59,28 @@ function aDecimalPositivo(valor) {
 }
 
 /**
- * Redondea hacia arriba al múltiplo de 100 más cercano.
+ * Redondea al peso más cercano, con el medio peso exacto hacia arriba.
  *
- * **Hacia arriba y no al más cercano**, y no es una preferencia estética: a la
- * centena más cercana, un coeficiente de 2,05 se convierte en un 2,0494
- * efectivo (`16.810 → 16.800` pierde $10 por unidad) sin que nadie lo note. La
- * regla existe para que el precio nunca quede por debajo del margen pedido.
+ * **Hasta el 29/08/2026 esto redondeaba a la centena hacia arriba** y se
+ * cambió por pedido explícito: `3.075 × 2,05 = 6.303,75` se publicaba como
+ * `6.400`, casi cien pesos por encima de la cuenta. Con los costos ya cargados
+ * el argumento original (que a la centena más cercana un 2,05 se vuelve un
+ * 2,0494 efectivo) dejó de compensar: el redondeo comercial movía el catálogo
+ * entero casi $4.000 y el error que evitaba era de centavos.
  *
- * Un valor que YA es múltiplo de 100 se queda donde está — `ceil` lo garantiza.
- * Con un `+ 100` ingenuo, cada aplicación sucesiva le sumaría $100 al producto.
+ * El precio sigue siendo entero — la columna es `Decimal(10, 0)` y un decimal
+ * ahí se guardaría redondeado sin avisar (ver "Montos enteros" en CLAUDE.md).
+ * Lo que cambió es cuánto se redondea, no que se redondee.
  *
  * @param {Decimal} valor
  * @returns {Decimal}
  */
-export function redondearACentenaArriba(valor) {
-  return valor.div(100).ceil().mul(100);
+export function redondearAEntero(valor) {
+  // ROUND_HALF_UP explícito y no el modo por defecto de la instancia: el
+  // default de decimal.js es configurable en tiempo de ejecución, así que
+  // dejarlo implícito haría que el precio del catálogo dependiera de que nadie
+  // toque `Decimal.set()` en otra parte del proceso.
+  return valor.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
 }
 
 /**
@@ -90,7 +98,7 @@ export function calcularPrecio(costo, coeficiente) {
   const coeficienteDecimal = aDecimalPositivo(coeficiente);
   if (costoDecimal === null || coeficienteDecimal === null) return null;
 
-  return redondearACentenaArriba(costoDecimal.mul(coeficienteDecimal));
+  return redondearAEntero(costoDecimal.mul(coeficienteDecimal));
 }
 
 /**

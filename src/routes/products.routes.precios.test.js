@@ -9,7 +9,7 @@ process.env.JWT_SECRET = "test-secret";
 
 /**
  * `POST /api/products/precios-masivo` — aplicar el precio calculado
- * (`costo × coeficiente`, redondeado a la centena hacia arriba) a varios
+ * (`costo × coeficiente`, redondeado al peso) a varios
  * productos de una vez.
  *
  * Lo que estas suites fijan:
@@ -108,7 +108,7 @@ describe("POST /api/products/precios-masivo", () => {
     expect(res.body.actualizados).toBe(2);
     expect(res.body.resultados).toEqual([
       { id: 1, nombre: "Producto 1", precioAnterior: "18900", precioNuevo: "20500", cambio: true },
-      { id: 2, nombre: "Producto 2", precioAnterior: "29800", precioNuevo: "31200", cambio: true },
+      { id: 2, nombre: "Producto 2", precioAnterior: "29800", precioNuevo: "31160", cambio: true },
     ]);
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 1 }, data: expect.objectContaining({ precio: "20500" }) }),

@@ -1195,8 +1195,8 @@ export async function actualizarCosteo(req, res, next) {
 }
 
 /**
- * Aplica el precio calculado (`costo × coeficiente`, redondeado a la centena
- * hacia arriba) a los productos seleccionados en la pantalla de precios.
+ * Aplica el precio calculado (`costo × coeficiente`, redondeado al peso) a los
+ * productos seleccionados en la pantalla de precios.
  *
  * **Este endpoint es el único que escribe un precio derivado del costo, y esa
  * es toda la feature.** `precio` sigue siendo una columna propia: cambiar el

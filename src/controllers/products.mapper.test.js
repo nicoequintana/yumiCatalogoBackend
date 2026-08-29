@@ -140,7 +140,7 @@ describe("mapProductoParaN8n", () => {
  */
 describe("costo y coeficiente en los mappers", () => {
   const conCostos = filaDeProducto({
-    precio: new Decimal("29800"),
+    precio: new Decimal("29733"),
     costo: new Decimal("14504"),
     coeficiente: new Decimal("2.05"),
     _count: { fotos: 0 },
@@ -153,7 +153,7 @@ describe("costo y coeficiente en los mappers", () => {
       expect(salida).not.toHaveProperty("precioCalculado");
       expect(salida).not.toHaveProperty("estadoPrecio");
       // El precio de venta sí sale, como siempre: es público.
-      expect(salida.precio).toBe("29800");
+      expect(salida.precio).toBe("29733");
     }
   });
 
@@ -164,14 +164,14 @@ describe("costo y coeficiente en los mappers", () => {
     ]) {
       expect(salida.costo).toBe("14504");
       expect(salida.coeficiente).toBe("2.05");
-      expect(salida.precioCalculado).toBe("29800");
+      expect(salida.precioCalculado).toBe("29733");
       expect(salida.estadoPrecio).toBe("AL_DIA");
     }
   });
 
   it("marca DIFIERE cuando el precio publicado no es el calculado", () => {
     const desactualizado = filaDeProducto({
-      precio: new Decimal("29800"),
+      precio: new Decimal("29733"),
       costo: new Decimal("15200"),
       coeficiente: new Decimal("2.05"),
       _count: { fotos: 0 },

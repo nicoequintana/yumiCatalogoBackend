@@ -21,7 +21,7 @@ model Product {
   // `"45000.00"`, de ahí que el JSON-LD y los mappers no necesiten formatear.
   precio             Decimal          @db.Decimal(10, 0)
   /// Costo de adquisición y multiplicador con el que se calcula el precio de
-  /// venta: `precio = redondearACentenaArriba(costo × coeficiente)`. La cuenta
+  /// venta: `precio = redondearAEntero(costo × coeficiente)`. La cuenta
   /// vive en `src/lib/precios.js`.
   ///
   /// Los dos son NULLABLE y no por prolijidad: los productos cargados antes de
