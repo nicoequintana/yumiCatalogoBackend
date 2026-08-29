@@ -49,7 +49,6 @@ export const LIST_SELECT = {
   visibleEnCatalogo: true,
   stock: true,
   destacado: true,
-  orden: true,
   vistas: true,
   compartidos: true,
   categoria: { select: { id: true, nombre: true } },
@@ -110,7 +109,6 @@ export function mapProductoListado(producto) {
     visibleEnCatalogo: producto.visibleEnCatalogo,
     stock: producto.stock,
     destacado: producto.destacado,
-    orden: producto.orden,
     cantidadFotos: producto._count?.fotos ?? producto.fotos.length,
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -151,7 +149,6 @@ export function mapProducto(producto) {
     visibleEnCatalogo: producto.visibleEnCatalogo,
     stock: producto.stock,
     destacado: producto.destacado,
-    orden: producto.orden,
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fraseComercial: producto.fraseComercial,
     porQueLoVasAQuerer: producto.porQueLoVasAQuerer,

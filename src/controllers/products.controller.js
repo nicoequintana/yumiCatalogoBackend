@@ -71,8 +71,14 @@ export const PAGE_SIZE_CATALOGO = 12;
 /**
  * Ordenamientos permitidos del listado.
  *
- * `merchandising` es el de siempre: el `orden` manual que el admin edita en el
- * listado, con los más nuevos primero ante empate. `vistas` existe para la
+ * El DEFAULT es `recientes`. Hasta el 29/08/2026 era `merchandising`, un
+ * `orden` manual por producto que el admin editaba en el listado; se eliminó
+ * entero por pedido explícito ("no se usa y no lo voy a usar"). El cambio no
+ * alteró lo que se ve: los 80 productos de producción tenían todos `orden: 0`,
+ * así que el criterio efectivo ya era el desempate — los más nuevos primero,
+ * que es exactamente `recientes`.
+ *
+ * `vistas` existe para la
  * pantalla de métricas, que necesita "lo más visto primero" a lo largo de TODO
  * el catálogo — ordenar del lado del cliente solo reordenaría la página que
  * tocó, que es una respuesta directamente equivocada. El desempate por `id`
@@ -82,7 +88,6 @@ export const PAGE_SIZE_CATALOGO = 12;
  * el resto de los filtros de este endpoint público.
  */
 const ORDENES_LISTADO = {
-  merchandising: [{ orden: "asc" }, { createdAt: "desc" }],
   vistas: [{ vistas: "desc" }, { id: "asc" }],
   nombre: [{ nombre: "asc" }, { id: "asc" }],
   "nombre-desc": [{ nombre: "desc" }, { id: "asc" }],
@@ -103,7 +108,7 @@ const ORDENES_LISTADO = {
 };
 
 function elegirOrden(valor) {
-  return ORDENES_LISTADO[valor] ?? ORDENES_LISTADO.merchandising;
+  return ORDENES_LISTADO[valor] ?? ORDENES_LISTADO.recientes;
 }
 
 /**
@@ -471,11 +476,11 @@ export async function crear(req, res, next) {
   let producto = null;
   try {
     const {
-      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden,
+      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto,
     } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
-    const merchandising = validarCamposMerchandising({ stock, destacado, orden });
+    const merchandising = validarCamposMerchandising({ stock, destacado });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO") ?? [];
@@ -512,7 +517,6 @@ export async function crear(req, res, next) {
             sku: generarSku(nombre.trim()),
             stock: merchandising.stock ?? 0,
             destacado: merchandising.destacado ?? false,
-            orden: merchandising.orden ?? 0,
             caracteristicas: { create: caracteristicas },
             fraseComercial: fraseComercial?.trim() || null,
             porQueLoVasAQuerer: porQueLoVasAQuerer?.trim() || null,
@@ -598,11 +602,11 @@ export async function actualizar(req, res, next) {
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
     const {
-      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado, orden,
+      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto,
     } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
-    const merchandising = validarCamposMerchandising({ stock, destacado, orden });
+    const merchandising = validarCamposMerchandising({ stock, destacado });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO");
@@ -656,7 +660,6 @@ export async function actualizar(req, res, next) {
             categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
             stock: merchandising.stock,
             destacado: merchandising.destacado,
-            orden: merchandising.orden,
             fraseComercial: fraseComercial !== undefined ? fraseComercial?.trim() || null : undefined,
             porQueLoVasAQuerer: porQueLoVasAQuerer !== undefined ? porQueLoVasAQuerer?.trim() || null : undefined,
             tePasaEsto: tePasaEsto !== undefined ? tePasaEsto?.trim() || null : undefined,
@@ -853,34 +856,39 @@ export async function actualizarVisibilidad(req, res, next) {
 }
 
 /**
- * PATCH /:id/merchandising — combined endpoint for the two admin-table
- * quick-edit controls (`destacado` toggle, `orden` input), mirroring
- * `actualizarVisibilidad`'s shape. Accepts JSON, so `destacado` arrives as a
+ * PATCH /:id/merchandising — el toggle "Destacado" del listado del admin,
+ * espejando la forma de `actualizarVisibilidad`.
+ *
+ * La ruta conserva el nombre `merchandising` aunque hoy maneje un solo campo:
+ * hasta el 29/08/2026 escribía también un `orden` manual, que se eliminó por
+ * no usarse. Renombrarla sería un cambio de contrato (frontend, tests y el
+ * `accion` de la auditoría, que es lo que se consulta en los logs históricos)
+ * a cambio de nada.
+ *
+ * Accepts JSON, so `destacado` arrives as a
  * real boolean here (unlike crear()/actualizar()'s multipart/form-data,
  * where it arrives as a string) — `validarCamposMerchandising()` handles
  * both shapes via `coerceDestacado()`, so this endpoint reuses the same
  * validator as crear()/actualizar() instead of re-checking the rules here.
- * At least one of the two fields must be present; each provided field is
- * validated and written, any omitted field is left untouched.
  */
 export async function actualizarMerchandising(req, res, next) {
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
 
-    const { destacado, orden } = req.body;
+    const { destacado } = req.body;
 
-    if (destacado === undefined && orden === undefined) {
-      throw httpError(400, "Debe enviar destacado y/o orden.");
+    if (destacado === undefined) {
+      throw httpError(400, "Debe enviar destacado.");
     }
-    const merchandising = validarCamposMerchandising({ destacado, orden });
+    const merchandising = validarCamposMerchandising({ destacado });
 
     const existente = await prisma.product.findUnique({ where: { id } });
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
     const producto = await prisma.product.update({
       where: { id },
-      data: { destacado: merchandising.destacado, orden: merchandising.orden },
+      data: { destacado: merchandising.destacado },
       include: PRODUCT_INCLUDE,
     });
 
@@ -891,8 +899,6 @@ export async function actualizarMerchandising(req, res, next) {
       detalle: {
         destacadoAnterior: existente.destacado,
         destacadoNuevo: producto.destacado,
-        ordenAnterior: existente.orden,
-        ordenNuevo: producto.orden,
       },
     });
 

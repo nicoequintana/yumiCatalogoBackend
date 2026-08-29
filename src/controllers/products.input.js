@@ -163,15 +163,20 @@ function coerceDestacado(destacado) {
 }
 
 /**
- * Validates + normalizes the merchandising fields added in Sprint 3
- * (`stock`, `destacado`, `orden`). Follows the same `esCreacion` pattern as
+ * Validates + normalizes the merchandising fields (`stock`, `destacado`).
+ *
+ * Tenía además un `orden` manual por producto, eliminado el 29/08/2026 junto
+ * con su columna: no se usaba (los 80 productos de producción estaban todos en
+ * 0) y no se va a usar.
+ *
+ * Follows the same `esCreacion` pattern as
  * `validarCamposBase`: a field is only validated/applied when the caller
  * explicitly sent it — omitting it on update leaves the existing value
  * untouched, and on create it just falls back to its DB default. Returns the
  * normalized values (booleans/numbers coerced from the raw strings
  * multipart/form-data sends) for the caller to use in the Prisma write.
  */
-export function validarCamposMerchandising({ stock, destacado, orden }) {
+export function validarCamposMerchandising({ stock, destacado }) {
   let stockNormalizado;
   if (stock !== undefined) {
     if (stock === null || stock === "" || Number.isNaN(Number(stock)) || !Number.isInteger(Number(stock)) || Number(stock) < 0) {
@@ -188,15 +193,7 @@ export function validarCamposMerchandising({ stock, destacado, orden }) {
     }
   }
 
-  let ordenNormalizado;
-  if (orden !== undefined) {
-    if (orden === null || orden === "" || Number.isNaN(Number(orden)) || !Number.isInteger(Number(orden))) {
-      throw httpError(400, "orden debe ser un número entero.");
-    }
-    ordenNormalizado = Number(orden);
-  }
-
-  return { stock: stockNormalizado, destacado: destacadoNormalizado, orden: ordenNormalizado };
+  return { stock: stockNormalizado, destacado: destacadoNormalizado };
 }
 
 export function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {

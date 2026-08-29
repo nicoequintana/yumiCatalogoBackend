@@ -51,7 +51,6 @@ const filaListado = {
   visibleEnCatalogo: true,
   stock: 10,
   destacado: true,
-  orden: 3,
   vistas: 7,
   compartidos: 2,
   categoria: { id: 5, nombre: "Cuidado" },
@@ -117,7 +116,6 @@ describe("GET /api/products - payload liviano de listado", () => {
         "fotos",
         "id",
         "nombre",
-        "orden",
         "precio",
         "sku",
         "stock",
@@ -166,7 +164,6 @@ describe("GET /api/products - payload liviano de listado", () => {
       visibleEnCatalogo: true,
       stock: 1,
       destacado: false,
-      orden: 0,
       fraseComercial: null,
       porQueLoVasAQuerer: null,
       tePasaEsto: null,
@@ -207,7 +204,6 @@ describe("GET /api/products - payload liviano de listado", () => {
       visibleEnCatalogo: true,
       stock: 1,
       destacado: false,
-      orden: 0,
       fraseComercial: null,
       porQueLoVasAQuerer: null,
       tePasaEsto: null,
@@ -407,12 +403,12 @@ describe("GET /api/products - filtro destacado y orden", () => {
     expect(where.destacado).toBeUndefined();
   });
 
-  it("orden por defecto: merchandising manual", async () => {
+  it("orden por defecto: `recientes` (más nuevos primero)", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products");
 
-    expect(findManyMock.mock.calls[0][0].orderBy).toEqual([{ orden: "asc" }, { createdAt: "desc" }]);
+    expect(findManyMock.mock.calls[0][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
   it("orden=vistas ordena por vistas descendente", async () => {
@@ -429,6 +425,6 @@ describe("GET /api/products - filtro destacado y orden", () => {
     const res = await request(buildApp()).get("/api/products?orden=loquesea");
 
     expect(res.status).toBe(200);
-    expect(findManyMock.mock.calls[0][0].orderBy).toEqual([{ orden: "asc" }, { createdAt: "desc" }]);
+    expect(findManyMock.mock.calls[0][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 });

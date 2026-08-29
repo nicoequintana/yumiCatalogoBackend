@@ -188,11 +188,11 @@ export async function servirSeoHome(req, res, next) {
 
     // Mismo filtro y mismo orden que ve una persona: `useDestacados.js` pide
     // `destacado=1` contra `GET /products`, cuyo default de orden
-    // (`merchandising`) es `[{orden:"asc"},{createdAt:"desc"}]` — ver
+    // (`recientes`) es `[{createdAt:"desc"},{id:"desc"}]` — ver
     // `ORDENES_LISTADO` en `products.controller.js`.
     const destacados = await prisma.product.findMany({
       where: { destacado: true, visibleEnCatalogo: true, stock: { gt: 0 } },
-      orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_DESTACADOS_SEO,
       select: { id: true, nombre: true, precio: true },
     });
@@ -241,11 +241,11 @@ async function servirListado(res, { categoria }) {
     },
     // Mismo orden que ve una persona en `/coleccion`: el default
     // `merchandising` de `GET /products` (`ORDENES_LISTADO` en
-    // `products.controller.js`). `orden` vale 0 para todo producto que el
-    // admin no reordenó a mano, así que el desempate decide todo — con
+    // `products.controller.js`). Era `merchandising` hasta el 29/08/2026, con
+    // un `orden` manual que se eliminó por no usarse — con
     // `{ id: "asc" }` el crawler vería los más VIEJOS primero mientras la
     // persona ve los más nuevos.
-    orderBy: [{ orden: "asc" }, { createdAt: "desc" }],
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: MAX_PRODUCTOS_LISTADO_SEO,
     select: { id: true, nombre: true, precio: true },
   });

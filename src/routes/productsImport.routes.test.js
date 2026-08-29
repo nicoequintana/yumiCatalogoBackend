@@ -352,7 +352,7 @@ describe("POST /api/products/actualizar-masivo", () => {
     expect(res.body.error).toContain(".xlsx");
   });
 
-  it("actualiza por sku y NO toca sku/visibilidad/destacado/orden", async () => {
+  it("actualiza por sku y NO toca sku/visibilidad/destacado", async () => {
     productFindManyMock.mockResolvedValue([
       { id: 101, sku: "VEL-1", precio: decimal("1500"), stock: 3 },
     ]);
@@ -365,7 +365,6 @@ describe("POST /api/products/actualizar-masivo", () => {
       stock: 9,
       visibleEnCatalogo: true,
       destacado: true,
-      orden: 3,
       caracteristicas: [],
       listas: [],
       especificaciones: [],
@@ -403,7 +402,6 @@ describe("POST /api/products/actualizar-masivo", () => {
 
     expect(res.body.productos[0].visibleEnCatalogo).toBe(true);
     expect(res.body.productos[0].destacado).toBe(true);
-    expect(res.body.productos[0].orden).toBe(3);
   });
 
   // Regresión del modo de falla que motivó todo el cambio: si `data` volviera a

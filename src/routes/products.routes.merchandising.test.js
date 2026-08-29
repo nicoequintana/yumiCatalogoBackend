@@ -63,7 +63,6 @@ const productoBase = {
   visibleEnCatalogo: true,
   stock: 10,
   destacado: false,
-  orden: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -76,19 +75,19 @@ beforeEach(() => {
   findUniqueOrThrowMock.mockReset();
 });
 
-describe("listar() ordena por orden asc, createdAt desc", () => {
+describe("listar() ordena por createdAt desc, id desc (el default `recientes`)", () => {
   it("GET /api/products pasa el nuevo orderBy compuesto", async () => {
     findManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products");
 
     expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ orderBy: [{ orden: "asc" }, { createdAt: "desc" }] }),
+      expect.objectContaining({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
     );
   });
 });
 
-describe("POST /api/products valida stock/destacado/orden", () => {
+describe("POST /api/products valida stock/destacado", () => {
   function post(fields) {
     let req = request(buildApp())
       .post("/api/products")
@@ -111,21 +110,21 @@ describe("POST /api/products valida stock/destacado/orden", () => {
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ stock: 0, destacado: false, orden: 0 }),
+        data: expect.objectContaining({ stock: 0, destacado: false }),
       }),
     );
   });
 
-  it("acepta stock, destacado y orden válidos", async () => {
-    createMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true, orden: 5 });
-    updateMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true, orden: 5 });
+  it("acepta stock y destacado válidos", async () => {
+    createMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true });
+    updateMock.mockResolvedValue({ ...productoBase, stock: 5, destacado: true });
 
-    const res = await post({ stock: "5", destacado: "true", orden: "5" });
+    const res = await post({ stock: "5", destacado: "true" });
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ stock: 5, destacado: true, orden: 5 }),
+        data: expect.objectContaining({ stock: 5, destacado: true }),
       }),
     );
   });
@@ -168,21 +167,11 @@ describe("POST /api/products valida stock/destacado/orden", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("rechaza orden no numérico", async () => {
-    const res = await post({ orden: "abc" });
-    expect(res.status).toBe(400);
-    expect(createMock).not.toHaveBeenCalled();
-  });
 
-  it("rechaza orden con decimales", async () => {
-    const res = await post({ orden: "1.5" });
-    expect(res.status).toBe(400);
-    expect(createMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("PUT /api/products/:id respeta esCreacion:false para merchandising", () => {
-  it("no toca stock/destacado/orden si no se envían", async () => {
+  it("no toca stock/destacado si no se envían", async () => {
     findUniqueMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
     updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
     findUniqueOrThrowMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
@@ -197,7 +186,7 @@ describe("PUT /api/products/:id respeta esCreacion:false para merchandising", ()
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ stock: undefined, destacado: undefined, orden: undefined }),
+        data: expect.objectContaining({ stock: undefined, destacado: undefined }),
       }),
     );
   });
@@ -239,40 +228,11 @@ describe("PATCH /api/products/:id/merchandising", () => {
     expect(res.status).toBe(200);
     expect(res.body.destacado).toBe(true);
     expect(updateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 1 }, data: { destacado: true, orden: undefined } }),
+      expect.objectContaining({ where: { id: 1 }, data: { destacado: true } }),
     );
   });
 
-  it("actualiza orden y devuelve el producto", async () => {
-    findUniqueMock.mockResolvedValue({ id: 1 });
-    updateMock.mockResolvedValue({ ...productoBase, id: 1, orden: 3 });
 
-    const res = await request(buildApp())
-      .patch("/api/products/1/merchandising")
-      .set("Authorization", authHeader)
-      .send({ orden: 3 });
-
-    expect(res.status).toBe(200);
-    expect(res.body.orden).toBe(3);
-    expect(updateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 1 }, data: { destacado: undefined, orden: 3 } }),
-    );
-  });
-
-  it("acepta ambos campos juntos", async () => {
-    findUniqueMock.mockResolvedValue({ id: 1 });
-    updateMock.mockResolvedValue({ ...productoBase, id: 1, destacado: true, orden: 2 });
-
-    const res = await request(buildApp())
-      .patch("/api/products/1/merchandising")
-      .set("Authorization", authHeader)
-      .send({ destacado: true, orden: 2 });
-
-    expect(res.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 1 }, data: { destacado: true, orden: 2 } }),
-    );
-  });
 
   it("responde 400 si no se envía ningún campo", async () => {
     const res = await request(buildApp())
@@ -292,14 +252,6 @@ describe("PATCH /api/products/:id/merchandising", () => {
     expect(res.status).toBe(400);
   });
 
-  it("responde 400 si orden no es un entero", async () => {
-    const res = await request(buildApp())
-      .patch("/api/products/1/merchandising")
-      .set("Authorization", authHeader)
-      .send({ orden: 1.5 });
-
-    expect(res.status).toBe(400);
-  });
 
   it("responde 404 si el producto no existe", async () => {
     findUniqueMock.mockResolvedValue(null);

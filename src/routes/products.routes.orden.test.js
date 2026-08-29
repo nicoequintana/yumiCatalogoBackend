@@ -98,16 +98,20 @@ describe("GET /api/products - ?orden=", () => {
     }
   });
 
-  it("cae al orden de merchandising con un valor desconocido", async () => {
+  // El default es `recientes`. Era `merchandising` —un `orden` manual por
+  // producto— hasta que se eliminó el 29/08/2026 por no usarse: en producción
+  // los 80 productos estaban todos en 0, así que el criterio efectivo ya era
+  // este mismo y la tienda no cambió de orden.
+  it("cae a `recientes` con un valor desconocido", async () => {
     await request(buildApp()).get("/api/products?orden=inventado");
 
-    expect(orderByDeLaConsulta()).toEqual([{ orden: "asc" }, { createdAt: "desc" }]);
+    expect(orderByDeLaConsulta()).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
-  it("cae al orden de merchandising sin el parámetro", async () => {
+  it("cae a `recientes` sin el parámetro", async () => {
     await request(buildApp()).get("/api/products");
 
-    expect(orderByDeLaConsulta()).toEqual([{ orden: "asc" }, { createdAt: "desc" }]);
+    expect(orderByDeLaConsulta()).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
   it("no amplía lo que ve un anónimo: el orden no toca el where", async () => {

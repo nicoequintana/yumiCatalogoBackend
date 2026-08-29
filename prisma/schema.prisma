@@ -28,7 +28,6 @@ model Product {
   visibleEnCatalogo  Boolean          @default(false)
   stock              Int              @default(0)
   destacado          Boolean          @default(false)
-  orden              Int              @default(0) // control manual de merchandising, menor = primero
   driveFolderId      String?
   categoriaId        Int?
   categoria          Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
@@ -45,7 +44,10 @@ model Product {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
-  @@index([visibleEnCatalogo, orden])
+  // Sostiene la consulta del listado público: filtra por `visibleEnCatalogo` y
+  // ordena por `createdAt` (el default `recientes`). Antes el segundo campo era
+  // `orden`, el merchandising manual que se eliminó el 29/08/2026.
+  @@index([visibleEnCatalogo, createdAt])
   @@index([destacado])
   @@index([categoriaId])
 }
@@ -104,11 +106,36 @@ model Video {
   product                Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
+/// Categoría de producto.
+///
+/// Además de agrupar productos, alimenta la sección "Explorá por categoría" de
+/// la home pública: qué categorías aparecen ahí y con qué foto lo decide el
+/// panel (Configuración › Categorías), no un cálculo automático.
 model Categoria {
   id        Int       @id @default(autoincrement())
   nombre    String    @unique
   productos Product[]
   createdAt DateTime  @default(now())
+
+  /// Foto de la categoría, sólo Cloudinary. A diferencia de `Foto`/`Video` no
+  /// hay campo de Drive: esta feature nació después de la migración a
+  /// Cloudinary, así que nunca puede existir una imagen de categoría legada.
+  /// `url` se guarda resuelta (igual que `Foto.url`) y el `publicId` +
+  /// `resourceType` existen para poder borrar el archivo remoto al
+  /// reemplazarla o quitarla.
+  imagenUrl                    String?
+  imagenCloudinaryPublicId     String?
+  imagenCloudinaryResourceType String?
+
+  /// Selección para la home. Mismo par que `Anuncio` (`activo` + `orden`) y por
+  /// el mismo motivo: `destacadaEnHome` permite sacar una categoría de la home
+  /// sin perder su foto, y `ordenHome` lo reescribe entero la operación de
+  /// reordenar, así que no se asume compacto ni sin repetidos más allá de lo
+  /// que esa escritura deje.
+  destacadaEnHome Boolean @default(false)
+  ordenHome       Int     @default(0)
+
+  @@index([destacadaEnHome, ordenHome])
 }
 
 /// Mensajes de la cinta de anuncios del catálogo público (`BarraAnuncios`).
