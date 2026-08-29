@@ -4,6 +4,7 @@ import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
 import { logAudit } from "../lib/logAudit.js";
+import { calcularPrecio } from "../lib/precios.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { httpError } from "../lib/httpError.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
@@ -24,6 +25,7 @@ import {
   validarArchivos,
   validarCamposBase,
   validarCamposMerchandising,
+  validarCostoYCoeficiente,
   validarOrdenFotos,
 } from "./products.input.js";
 import {
@@ -253,7 +255,7 @@ export async function listar(req, res, next) {
     // es lo que se devuelve.
     if (ids !== null) {
       const productos = await prisma.product.findMany({ where, select: LIST_SELECT, orderBy });
-      const data = productos.map(mapProductoListado);
+      const data = productos.map((producto) => mapProductoListado(producto, { esAdmin }));
       res.json({ data, page: 1, pageSize: MAX_IDS_LISTADO, total: data.length });
       return;
     }
@@ -271,7 +273,12 @@ export async function listar(req, res, next) {
       }),
     ]);
 
-    res.json({ data: productos.map(mapProductoListado), page, pageSize, total });
+    res.json({
+      data: productos.map((producto) => mapProductoListado(producto, { esAdmin })),
+      page,
+      pageSize,
+      total,
+    });
   } catch (err) {
     next(err);
   }
@@ -355,7 +362,10 @@ async function obtenerRelacionados(producto, { esAdmin }) {
     take: 4,
   });
 
-  return relacionados.map(mapProductoListado);
+  // Sin `esAdmin`: los relacionados alimentan `ProductCard` en la ficha
+  // pública. Un admin abriendo esa ficha tampoco necesita el costo de los
+  // productos vecinos, y no emitirlo mantiene la superficie chica.
+  return relacionados.map((producto) => mapProductoListado(producto));
 }
 
 export async function obtenerPorId(req, res, next) {
@@ -411,7 +421,7 @@ export async function obtenerPorId(req, res, next) {
 
     const relacionados = await obtenerRelacionados(producto, { esAdmin });
 
-    res.json({ ...mapProducto(producto), relacionados });
+    res.json({ ...mapProducto(producto, { esAdmin }), relacionados });
   } catch (err) {
     next(err);
   }
@@ -477,10 +487,11 @@ export async function crear(req, res, next) {
   try {
     const {
       nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
-      fraseComercial, porQueLoVasAQuerer, tePasaEsto,
+      fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
     const merchandising = validarCamposMerchandising({ stock, destacado });
+    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO") ?? [];
@@ -512,6 +523,11 @@ export async function crear(req, res, next) {
             nombre: nombre.trim(),
             descripcion: descripcion.trim(),
             precio: String(precio),
+            // El precio NO se deriva del costo acá: se escribe el que vino en
+            // el formulario. Cambiar el costo nunca mueve el precio publicado
+            // por su cuenta — eso lo hace la aplicación explícita del panel.
+            costo: costeo.costo ?? null,
+            coeficiente: costeo.coeficiente ?? null,
             etiqueta: etiqueta?.trim() || null,
             categoriaId: categoriaId ? Number(categoriaId) : null,
             sku: generarSku(nombre.trim()),
@@ -582,7 +598,7 @@ export async function crear(req, res, next) {
       detalle: { nombre: producto.nombre, sku: producto.sku },
     });
 
-    res.status(201).json(mapProducto(producto));
+    res.status(201).json(mapProducto(producto, { esAdmin: true }));
   } catch (err) {
     // Orphan prevention (design D6): clean up any Cloudinary uploads from
     // this batch. The product DB row (if created) is intentionally NOT rolled
@@ -603,10 +619,11 @@ export async function actualizar(req, res, next) {
 
     const {
       nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
-      fraseComercial, porQueLoVasAQuerer, tePasaEsto,
+      fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
     validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
     const merchandising = validarCamposMerchandising({ stock, destacado });
+    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO");
@@ -656,6 +673,11 @@ export async function actualizar(req, res, next) {
             nombre: nombre !== undefined ? nombre.trim() : undefined,
             descripcion: descripcion !== undefined ? descripcion.trim() : undefined,
             precio: precio !== undefined ? String(precio) : undefined,
+            // `undefined` deja la columna como está, `null` la borra. Es la
+            // semántica que devuelve `validarCostoYCoeficiente` y la que hace
+            // que un campo vaciado en el formulario efectivamente saque el dato.
+            costo: costeo.costo,
+            coeficiente: costeo.coeficiente,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
             categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
             stock: merchandising.stock,
@@ -814,7 +836,7 @@ export async function actualizar(req, res, next) {
       },
     });
 
-    res.json(mapProducto(productoActualizado));
+    res.json(mapProducto(productoActualizado, { esAdmin: true }));
   } catch (err) {
     next(err);
   }
@@ -849,7 +871,7 @@ export async function actualizarVisibilidad(req, res, next) {
       },
     });
 
-    res.json(mapProducto(producto));
+    res.json(mapProducto(producto, { esAdmin: true }));
   } catch (err) {
     next(err);
   }
@@ -902,7 +924,7 @@ export async function actualizarMerchandising(req, res, next) {
       },
     });
 
-    res.json(mapProducto(producto));
+    res.json(mapProducto(producto, { esAdmin: true }));
   } catch (err) {
     next(err);
   }
@@ -1119,6 +1141,184 @@ export async function eliminarMasivo(req, res, next) {
   }
 }
 
+/**
+ * Guarda el costo y el coeficiente de un producto desde la pantalla de precios,
+ * al instante y sin pasar por el formulario completo.
+ *
+ * Es el tercer hermano de `actualizarVisibilidad` y `actualizarMerchandising`, y
+ * existe por el mismo motivo: son campos que se editan desde una TABLA, donde
+ * mandar un `PUT` multipart con el producto entero por dos números sería
+ * absurdo y además pisaría lo que otra pestaña haya cambiado mientras tanto.
+ *
+ * **NO toca `precio`.** Guardar un costo nunca mueve el precio publicado: eso
+ * lo hace `aplicarPreciosMasivo`, a pedido explícito. Es la invariante central
+ * de la feature y el motivo de que estos dos endpoints estén separados.
+ *
+ * Acepta JSON. `null`/`""` borran la columna — ver `validarCostoYCoeficiente`.
+ */
+export async function actualizarCosteo(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+
+    const { costo, coeficiente } = req.body ?? {};
+    if (costo === undefined && coeficiente === undefined) {
+      throw httpError(400, "Debe enviar costo o coeficiente.");
+    }
+    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
+
+    const existente = await prisma.product.findUnique({ where: { id } });
+    if (!existente) throw httpError(404, "Producto no encontrado.");
+
+    const producto = await prisma.product.update({
+      where: { id },
+      data: { costo: costeo.costo, coeficiente: costeo.coeficiente },
+      include: PRODUCT_INCLUDE,
+    });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_COSTEO",
+      entidad: "Producto",
+      entidadId: id,
+      detalle: {
+        costoAnterior: existente.costo?.toString() ?? null,
+        costoNuevo: producto.costo?.toString() ?? null,
+        coeficienteAnterior: existente.coeficiente?.toString() ?? null,
+        coeficienteNuevo: producto.coeficiente?.toString() ?? null,
+      },
+    });
+
+    res.json(mapProducto(producto, { esAdmin: true }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Aplica el precio calculado (`costo × coeficiente`, redondeado a la centena
+ * hacia arriba) a los productos seleccionados en la pantalla de precios.
+ *
+ * **Este endpoint es el único que escribe un precio derivado del costo, y esa
+ * es toda la feature.** `precio` sigue siendo una columna propia: cambiar el
+ * costo de un producto NO mueve su precio publicado hasta que alguien pase por
+ * acá. Es lo que hace que el precio que ve el cliente sea siempre un número que
+ * una persona aprobó, y lo que permite que el redondeo se muestre en pantalla
+ * antes de escribirse en vez de ocurrir en silencio.
+ *
+ * `coeficiente` en el body es OPCIONAL y pisa el de cada producto — es el campo
+ * "aplicar este coeficiente a los N seleccionados". Se guarda junto con el
+ * precio: si solo se usara para la cuenta, el producto quedaría con un precio
+ * que su propio coeficiente no explica, y la pantalla lo marcaría DIFIERE al
+ * instante siguiente.
+ *
+ * **Validar primero, escribir después.** Los productos que no se pueden
+ * precisar (sin costo, o inexistentes) se apartan ANTES de la transacción, con
+ * su motivo. Así un producto sin costo no aborta el lote entero, y el informe
+ * distingue "no se tocó" de "se tocó y no cambió" — un `{ ok: true }` después
+ * de aplicar sobre 40 y haber escrito 31 sería una mentira.
+ */
+export async function aplicarPreciosMasivo(req, res, next) {
+  try {
+    const ids = parsearIdsMasivos(req.body?.ids);
+
+    // El override se valida antes de leer la base: si viene mal, no tiene
+    // sentido haber consultado nada.
+    const { coeficiente: coeficienteOverride } = validarCostoYCoeficiente({
+      coeficiente: req.body?.coeficiente,
+    });
+
+    const productos = await prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, nombre: true, precio: true, costo: true, coeficiente: true },
+    });
+    const porId = new Map(productos.map((p) => [p.id, p]));
+
+    const resultados = [];
+    const rechazados = [];
+    const aEscribir = [];
+
+    // Se itera sobre `ids` y no sobre `productos` para que un id inexistente
+    // aparezca en el informe con su motivo, mismo criterio que `eliminarMasivo`.
+    for (const id of ids) {
+      const producto = porId.get(id);
+      if (!producto) {
+        rechazados.push({ id, nombre: null, motivo: "El producto no existe." });
+        continue;
+      }
+
+      const coeficienteEfectivo = coeficienteOverride ?? producto.coeficiente;
+      const precioNuevo = calcularPrecio(producto.costo, coeficienteEfectivo);
+      if (precioNuevo === null) {
+        rechazados.push({
+          id,
+          nombre: producto.nombre,
+          motivo: "No tiene costo y coeficiente cargados.",
+        });
+        continue;
+      }
+
+      const precioAnterior = producto.precio.toString();
+      const cambiaPrecio = !producto.precio.equals(precioNuevo);
+      const cambiaCoeficiente =
+        coeficienteOverride !== undefined &&
+        coeficienteOverride !== null &&
+        !producto.coeficiente?.equals(coeficienteOverride);
+
+      resultados.push({
+        id,
+        nombre: producto.nombre,
+        precioAnterior,
+        precioNuevo: precioNuevo.toString(),
+        cambio: cambiaPrecio,
+      });
+
+      // Un producto ya al día no se reescribe: sin esto, cada aplicación
+      // masiva llenaría `AuditLog` de cambios que no cambiaron nada y
+      // esconderían los reales.
+      if (cambiaPrecio || cambiaCoeficiente) {
+        aEscribir.push({
+          id,
+          precioAnterior,
+          data: {
+            precio: precioNuevo.toString(),
+            ...(cambiaCoeficiente && { coeficiente: coeficienteOverride }),
+          },
+        });
+      }
+    }
+
+    // Todo o nada sobre lo que SÍ se puede escribir. Lo rechazado ya quedó
+    // afuera, así que la transacción no puede abortar por un dato faltante.
+    if (aEscribir.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        for (const { id, data } of aEscribir) {
+          await tx.product.update({ where: { id }, data });
+        }
+      });
+    }
+
+    // Un renglón por producto, no uno por lote: mismo criterio que
+    // `actualizarVisibilidadMasiva`.
+    for (const { id, precioAnterior, data } of aEscribir) {
+      logAudit(req, {
+        accion: "APLICAR_PRECIO",
+        entidad: "Producto",
+        entidadId: id,
+        detalle: {
+          precioAnterior,
+          precioNuevo: data.precio,
+          ...(data.coeficiente !== undefined && { coeficiente: data.coeficiente }),
+          masivo: true,
+        },
+      });
+    }
+
+    res.json({ actualizados: aEscribir.length, resultados, rechazados });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function eliminarFoto(req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -1150,7 +1350,7 @@ export async function eliminarFoto(req, res, next) {
     });
 
     const productoActualizado = await prisma.product.findUniqueOrThrow({ where: { id }, include: PRODUCT_INCLUDE });
-    res.json(mapProducto(productoActualizado));
+    res.json(mapProducto(productoActualizado, { esAdmin: true }));
   } catch (err) {
     next(err);
   }

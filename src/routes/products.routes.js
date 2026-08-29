@@ -154,6 +154,10 @@ router.post("/import", requireAuth, uploadXlsx, productsImportController.importa
 // pisotón que ya evita `/import` unas líneas más arriba.
 router.post("/eliminar-masivo", requireAuth, productsController.eliminarMasivo);
 router.patch("/visibilidad-masiva", requireAuth, productsController.actualizarVisibilidadMasiva);
+// Aplica el precio calculado (`costo × coeficiente`) a los productos
+// seleccionados en `/catalogo/admin/productos/precios`. Mismo pisotón que las
+// otras masivas: va ANTES de cualquier `POST /:id/...`.
+router.post("/precios-masivo", requireAuth, productsController.aplicarPreciosMasivo);
 // Actualización masiva por planilla (matcheo por SKU, nunca crea). Mismo
 // multer `uploadXlsx` que `/import`.
 router.post("/actualizar-masivo", requireAuth, uploadXlsx, productsImportController.actualizarMasivo);
@@ -176,6 +180,9 @@ router.delete("/:id/imagenes-generadas", requireAuth, imagenesGeneradasControlle
 router.put("/:id", requireAuth, uploadFields, productsController.actualizar);
 router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisibilidad);
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);
+// Costo y coeficiente desde la tabla de precios, guardado al instante. NO toca
+// `precio`: publicarlo es un paso aparte y explícito (`/precios-masivo`).
+router.patch("/:id/costeo", requireAuth, productsController.actualizarCosteo);
 router.delete("/:id", requireAuth, productsController.eliminar);
 router.delete("/:id/fotos/:fotoId", requireAuth, productsController.eliminarFoto);
 

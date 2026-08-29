@@ -150,6 +150,72 @@ export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion 
 }
 
 /**
+ * Valida y normaliza `costo` y `coeficiente` — los dos campos con los que el
+ * admin calcula el precio de venta (ver `lib/precios.js`).
+ *
+ * Devuelve tres cosas distintas por campo, y no son intercambiables:
+ *   `undefined` → no vino en el request, la columna no se toca
+ *   `null`      → vino vacío, la columna se BORRA
+ *   string      → valor normalizado, listo para Prisma
+ *
+ * La rama de `null` no es un detalle: sin ella, un costo cargado por error
+ * quedaría pegado al producto para siempre.
+ */
+export function validarCostoYCoeficiente({ costo, coeficiente }) {
+  let costoNormalizado;
+  if (costo !== undefined) {
+    const crudo = typeof costo === "string" ? costo.trim() : costo;
+    if (crudo === null || crudo === "") {
+      costoNormalizado = null;
+    } else {
+      const numero = Number(crudo);
+      if (!Number.isFinite(numero) || numero <= 0) {
+        throw httpError(400, "El costo debe ser un número mayor a 0.");
+      }
+      // Mismo criterio que `precio` en `validarCamposBase`: la columna es
+      // `Decimal(10, 0)`, así que un 1500.60 se guardaría como 1501 sin avisarle
+      // a nadie — y el margen calculado a partir de él sería falso.
+      if (!Number.isInteger(numero)) {
+        throw httpError(400, "El costo debe ser un número entero, sin decimales.");
+      }
+      costoNormalizado = String(numero);
+    }
+  }
+
+  let coeficienteNormalizado;
+  if (coeficiente !== undefined) {
+    const crudo = typeof coeficiente === "string" ? coeficiente.trim() : coeficiente;
+    if (crudo === null || crudo === "") {
+      coeficienteNormalizado = null;
+    } else {
+      // La coma se acepta como separador decimal, a diferencia del precio.
+      // No es adivinar: "2,05" y "2.05" son el mismo número sin ninguna
+      // ambigüedad, y acá el decimal es legítimo (es el único campo del sistema
+      // que los lleva). En el precio lo que se rechaza es el decimal en sí, no
+      // su notación — son dos reglas distintas y conviene no confundirlas.
+      const texto = String(crudo).replace(",", ".");
+      const numero = Number(texto);
+      if (!Number.isFinite(numero) || numero <= 0) {
+        throw httpError(400, "El coeficiente debe ser un número mayor a 0.");
+      }
+      // La columna es `Decimal(5, 2)`. Un tercer decimal se redondearía en
+      // silencio y el precio que la pantalla muestra dejaría de coincidir con
+      // el que el backend calcula al aplicar.
+      const decimales = texto.split(".")[1]?.length ?? 0;
+      if (decimales > 2) {
+        throw httpError(400, "El coeficiente admite como máximo dos decimales.");
+      }
+      if (numero > 999.99) {
+        throw httpError(400, "El coeficiente no puede ser mayor a 999,99.");
+      }
+      coeficienteNormalizado = String(numero);
+    }
+  }
+
+  return { costo: costoNormalizado, coeficiente: coeficienteNormalizado };
+}
+
+/**
  * Coerces a `destacado` value that may arrive as a real boolean (JSON body)
  * or as a string (multipart/form-data, e.g. crear()/actualizar()) into a
  * strict boolean. Only the exact string forms "true"/"false" are accepted —

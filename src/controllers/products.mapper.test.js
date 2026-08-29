@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mapProductoParaN8n } from "./products.mapper.js";
+import { Decimal } from "@prisma/client/runtime/client.js";
+import { mapProducto, mapProductoListado, mapProductoParaN8n } from "./products.mapper.js";
 
 /**
  * Payload que recibe el flujo de generación de imágenes de n8n.
@@ -127,5 +128,70 @@ describe("mapProductoParaN8n", () => {
     expect(salida.caracteristicas).toEqual([]);
     expect(salida.especificaciones).toEqual([]);
     expect(salida.nombre).toBe("Termo mate");
+  });
+});
+
+/**
+ * Costo y coeficiente: campos ADMIN-ONLY.
+ *
+ * `GET /products` y `GET /products/:id` son públicos (`authOpcional`), así que
+ * lo que estos tests fijan no es cosmético — es que el catálogo público no
+ * filtre lo que el negocio paga por su mercadería.
+ */
+describe("costo y coeficiente en los mappers", () => {
+  const conCostos = filaDeProducto({
+    precio: new Decimal("29800"),
+    costo: new Decimal("14504"),
+    coeficiente: new Decimal("2.05"),
+    _count: { fotos: 0 },
+  });
+
+  it("NO los emite para un visitante anónimo", () => {
+    for (const salida of [mapProducto(conCostos), mapProductoListado(conCostos)]) {
+      expect(salida).not.toHaveProperty("costo");
+      expect(salida).not.toHaveProperty("coeficiente");
+      expect(salida).not.toHaveProperty("precioCalculado");
+      expect(salida).not.toHaveProperty("estadoPrecio");
+      // El precio de venta sí sale, como siempre: es público.
+      expect(salida.precio).toBe("29800");
+    }
+  });
+
+  it("los emite para un admin, con el cálculo y el estado ya resueltos", () => {
+    for (const salida of [
+      mapProducto(conCostos, { esAdmin: true }),
+      mapProductoListado(conCostos, { esAdmin: true }),
+    ]) {
+      expect(salida.costo).toBe("14504");
+      expect(salida.coeficiente).toBe("2.05");
+      expect(salida.precioCalculado).toBe("29800");
+      expect(salida.estadoPrecio).toBe("AL_DIA");
+    }
+  });
+
+  it("marca DIFIERE cuando el precio publicado no es el calculado", () => {
+    const desactualizado = filaDeProducto({
+      precio: new Decimal("29800"),
+      costo: new Decimal("15200"),
+      coeficiente: new Decimal("2.05"),
+      _count: { fotos: 0 },
+    });
+    expect(mapProductoListado(desactualizado, { esAdmin: true }).estadoPrecio).toBe("DIFIERE");
+  });
+
+  it("un producto sin costo es SIN_COSTO y no inventa un precio calculado", () => {
+    const sinCosto = filaDeProducto({
+      precio: new Decimal("12000"),
+      costo: null,
+      coeficiente: null,
+      _count: { fotos: 0 },
+    });
+    const salida = mapProductoListado(sinCosto, { esAdmin: true });
+
+    expect(salida.costo).toBeNull();
+    expect(salida.coeficiente).toBeNull();
+    // `null`, nunca "0": un 0 se escribiría como precio del producto.
+    expect(salida.precioCalculado).toBeNull();
+    expect(salida.estadoPrecio).toBe("SIN_COSTO");
   });
 });

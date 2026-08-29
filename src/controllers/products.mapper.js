@@ -7,6 +7,8 @@
  * puro, sin acceso a base ni a storage.
  */
 
+import { calcularPrecio, estadoDePrecio } from "../lib/precios.js";
+
 export const PRODUCT_INCLUDE = {
   caracteristicas: true,
   fotos: { orderBy: { orden: "asc" } },
@@ -45,6 +47,12 @@ export const LIST_SELECT = {
   sku: true,
   nombre: true,
   precio: true,
+  // Se seleccionan siempre, pero `mapProductoListado` los emite SOLO para
+  // admin — ver `camposDePrecio`. Traerlos de más cuesta dos columnas
+  // numéricas; no traerlos obligaría a un segundo `select` para la pantalla de
+  // precios, que es el consumidor principal de este listado en el panel.
+  costo: true,
+  coeficiente: true,
   etiqueta: true,
   visibleEnCatalogo: true,
   stock: true,
@@ -90,14 +98,52 @@ function urlDeFoto(productoId, foto) {
 }
 
 /**
+ * Los cuatro campos de costeo, o nada.
+ *
+ * **`GET /products` y `GET /products/:id` son PÚBLICOS** (`authOpcional`, para
+ * que el catálogo siga sirviendo a visitantes anónimos). Emitir `costo` sin
+ * mirar quién pregunta filtraría al mundo entero lo que el negocio paga por su
+ * mercadería — y encima en el endpoint que alimenta la grilla pública, o sea a
+ * un `fetch` de distancia. Por eso van detrás del mismo flag que decide ver
+ * ocultos y agotados (`esRequestDeAdmin`, `auth.middleware.js`).
+ *
+ * `precioCalculado` y `estadoPrecio` se derivan acá y no se persisten: no hay
+ * columna de estado, así que no puede quedar desactualizado.
+ *
+ * `precioCalculado` es `null` —nunca "0"— cuando falta costo o coeficiente. Un
+ * 0 se escribiría como precio del producto.
+ */
+function camposDePrecio(producto, esAdmin) {
+  if (!esAdmin) return null;
+
+  const calculado = calcularPrecio(producto.costo, producto.coeficiente);
+  return {
+    costo: producto.costo?.toString() ?? null,
+    coeficiente: producto.coeficiente?.toString() ?? null,
+    precioCalculado: calculado === null ? null : calculado.toString(),
+    estadoPrecio: estadoDePrecio({
+      precio: producto.precio,
+      costo: producto.costo,
+      coeficiente: producto.coeficiente,
+    }),
+  };
+}
+
+/**
  * Mapea una fila leída con `LIST_SELECT` a la forma que devuelve el listado.
  *
  * Es un subconjunto estricto de `mapProducto`: cada clave que emite existe
  * también en el detalle y con el mismo significado, así que un componente
  * como `ProductCard` funciona con las dos respuestas sin ramificar.
+ *
+ * `esAdmin` gobierna los campos de costeo — ver `camposDePrecio`. Su default es
+ * `false` a propósito: si alguien agrega un llamador nuevo y se olvida de
+ * pasarlo, el modo de falla es "faltan datos en el panel", nunca "el costo se
+ * publicó".
  */
-export function mapProductoListado(producto) {
+export function mapProductoListado(producto, { esAdmin = false } = {}) {
   return {
+    ...camposDePrecio(producto, esAdmin),
     id: producto.id,
     sku: producto.sku,
     nombre: producto.nombre,
@@ -126,7 +172,7 @@ function agruparListasPorTipo(listas) {
   return porTipo;
 }
 
-export function mapProducto(producto) {
+export function mapProducto(producto, { esAdmin = false } = {}) {
   // Una sola pasada por `listas` para las cuatro claves. Antes se llamaba a
   // `agruparListasPorTipo` una vez por clave y se descartaban las otras tres
   // agrupaciones, o sea cuatro recorridos completos por producto. Hoy este
@@ -136,6 +182,9 @@ export function mapProducto(producto) {
   const listasPorTipo = agruparListasPorTipo(producto.listas ?? []);
 
   return {
+    // Costo y coeficiente solo para admin — ver `camposDePrecio`. Este mapper
+    // también sirve al detalle público de la ficha.
+    ...camposDePrecio(producto, esAdmin),
     id: producto.id,
     sku: producto.sku,
     nombre: producto.nombre,

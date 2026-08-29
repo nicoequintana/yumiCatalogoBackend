@@ -114,6 +114,15 @@ async function validarYSnapshotearProductos(items) {
       productId,
       nombreProducto: producto.nombre,
       precioUnitario: producto.precio.toString(),
+      // Foto del COSTO, por el mismo motivo que la del precio: sin ella, el
+      // margen de esta venta se calcularía más adelante contra el
+      // `Product.costo` vigente en ESE momento, y cada aumento de un proveedor
+      // reescribiría las ganancias de todos los meses anteriores.
+      //
+      // `null` cuando el producto todavía no tiene costo cargado. Significa "no
+      // se puede calcular el margen de esta línea", NUNCA "margen 0", y quien
+      // lo consuma tiene que distinguir los dos casos.
+      costoUnitario: producto.costo?.toString() ?? null,
       cantidad,
     });
   }
