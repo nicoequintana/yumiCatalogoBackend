@@ -1,6 +1,11 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { subtotalDeItem, totalDeItems } from "./dinero.js";
 import { ETIQUETA_ESTADO } from "./estadosOrden.js";
+// El desfase de -3 vive en `lib/horarioArgentino.js` desde que la analytics del
+// admin pasó a necesitar el mismo concepto de "día". Escribirlo de nuevo acá
+// sería tener dos definiciones de día que se pueden desincronizar sin que nada
+// falle — ver "Módulos compartidos" en CLAUDE.md.
+import { enHorarioArgentino } from "./horarioArgentino.js";
 
 /**
  * Plantillas de los mails transaccionales de órdenes.
@@ -123,38 +128,6 @@ const MESES = [
   "noviembre",
   "diciembre",
 ];
-
-/**
- * Argentina está en UTC-3 fijo: no aplica horario de verano desde 2009, así
- * que el desplazamiento es una constante y no hace falta una base de zonas
- * horarias para resolverlo.
- */
-const DESFASE_ARGENTINA_MS = -3 * 60 * 60 * 1000;
-
-/**
- * Desplaza un instante a la hora de Argentina para poder leer sus partes con
- * los getters `getUTC*`.
- *
- * POR QUÉ NO SE USA LA ZONA DEL SERVIDOR: el contenedor corre en UTC y el
- * negocio vive en Buenos Aires. Un pedido de las 21:30 de acá es 00:30 UTC
- * del día siguiente, así que leer la fecha con `getDate()` le pondría al
- * cliente el día equivocado en su propio comprobante — de noche, que es
- * justo cuando más se compra.
- *
- * Tampoco con `Intl.DateTimeFormat`, por el mismo motivo que `formatearMonto`
- * no usa `Intl.NumberFormat`: la salida depende de la versión de ICU del
- * runtime y un test que la afirme pasa en una máquina y falla en otra.
- *
- * @param {Date|string|number|null|undefined} valor
- * @returns {Date|null} null si el valor falta o no es una fecha legible
- */
-function enHorarioArgentino(valor) {
-  if (valor === null || valor === undefined) return null;
-  const fecha = valor instanceof Date ? valor : new Date(valor);
-  const instante = fecha.getTime();
-  if (Number.isNaN(instante)) return null;
-  return new Date(instante + DESFASE_ARGENTINA_MS);
-}
 
 /**
  * `"26 de agosto de 2026"`, en hora de Argentina.

@@ -258,6 +258,31 @@ describe("GET /api/admin/ventas", () => {
     expect(dia11.ingresos).toBe("0");
   });
 
+  // Regresión del corrimiento de día. `aClaveDia` agrupaba por día UTC
+  // (`toISOString().slice(0, 10)`) mientras el negocio vive en Buenos Aires
+  // (UTC-3): toda venta de las 21:00 en adelante caía en el punto del día
+  // SIGUIENTE del gráfico. El rótulo del eje quedaba bien y el número atrás
+  // estaba corrido — nada lo delataba.
+  it("agrupa por día ARGENTINO: una venta de las 22:30 ART queda en su propio día", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 1,
+        estado: "CONFIRMADA",
+        // 22:30 del 15 en Buenos Aires ya es el 16 en UTC.
+        createdAt: "2026-08-16T01:30:00Z",
+        items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "900", cantidad: 1 }],
+      }),
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?desde=2026-08-14&hasta=2026-08-16")
+      .set("Authorization", authHeader);
+
+    const serie = res.body.serieTemporal;
+    expect(serie.find((punto) => punto.fecha === "2026-08-15").ingresos).toBe("900");
+    expect(serie.find((punto) => punto.fecha === "2026-08-16").ingresos).toBe("0");
+  });
+
   it("devuelve ceros (no null ni NaN) cuando el período no tiene órdenes", async () => {
     ordenFindManyMock.mockResolvedValue([]);
 
@@ -322,9 +347,15 @@ describe("GET /api/admin/ventas", () => {
 
     expect(res.status).toBe(200);
     const args = ordenFindManyMock.mock.calls[0][0];
-    expect(args.where.createdAt.gte).toEqual(new Date("2026-08-01T00:00:00.000Z"));
-    // `hasta` es inclusivo: se consulta hasta el final de ese día.
-    expect(args.where.createdAt.lte).toEqual(new Date("2026-08-15T23:59:59.999Z"));
+    // Los límites son las medianoches ARGENTINAS expresadas en UTC: el 1 de
+    // agosto a las 00:00 de Buenos Aires es `T03:00:00.000Z`. Se compara contra
+    // `createdAt`, que la base guarda en UTC, así que el instante tiene que
+    // seguir siendo UTC — lo que cambia es a qué momento corresponde. Anclado en
+    // `T00:00:00Z`, el período arrancaba y terminaba a las 21:00 hora local.
+    expect(args.where.createdAt.gte).toEqual(new Date("2026-08-01T03:00:00.000Z"));
+    // `hasta` es inclusivo: se consulta hasta el final de ese día argentino,
+    // o sea hasta las 02:59:59.999 UTC del 16.
+    expect(args.where.createdAt.lte).toEqual(new Date("2026-08-16T02:59:59.999Z"));
     expect(res.body.periodo).toMatchObject({ desde: "2026-08-01", hasta: "2026-08-15" });
   });
 

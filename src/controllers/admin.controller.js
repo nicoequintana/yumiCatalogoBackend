@@ -2,6 +2,7 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem, sumarDecimales } from "../lib/dinero.js";
+import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 
 export async function listarErrorLogs(req, res, next) {
   try {
@@ -110,9 +111,23 @@ export const MAX_ORDENES_HISTORICO = 20000;
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
-/** `Date` -> "YYYY-MM-DD" en UTC, la misma clave que agrupa la serie diaria. */
+/**
+ * `Date` -> "YYYY-MM-DD" del día ARGENTINO, la misma clave que agrupa la serie
+ * diaria.
+ *
+ * Era `fecha.toISOString().slice(0, 10)`, o sea el día UTC, y eso corría de
+ * lugar todas las ventas de la tarde-noche: el contenedor corre en UTC, el
+ * negocio vive en Buenos Aires (UTC-3), así que una orden de las 21:00 de acá
+ * caía en el punto del día SIGUIENTE del gráfico. El rótulo del eje quedaba
+ * bien y el número de atrás estaba corrido — la peor combinación, porque nada
+ * la delata.
+ *
+ * El desfase sale de `lib/horarioArgentino.js`, el mismo módulo que usan las
+ * plantillas de correo para fechar el comprobante del cliente: dos definiciones
+ * de "día" en el mismo sistema serían dos números que se contradicen sin error.
+ */
 export function aClaveDia(fecha) {
-  return fecha.toISOString().slice(0, 10);
+  return claveDiaArgentino(fecha);
 }
 
 /**
@@ -124,15 +139,22 @@ export function aClaveDia(fecha) {
  * pedir `hasta=2026-08-15` incluya las órdenes de ese mismo día y no las
  * corte a medianoche. Si el rango viene invertido (`desde` posterior a
  * `hasta`) se dan vuelta los extremos, que es más útil que devolver vacío.
+ *
+ * **Los límites son las medianoches ARGENTINAS, expresadas como instantes UTC.**
+ * `desde`/`hasta` se comparan contra `Orden.createdAt`, que la base guarda en
+ * UTC, así que tienen que seguir siendo instantes UTC válidos — lo que cambió
+ * es a qué momento corresponden: `2026-08-15` es `2026-08-15T03:00:00.000Z`, la
+ * medianoche de Buenos Aires, y no la de Greenwich. Anclarlos en `T00:00:00Z`
+ * hacía que "últimos 30 días" arrancara y terminara a las 21:00 hora local, con
+ * las ventas de esas tres horas contadas del lado equivocado del corte.
  */
 export function parsearPeriodo(query) {
   const parsear = (valor) => {
     if (typeof valor !== "string" || valor === "") return null;
-    const fecha = new Date(`${valor.slice(0, 10)}T00:00:00.000Z`);
-    return Number.isNaN(fecha.getTime()) ? null : fecha;
+    return inicioDelDiaArgentino(valor.slice(0, 10));
   };
 
-  const hoy = new Date(`${aClaveDia(new Date())}T00:00:00.000Z`);
+  const hoy = inicioDelDiaArgentino(aClaveDia(new Date()));
 
   let desde = parsear(query.desde);
   let hasta = parsear(query.hasta);
