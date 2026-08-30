@@ -540,3 +540,83 @@ describe("POST /api/products/actualizar-masivo", () => {
     );
   });
 });
+
+/**
+ * Regresión de `.map(mapProducto)`.
+ *
+ * `.map` pasa el ÍNDICE como segundo argumento y ahí va el objeto de opciones,
+ * así que `mapProducto` leía `esAdmin` de un número: las dos rutas —las dos
+ * detrás de `requireAuth`— devolvían la forma PÚBLICA, sin `costo`,
+ * `coeficiente` ni `estadoPrecio`, en desacuerdo con el resto de las escrituras
+ * del panel. Es el pisotón que CLAUDE.md prohíbe explícitamente.
+ */
+describe("las dos rutas de planilla emiten la forma admin del producto", () => {
+  const PRODUCTO_CON_COSTEO = {
+    id: 101,
+    sku: "VEL-1",
+    nombre: "Vela",
+    descripcion: "Aroma lavanda",
+    // Strings pelados y no el `decimal()` de arriba: `calcularPrecio` normaliza
+    // con `new Decimal(valor)`, que sabe leer un string pero no un objeto con
+    // solo `toString` — con el doble falso el cálculo daría `null` y el test
+    // dejaría de poder distinguir la forma admin de la pública.
+    precio: "3075",
+    costo: "1500",
+    coeficiente: "2.05",
+    stock: 3,
+    visibleEnCatalogo: false,
+    destacado: false,
+    caracteristicas: [],
+    listas: [],
+    especificaciones: [],
+    fotos: [],
+    video: null,
+    categoria: null,
+    _count: { fotos: 0 },
+  };
+
+  it("POST /import devuelve costo, coeficiente y estadoPrecio", async () => {
+    productCreateMock.mockResolvedValue(PRODUCTO_CON_COSTEO);
+
+    const res = await request(buildApp())
+      .post("/api/products/import")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxCon([{ nombre: "Vela", descripcion: "Aroma lavanda", precio: 3075, stock: 3 }]),
+        "productos.xlsx",
+      );
+
+    expect(res.status).toBe(201);
+    expect(res.body.productos[0]).toMatchObject({
+      costo: "1500",
+      coeficiente: "2.05",
+      precioCalculado: "3075",
+    });
+    expect(res.body.productos[0].estadoPrecio).toBe("AL_DIA");
+  });
+
+  it("POST /actualizar-masivo devuelve costo, coeficiente y estadoPrecio", async () => {
+    productFindManyMock.mockResolvedValue([
+      { id: 101, sku: "VEL-1", precio: decimal("1500"), stock: 3 },
+    ]);
+    productUpdateMock.mockResolvedValue(PRODUCTO_CON_COSTEO);
+
+    const res = await request(buildApp())
+      .post("/api/products/actualizar-masivo")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", precio: 3075, stock: 3 }]),
+        "productos.xlsx",
+      );
+
+    expect(res.status).toBe(200);
+    expect(res.body.productos[0]).toMatchObject({
+      costo: "1500",
+      coeficiente: "2.05",
+      precioCalculado: "3075",
+    });
+    expect(res.body.productos[0].estadoPrecio).toBe("AL_DIA");
+  });
+});

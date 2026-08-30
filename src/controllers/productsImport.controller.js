@@ -98,7 +98,15 @@ export async function importar(req, res, next) {
       detalle: { cantidad: creados.length, skus: creados.map((p) => p.sku) },
     });
 
-    res.status(201).json({ cantidad: creados.length, productos: creados.map(mapProducto) });
+    // Envuelto en una arrow y NO `creados.map(mapProducto)`: `.map` pasa el
+    // ÍNDICE como segundo argumento, que es justo donde va el objeto de
+    // opciones, así que `esAdmin` se leía de un número. Esta ruta va detrás de
+    // `requireAuth`, o sea que emite la forma admin (costo, coeficiente,
+    // estadoPrecio) igual que el resto de las escrituras del panel.
+    res.status(201).json({
+      cantidad: creados.length,
+      productos: creados.map((p) => mapProducto(p, { esAdmin: true })),
+    });
   } catch (err) {
     next(err);
   }
@@ -274,7 +282,12 @@ export async function actualizarMasivo(req, res, next) {
       });
     }
 
-    res.json({ actualizados: resultados.length, productos: resultados.map(mapProducto) });
+    // Misma arrow y mismo motivo que en `importar`: `.map` pasaría el índice
+    // como objeto de opciones, y esta ruta también es admin-only.
+    res.json({
+      actualizados: resultados.length,
+      productos: resultados.map((p) => mapProducto(p, { esAdmin: true })),
+    });
   } catch (err) {
     next(err);
   }
