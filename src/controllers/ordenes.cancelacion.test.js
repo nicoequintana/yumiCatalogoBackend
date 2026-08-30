@@ -190,7 +190,10 @@ describe("confirmar marca la orden como tenedora del stock", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(ordenUpdateManyMock).toHaveBeenCalledWith({
-      where: { id: 100, estado: { not: "CONFIRMADA" } },
+      // `stockDescontado: false` es parte de la guarda, no un extra: sin él una
+      // orden en EN_PREPARACION/ENTREGADA (que YA tiene el stock tomado) también
+      // matchea `estado != CONFIRMADA` y se le descuenta por segunda vez.
+      where: { id: 100, estado: { not: "CONFIRMADA" }, stockDescontado: false },
       data: { estado: "CONFIRMADA", stockDescontado: true },
     });
   });

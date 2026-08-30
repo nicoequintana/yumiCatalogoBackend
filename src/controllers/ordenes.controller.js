@@ -10,6 +10,7 @@ import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
+import { mapOrden } from "./ordenes.mapper.js";
 import { notificarCambioEstado, notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
 
 const MAX_INTENTOS_DNI = 5;
@@ -224,9 +225,15 @@ export async function crear(req, res, next) {
     // `notificarOrdenCreada` no lanza por diseño; el `.catch` está por si un
     // cambio futuro la vuelve capaz de hacerlo — una promesa rechazada sin
     // manejar tumba el proceso en Node.
+    // Recibe la fila CRUDA, no la mapeada: las plantillas de correo del aviso
+    // interno son las únicas consumidoras legítimas del costo, y nunca salen
+    // hacia el comprador.
     notificarOrdenCreada(orden).catch(() => {});
 
-    res.status(201).json(orden);
+    // Mapeada, y sin `esAdmin`: este endpoint es público y el 201 lo lee el
+    // comprador. Ver `campoDeCosto` en `ordenes.mapper.js` — devolver la fila
+    // cruda le filtraba `costoUnitario`, o sea el margen del negocio.
+    res.status(201).json(mapOrden(orden));
   } catch (err) {
     next(err);
   }
@@ -489,6 +496,25 @@ export async function obtenerPorId(req, res, next) {
 }
 
 /**
+ * ¿Esta línea perdió su producto?
+ *
+ * `ItemOrden.productId` es `Int?` con `onDelete: SetNull`: borrar un producto
+ * vendido es un flujo soportado a propósito (23/08/2026) y desliga sus líneas
+ * en vez de quedar bloqueado por ellas. La orden sigue siendo legible por sus
+ * snapshots, pero ya no hay stock que mover.
+ *
+ * **Un `where: { id: null }` NO es un no-op.** Un id inexistente sí lo es —
+ * `updateMany` devuelve `count: 0` y sigue—, pero `null` es otra cosa: el
+ * validador de Prisma lo RECHAZA, porque `Product.id` es un `Int` no nulo. Esa
+ * excepción se lanza DENTRO de `prisma.$transaction`, así que revierte el cambio
+ * de estado entero y el admin recibe un 500 sin camino alternativo: confirmar o
+ * cancelar una orden que contiene un producto borrado quedaba imposible.
+ */
+function esItemDesligado(item) {
+  return item.productId === null || item.productId === undefined;
+}
+
+/**
  * PATCH /api/ordenes/:id/estado — cambia el estado de una orden, protegido
  * con requireAuth. Validación manual contra los 5 valores válidos.
  *
@@ -497,14 +523,16 @@ export async function obtenerPorId(req, res, next) {
  * sobre el estado de origen. Decisión de diseño ya cerrada en el plan del
  * sprint — el admin es humano y puede necesitar corregir errores de carga.
  *
- * Descuento de stock: al entrar a CONFIRMADA viniendo de cualquier OTRO
- * estado, se descuenta `cantidad` del `stock` de cada producto de la orden
- * (transacción única con el cambio de estado). Solo pasa una vez por orden —
- * si ya estaba CONFIRMADA y se vuelve a guardar CONFIRMADA (no-op de estado),
- * o si se pasa a un tercer estado y luego de vuelta a CONFIRMADA, el stock NO
- * se descuenta de nuevo; ese caso de re-confirmación queda fuera de alcance
- * (decisión de producto: si hace falta corregir, se ajusta el stock a mano
- * desde el form del producto).
+ * Descuento de stock: al entrar a CONFIRMADA sin tener ya el stock tomado, se
+ * descuenta `cantidad` del `stock` de cada producto de la orden (transacción
+ * única con el cambio de estado). **Quien manda es `stockDescontado`, no el
+ * estado**: si ya estaba CONFIRMADA y se vuelve a guardar CONFIRMADA (no-op de
+ * estado), o si se pasó a EN_PREPARACION/ENTREGADA y de ahí de vuelta a
+ * CONFIRMADA, el stock NO se descuenta de nuevo; ese caso de re-confirmación
+ * queda fuera de alcance (decisión de producto: si hace falta corregir, se
+ * ajusta el stock a mano desde el form del producto). La ÚNICA re-confirmación
+ * que sí vuelve a descontar es la que viene después de una cancelación, porque
+ * esa devolvió las unidades y apagó el flag.
  *
  * Todo el descuento es a prueba de concurrencia, y eso pide dos cosas:
  *
@@ -568,15 +596,29 @@ export async function actualizarEstado(req, res, next) {
 
       if (estado === "CONFIRMADA") {
         // Escritura guardada: solo matchea si la orden todavía NO estaba
-        // CONFIRMADA. El `count` es el árbitro de la transición — dos PATCH
-        // concurrentes pueden releer PENDIENTE los dos, pero solo uno de los
-        // dos consigue `count: 1` y descuenta.
+        // CONFIRMADA **y no tiene el stock tomado**. El `count` es el árbitro
+        // de la transición — dos PATCH concurrentes pueden releer PENDIENTE los
+        // dos, pero solo uno de los dos consigue `count: 1` y descuenta.
+        //
+        // `stockDescontado: false` es la mitad que faltaba, y su ausencia era un
+        // descuento doble: una orden en EN_PREPARACION o ENTREGADA tiene el
+        // stock TOMADO y sin embargo cumple `estado != CONFIRMADA`, así que
+        // volver a guardarla como CONFIRMADA matcheaba, daba `count: 1` y le
+        // restaba las unidades al catálogo por segunda vez. Sin error y sin
+        // aviso: el faltante recién aparecía como un producto agotado que en el
+        // depósito estaba. Es la condición simétrica de la que la cancelación ya
+        // llevaba abajo, y de ella depende que el descuento ocurra EXACTAMENTE
+        // una vez.
+        //
+        // Cancelar apaga el flag, así que CANCELADA → CONFIRMADA sí vuelve a
+        // descontar. Eso es correcto: la cancelación ya había devuelto las
+        // unidades y la orden vuelve a necesitarlas.
         //
         // La misma escritura enciende `stockDescontado`: es lo que le permite
         // a la cancelación saber que esta orden tiene stock tomado, sin tener
         // que deducirlo del estado (ver el comentario de la columna).
         const transicion = await tx.orden.updateMany({
-          where: { id, estado: { not: "CONFIRMADA" } },
+          where: { id, estado: { not: "CONFIRMADA" }, stockDescontado: false },
           data: { estado, stockDescontado: true },
         });
         descontoStock = transicion.count === 1;
@@ -597,28 +639,38 @@ export async function actualizarEstado(req, res, next) {
 
       if (liberoStock) {
         for (const item of vigente.items) {
+          if (esItemDesligado(item)) continue;
+
           // `increment` sobre el valor vigente de la fila, no el proceso sobre
           // uno leído antes: bajo READ COMMITTED un leer-sumar-escribir pierde
           // lo que haya escrito otra transacción en el medio.
           //
-          // Sin guarda de tope: no hay un máximo de stock que respetar, y el
-          // producto puede haber sido borrado — `updateMany` sobre cero filas
-          // es un no-op, no un error, que es justo lo que se quiere acá.
-          await tx.product.updateMany({
+          // Sin guarda de tope: no hay un máximo de stock que respetar. Si la
+          // fila no está, `updateMany` devuelve `count: 0` y no pasa nada.
+          const { count } = await tx.product.updateMany({
             where: { id: item.productId },
             data: { stock: { increment: item.cantidad } },
           });
 
-          liberados.push({
-            productId: item.productId,
-            nombreProducto: item.nombreProducto,
-            cantidad: item.cantidad,
-          });
+          // Se anota SOLO lo que la base efectivamente devolvió. Empujar esto
+          // sin mirar el `count` hacía que el AuditLog declarara una devolución
+          // que nunca ocurrió — y ese registro es la única traza que existe de
+          // una devolución, así que una traza que informa algo que no pasó es
+          // peor que no tener ninguna.
+          if (count === 1) {
+            liberados.push({
+              productId: item.productId,
+              nombreProducto: item.nombreProducto,
+              cantidad: item.cantidad,
+            });
+          }
         }
       }
 
       if (descontoStock) {
         for (const item of vigente.items) {
+          if (esItemDesligado(item)) continue;
+
           const { count } = await tx.product.updateMany({
             where: { id: item.productId, stock: { gte: item.cantidad } },
             data: { stock: { decrement: item.cantidad } },

@@ -172,6 +172,37 @@ describe("POST /api/ordenes", () => {
     expect(res.body.items).toBeDefined();
   });
 
+  // Regresión de la fuga de costo por el checkout público. Este endpoint no
+  // tiene `requireAuth` —solo rate limit por IP— y devolvía la fila cruda de
+  // Prisma, así que cada 201 le entregaba al comprador anónimo el
+  // `costoUnitario` de cada línea, o sea el margen del negocio.
+  it("NO devuelve costoUnitario en los items del 201", async () => {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, costo: "40" }]);
+    ordenCreateMock.mockResolvedValue({
+      ...ORDEN,
+      items: [{ ...ORDEN.items[0], costoUnitario: "40" }],
+    });
+
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .send({
+        dni: "12345678",
+        nombre: "Juan Perez",
+        telefono: "1122334455",
+        email: "juan@gmail.com",
+        items: [{ productId: 1, cantidad: 1 }],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.items[0]).not.toHaveProperty("costoUnitario");
+    expect(JSON.stringify(res.body)).not.toContain("costoUnitario");
+    // El snapshot SÍ se sigue persistiendo: sin él, el margen de una venta
+    // pasada se calcularía contra el costo de hoy.
+    expect(ordenCreateMock.mock.calls[0][0].data.items.create[0].costoUnitario).toBe("40");
+  });
+
   it("responde 400 si falta el body requerido", async () => {
     const res = await request(buildApp()).post("/api/ordenes").send({});
     expect(res.status).toBe(400);
