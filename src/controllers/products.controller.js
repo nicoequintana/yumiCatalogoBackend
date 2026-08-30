@@ -368,6 +368,106 @@ async function obtenerRelacionados(producto, { esAdmin }) {
   return relacionados.map((producto) => mapProductoListado(producto));
 }
 
+/**
+ * GET /products/salud — estado del catálogo en conteos, para la pantalla
+ * "Salud del catálogo" del panel.
+ *
+ * **Contesta una pregunta distinta de la de analytics.** `/admin/ventas`,
+ * `/admin/embudo` y compañía miden RESULTADO: cuánto se vendió, cuánta gente
+ * convirtió. Eso necesita volumen para significar algo — con 264 vistas, una
+ * tasa de conversión por producto es ruido. Esto mide COMPLETITUD y
+ * EXPOSICIÓN: qué productos están incompletos y a cuáles no los está viendo
+ * nadie. Sirve desde el día uno, con el catálogo que haya.
+ *
+ * **Todos los conteos viajan siempre, también en cero.** Un cero es la
+ * respuesta ("no tenés productos sin fotos"), no la ausencia de respuesta.
+ * Omitir la clave obligaría a la pantalla a distinguir "cero" de "no vino",
+ * que es exactamente la ambigüedad que este endpoint elimina.
+ *
+ * **Son GLOBALES**: no los toca ningún filtro ni la paginación, igual que
+ * `resumen`. La pregunta es "cuánto catálogo tengo así", no "cuánto entró en
+ * esta tabla".
+ *
+ * Requiere auth: casi todos los conteos incluyen productos ocultos, que es
+ * precisamente lo que la vista pública no puede ver.
+ */
+export async function salud(req, res, next) {
+  try {
+    const publicado = { visibleEnCatalogo: true, stock: { gt: 0 } };
+
+    const [
+      total,
+      publicados,
+      ocultos,
+      agotados,
+      agotadosConVistas,
+      sinFotos,
+      publicadosSinFotos,
+      menosDeDosFotos,
+      sinCategoria,
+      sinCosto,
+      sinVistas,
+      publicadosSinVistas,
+      destacadosPublicados,
+    ] = await Promise.all([
+      prisma.product.count(),
+      // Publicado es visible Y con stock: el listado público excluye los
+      // agotados, así que "visible" solo no es lo que la tienda muestra.
+      prisma.product.count({ where: publicado }),
+      prisma.product.count({ where: { visibleEnCatalogo: false } }),
+      prisma.product.count({ where: { stock: { lte: 0 } } }),
+      // Agotado y con gente mirándolo: plata que se está yendo. Es el mismo
+      // criterio que `quiebresConDemanda` de `/admin/operacion`, acá como
+      // conteo para el tablero.
+      prisma.product.count({ where: { stock: { lte: 0 }, vistas: { gt: 0 } } }),
+      prisma.product.count({ where: { fotos: { none: {} } } }),
+      // El peor caso del catálogo: publicado y sin una sola foto. La ficha se
+      // le abre al cliente con la galería vacía.
+      prisma.product.count({ where: { ...publicado, fotos: { none: {} } } }),
+      // "Menos de dos fotos", derivado de que NO exista la foto en la posición
+      // 1. Se apoya en que `Foto.orden` es una secuencia compacta desde 0
+      // (invariante documentada en CLAUDE.md y sostenida por `MediaUploader`,
+      // que corre las siguientes hacia arriba al quitar una). Prisma no sabe
+      // filtrar por `_count` de una relación, así que la alternativa sería SQL
+      // crudo o traerse el catálogo entero.
+      //
+      // ⚠️ Si esa invariante se rompe, este número miente sin avisar. Importa
+      // porque `fotos[1]` es la imagen de "¿Qué problema resuelve?" de la
+      // ficha: con una sola foto, esa sección repite la portada.
+      prisma.product.count({ where: { fotos: { none: { orden: 1 } } } }),
+      prisma.product.count({ where: { categoriaId: null } }),
+      // Sin costo es faltando CUALQUIERA de los dos: sin uno no hay cálculo
+      // posible. Mismo criterio que `ESTADOS_PRECIO.SIN_COSTO`.
+      prisma.product.count({ where: { OR: [{ costo: null }, { coeficiente: null }] } }),
+      prisma.product.count({ where: { vistas: 0 } }),
+      // El que importa de los dos: un producto oculto sin vistas es esperable;
+      // uno PUBLICADO sin vistas está en la tienda y no lo ve nadie.
+      prisma.product.count({ where: { ...publicado, vistas: 0 } }),
+      // Mismo criterio que `resumen`: destacado no alcanza, tiene que estar
+      // publicado. Es lo que decide si el carrusel de la home aparece.
+      prisma.product.count({ where: { ...publicado, destacado: true } }),
+    ]);
+
+    res.json({
+      total,
+      publicados,
+      ocultos,
+      agotados,
+      agotadosConVistas,
+      sinFotos,
+      publicadosSinFotos,
+      menosDeDosFotos,
+      sinCategoria,
+      sinCosto,
+      sinVistas,
+      publicadosSinVistas,
+      destacadosPublicados,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function obtenerPorId(req, res, next) {
   try {
     const id = Number(req.params.id);
