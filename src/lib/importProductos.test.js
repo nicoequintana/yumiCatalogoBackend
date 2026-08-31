@@ -84,7 +84,7 @@ const CATEGORIAS = new Map([
 ]);
 
 function filaValida(extra = {}) {
-  return { nombre: "Vela de soja", descripcion: "Aroma lavanda", precio: 1500, ...extra };
+  return { nombre: "Vela de soja", descripcion: "Aroma lavanda", costo: 1500, ...extra };
 }
 
 describe("validarFila", () => {
@@ -95,7 +95,9 @@ describe("validarFila", () => {
     expect(datos).toEqual({
       nombre: "Vela de soja",
       descripcion: "Aroma lavanda",
-      precio: "1500",
+      costo: "1500",
+      // El neutro que aplica la planilla cuando la celda viene vacía.
+      coeficiente: "1",
       stock: 0,
       etiqueta: null,
       categoriaId: null,
@@ -128,7 +130,7 @@ describe("validarFila", () => {
   });
 
   it("rechaza nombre y descripción vacíos", () => {
-    const { errores } = validarFila({ nombre: "   ", descripcion: "", precio: 100 }, 3, CATEGORIAS);
+    const { errores } = validarFila({ nombre: "   ", descripcion: "", costo: 100 }, 3, CATEGORIAS);
 
     expect(errores).toEqual([
       { fila: 3, columna: "nombre", valor: "   ", motivo: "El nombre es obligatorio." },
@@ -137,44 +139,44 @@ describe("validarFila", () => {
   });
 
   it("acumula TODOS los errores de la fila, no corta en el primero", () => {
-    const { errores } = validarFila({ nombre: "", descripcion: "", precio: "abc" }, 5, CATEGORIAS);
+    const { errores } = validarFila({ nombre: "", descripcion: "", costo: "abc" }, 5, CATEGORIAS);
 
     expect(errores).toHaveLength(3);
-    expect(errores.map((e) => e.columna)).toEqual(["nombre", "descripcion", "precio"]);
+    expect(errores.map((e) => e.columna)).toEqual(["nombre", "descripcion", "costo"]);
   });
 
-  it("rechaza precio no numérico, cero, negativo o con centavos", () => {
+  it("rechaza costo no numérico, cero, negativo o con centavos", () => {
     // "1500,50" y "1500.50" son el MISMO caso: la coma se sigue interpretando
     // como separador decimal, pero solo para poder detectar los centavos y
     // rechazarlos. `Product.precio` es `Decimal(10, 0)`.
-    for (const precio of ["abc", 0, -5, "1500,50", "1500.50", 0.5]) {
-      const { errores } = validarFila(filaValida({ precio }), 4, CATEGORIAS);
+    for (const costo of ["abc", 0, -5, "1500,50", "1500.50", 0.5]) {
+      const { errores } = validarFila(filaValida({ costo }), 4, CATEGORIAS);
       expect(errores).toEqual([
         {
           fila: 4,
-          columna: "precio",
-          valor: precio,
-          motivo: "El precio debe ser un número entero mayor a 0, sin decimales.",
+          columna: "costo",
+          valor: costo,
+          motivo: "El costo debe ser un número entero mayor a 0, sin decimales.",
         },
       ]);
     }
   });
 
-  it("acepta el precio como texto con separador de miles ausente y lo normaliza a entero", () => {
-    const { datos, errores } = validarFila(filaValida({ precio: "1500" }), 2, CATEGORIAS);
+  it("acepta el costo como texto con separador de miles ausente y lo normaliza a entero", () => {
+    const { datos, errores } = validarFila(filaValida({ costo: "1500" }), 2, CATEGORIAS);
 
     expect(errores).toEqual([]);
-    expect(datos.precio).toBe("1500");
+    expect(datos.costo).toBe("1500");
   });
 
   // Excel guarda un 1500 tipeado en una celda con formato de moneda como
   // `1500` a secas, pero un archivo generado por otra herramienta puede traer
   // "1500,00". Los centavos en cero NO son centavos: se acepta y se normaliza.
   it("acepta decimales en cero y los normaliza sin cola", () => {
-    const { datos, errores } = validarFila(filaValida({ precio: "1500,00" }), 2, CATEGORIAS);
+    const { datos, errores } = validarFila(filaValida({ costo: "1500,00" }), 2, CATEGORIAS);
 
     expect(errores).toEqual([]);
-    expect(datos.precio).toBe("1500");
+    expect(datos.costo).toBe("1500");
   });
 
   it("rechaza stock negativo o no entero", () => {
@@ -240,7 +242,7 @@ async function construirXlsx(filas) {
 describe("leerArchivo", () => {
   it("lee las filas indexadas por nombre de columna", async () => {
     const buffer = await construirXlsx([
-      { nombre: "Vela", descripcion: "Lavanda", precio: 1500, stock: 3 },
+      { nombre: "Vela", descripcion: "Lavanda", costo: 1500, stock: 3 },
     ]);
 
     const filas = await leerArchivo(buffer);
@@ -248,14 +250,14 @@ describe("leerArchivo", () => {
     expect(filas).toHaveLength(1);
     expect(filas[0].numeroFila).toBe(2);
     expect(filas[0].valores.nombre).toBe("Vela");
-    expect(filas[0].valores.precio).toBe(1500);
+    expect(filas[0].valores.costo).toBe(1500);
     expect(filas[0].valores.stock).toBe(3);
   });
 
   it("numera las filas como se ven en Excel (encabezado = 1)", async () => {
     const buffer = await construirXlsx([
-      { nombre: "A", descripcion: "d", precio: 1 },
-      { nombre: "B", descripcion: "d", precio: 1 },
+      { nombre: "A", descripcion: "d", costo: 1 },
+      { nombre: "B", descripcion: "d", costo: 1 },
     ]);
 
     const filas = await leerArchivo(buffer);
@@ -265,9 +267,9 @@ describe("leerArchivo", () => {
 
   it("ignora filas totalmente vacías", async () => {
     const buffer = await construirXlsx([
-      { nombre: "A", descripcion: "d", precio: 1 },
+      { nombre: "A", descripcion: "d", costo: 1 },
       {},
-      { nombre: "B", descripcion: "d", precio: 1 },
+      { nombre: "B", descripcion: "d", costo: 1 },
     ]);
 
     const filas = await leerArchivo(buffer);
@@ -277,8 +279,8 @@ describe("leerArchivo", () => {
 
   it("descarta la fila de ejemplo de la plantilla (nombre con MARCA_EJEMPLO)", async () => {
     const buffer = await construirXlsx([
-      { nombre: `${MARCA_EJEMPLO} — Vela de soja lavanda`, descripcion: "d", precio: 1500 },
-      { nombre: "Producto real", descripcion: "d", precio: 1000 },
+      { nombre: `${MARCA_EJEMPLO} — Vela de soja lavanda`, descripcion: "d", costo: 1500 },
+      { nombre: "Producto real", descripcion: "d", costo: 1000 },
     ]);
 
     const filas = await leerArchivo(buffer);
@@ -311,20 +313,20 @@ describe("leerArchivo", () => {
   });
 
   it("sin el parámetro sigue usando COLUMNAS (default), como antes", async () => {
-    const buffer = await construirXlsx([{ nombre: "Vela", descripcion: "d", precio: 1 }]);
+    const buffer = await construirXlsx([{ nombre: "Vela", descripcion: "d", costo: 1 }]);
 
     const filas = await leerArchivo(buffer);
 
     expect(filas[0].valores.nombre).toBe("Vela");
-    expect(filas[0].valores.precio).toBe(1);
+    expect(filas[0].valores.costo).toBe(1);
   });
 });
 
 describe("procesarArchivo", () => {
   it("devuelve los productos listos cuando todas las filas son válidas", async () => {
     const buffer = await construirXlsx([
-      { nombre: "Vela", descripcion: "Lavanda", precio: 1500 },
-      { nombre: "Difusor", descripcion: "Cítrico", precio: 2000, categoria: "Velas" },
+      { nombre: "Vela", descripcion: "Lavanda", costo: 1500 },
+      { nombre: "Difusor", descripcion: "Cítrico", costo: 2000, categoria: "Velas" },
     ]);
 
     const { productos, errores } = await procesarArchivo(buffer, CATEGORIAS);
@@ -336,9 +338,9 @@ describe("procesarArchivo", () => {
 
   it("acumula errores de TODAS las filas malas y no devuelve productos", async () => {
     const buffer = await construirXlsx([
-      { nombre: "Vela", descripcion: "Lavanda", precio: 1500 },
-      { nombre: "", descripcion: "x", precio: 1 },
-      { nombre: "Difusor", descripcion: "x", precio: "abc" },
+      { nombre: "Vela", descripcion: "Lavanda", costo: 1500 },
+      { nombre: "", descripcion: "x", costo: 1 },
+      { nombre: "Difusor", descripcion: "x", costo: "abc" },
     ]);
 
     const { productos, errores } = await procesarArchivo(buffer, CATEGORIAS);
@@ -360,7 +362,7 @@ describe("procesarArchivo", () => {
     const muchas = Array.from({ length: MAX_FILAS + 1 }, (_, i) => ({
       nombre: `P${i}`,
       descripcion: "d",
-      precio: 1,
+      costo: 1,
     }));
     const buffer = await construirXlsx(muchas);
 
@@ -377,7 +379,7 @@ describe("procesarArchivo", () => {
     const muchas = Array.from({ length: MAX_FILAS + 25 }, (_, i) => ({
       nombre: `P${i}`,
       descripcion: "d",
-      precio: 1,
+      costo: 1,
     }));
     const buffer = await construirXlsx(muchas);
 
@@ -397,7 +399,7 @@ async function construirXlsxActualizacion(filas) {
 }
 
 function filaActualizacionValida(extra = {}) {
-  return { sku: "VEL-1", nombre: "Vela de soja", precio: 1500, stock: 7, ...extra };
+  return { sku: "VEL-1", nombre: "Vela de soja", costo: 1500, stock: 7, ...extra };
 }
 
 describe("validarFilaActualizacion", () => {
@@ -408,7 +410,7 @@ describe("validarFilaActualizacion", () => {
 
   it("mapea una fila válida y resuelve el id por sku", () => {
     const { datos, id, errores } = validarFilaActualizacion(
-      filaActualizacionValida({ sku: "VEL-2", nombre: "Vela renovada", precio: 1800, stock: 12 }),
+      filaActualizacionValida({ sku: "VEL-2", nombre: "Vela renovada", costo: 1800, stock: 12 }),
       2,
       IDS_POR_SKU,
     );
@@ -418,7 +420,7 @@ describe("validarFilaActualizacion", () => {
     // EXACTAMENTE tres campos, no `objectContaining`: que no aparezca ninguno
     // más es el contrato de este flujo. Un campo de más acá termina en
     // `dataDeActualizacion` pisando dato que la planilla nunca trajo.
-    expect(datos).toEqual({ nombre: "Vela renovada", precio: "1800", stock: 12 });
+    expect(datos).toEqual({ nombre: "Vela renovada", costo: "1800", coeficiente: "1", stock: 12 });
   });
 
   // La rama de alta por sku vacío se eliminó el 25/08/2026: la planilla dejó
@@ -459,7 +461,7 @@ describe("validarFilaActualizacion", () => {
 
   it("aplica las reglas de campo y acumula todos los errores de la fila", () => {
     const { datos, errores } = validarFilaActualizacion(
-      filaActualizacionValida({ nombre: "", precio: "abc" }),
+      filaActualizacionValida({ nombre: "", costo: "abc" }),
       3,
       IDS_POR_SKU,
     );
@@ -469,9 +471,9 @@ describe("validarFilaActualizacion", () => {
       { fila: 3, columna: "nombre", valor: "", motivo: "El nombre es obligatorio." },
       {
         fila: 3,
-        columna: "precio",
+        columna: "costo",
         valor: "abc",
-        motivo: "El precio debe ser un número entero mayor a 0, sin decimales.",
+        motivo: "El costo debe ser un número entero mayor a 0, sin decimales.",
       },
     ]);
   });
@@ -523,14 +525,14 @@ describe("validarFilaActualizacion", () => {
     );
 
     expect(errores).toEqual([]);
-    expect(datos).toEqual({ nombre: "Vela de soja", precio: "1500", stock: 7 });
+    expect(datos).toEqual({ nombre: "Vela de soja", costo: "1500", coeficiente: "1", stock: 7 });
   });
 });
 
 describe("procesarArchivoActualizacion", () => {
   it("devuelve una operacion por fila, con el id resuelto", async () => {
     const buffer = await construirXlsxActualizacion([
-      { sku: "VEL-1", nombre: "Vela renovada", precio: 1800, stock: 9 },
+      { sku: "VEL-1", nombre: "Vela renovada", costo: 1800, stock: 9 },
     ]);
     const idsPorSku = new Map([["VEL-1", 101]]);
 
@@ -538,14 +540,14 @@ describe("procesarArchivoActualizacion", () => {
 
     expect(errores).toEqual([]);
     expect(operaciones).toEqual([
-      { id: 101, datos: { nombre: "Vela renovada", precio: "1800", stock: 9 } },
+      { id: 101, datos: { nombre: "Vela renovada", costo: "1800", coeficiente: "1", stock: 9 } },
     ]);
   });
 
   it("todo o nada: una fila con sku inexistente (typo) invalida el archivo entero", async () => {
     const buffer = await construirXlsxActualizacion([
-      { sku: "VEL-1", nombre: "Vela", precio: 1500, stock: 1 },
-      { sku: "NOEXISTE", nombre: "Difusor", precio: 2000, stock: 1 },
+      { sku: "VEL-1", nombre: "Vela", costo: 1500, stock: 1 },
+      { sku: "NOEXISTE", nombre: "Difusor", costo: 2000, stock: 1 },
     ]);
     const idsPorSku = new Map([["VEL-1", 101]]);
 
@@ -559,8 +561,8 @@ describe("procesarArchivoActualizacion", () => {
 
   it("todo o nada: una fila sin sku también invalida el archivo entero", async () => {
     const buffer = await construirXlsxActualizacion([
-      { sku: "VEL-1", nombre: "Vela", precio: 1500, stock: 1 },
-      { sku: "", nombre: "Producto nuevo", precio: 500, stock: 1 },
+      { sku: "VEL-1", nombre: "Vela", costo: 1500, stock: 1 },
+      { sku: "", nombre: "Producto nuevo", costo: 500, stock: 1 },
     ]);
 
     const { operaciones, errores } = await procesarArchivoActualizacion(buffer, new Map([["VEL-1", 101]]));
@@ -574,7 +576,7 @@ describe("procesarArchivoActualizacion", () => {
     const muchas = Array.from({ length: MAX_FILAS_ACTUALIZACION + 1 }, (_, i) => ({
       sku: `SKU-${i}`,
       nombre: `P${i}`,
-      precio: 1,
+      costo: 1,
       stock: 0,
     }));
     const buffer = await construirXlsxActualizacion(muchas);
@@ -582,5 +584,135 @@ describe("procesarArchivoActualizacion", () => {
     await expect(procesarArchivoActualizacion(buffer, new Map())).rejects.toThrow(
       `El archivo tiene más de ${MAX_FILAS_ACTUALIZACION} filas. Dividilo en varios archivos.`,
     );
+  });
+});
+
+/**
+ * Desde el 31/08/2026 la planilla NO trae costo: trae `costo` y `coeficiente`,
+ * y el precio se deriva de ellos igual que en el alta por formulario.
+ *
+ * Las reglas del costo son las que tenía el precio —entero, mayor a 0, decimales
+ * RECHAZADOS y no redondeados—, porque son la misma regla aplicada al campo que
+ * ahora recibe ese número. El coeficiente es el único con decimales del sistema
+ * y tiene reglas propias.
+ */
+describe("planilla — costo y coeficiente reemplazan al precio", () => {
+  it("las columnas del alta declaran costo y coeficiente, no precio", () => {
+    expect(COLUMNAS).toContain("costo");
+    expect(COLUMNAS).toContain("coeficiente");
+    expect(COLUMNAS).not.toContain("precio");
+  });
+
+  it("las columnas de la actualización masiva también", () => {
+    expect(COLUMNAS_ACTUALIZACION).toEqual(["sku", "nombre", "costo", "coeficiente", "stock"]);
+  });
+
+  it("acepta un costo entero y el coeficiente que lo acompaña", () => {
+    const { datos, errores } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", costo: 3075, coeficiente: 2.05 },
+      2,
+      new Map(),
+    );
+
+    expect(errores).toEqual([]);
+    expect(datos.costo).toBe("3075");
+    expect(datos.coeficiente).toBe("2.05");
+  });
+
+  it("una celda de coeficiente vacía cae al neutro, no es un error", () => {
+    // Mismo criterio que el alta por API: el costo nadie lo puede inventar, el
+    // coeficiente sí tiene un valor correcto por defecto.
+    const { datos, errores } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", costo: 3075, coeficiente: "" },
+      2,
+      new Map(),
+    );
+
+    expect(errores).toEqual([]);
+    expect(datos.coeficiente).toBe("1");
+  });
+
+  it("una fila sin costo es un error, y el archivo entero se rechaza", () => {
+    const { datos, errores } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", coeficiente: 2.05 },
+      2,
+      new Map(),
+    );
+
+    expect(datos).toBeNull();
+    expect(errores[0].columna).toBe("costo");
+  });
+
+  it("rechaza un costo con centavos en vez de redondearlo", () => {
+    // Redondear le cambiaría el costo a un producto sin que la planilla ni el
+    // informe lo mencionen, y de ahí saldría un precio de venta que nadie pidió.
+    const { errores } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", costo: "1500,60", coeficiente: 2 },
+      2,
+      new Map(),
+    );
+
+    expect(errores.some((e) => e.columna === "costo")).toBe(true);
+  });
+
+  it("acepta la coma como separador decimal del coeficiente", () => {
+    const { datos } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", costo: 1000, coeficiente: "2,05" },
+      2,
+      new Map(),
+    );
+
+    expect(datos.coeficiente).toBe("2.05");
+  });
+
+  it("rechaza un coeficiente con más de dos decimales", () => {
+    // La columna es `Decimal(5, 2)`: un tercer decimal se redondearía en
+    // silencio y el precio dejaría de coincidir con el que el panel muestra.
+    const { errores } = validarFila(
+      { nombre: "Termo", descripcion: "Un termo", costo: 1000, coeficiente: "2.055" },
+      2,
+      new Map(),
+    );
+
+    expect(errores.some((e) => e.columna === "coeficiente")).toBe(true);
+  });
+
+  it("rechaza un coeficiente fuera de rango", () => {
+    for (const valor of ["0", "-2", "1000"]) {
+      const { errores } = validarFila(
+        { nombre: "Termo", descripcion: "Un termo", costo: 1000, coeficiente: valor },
+        2,
+        new Map(),
+      );
+      expect(errores.some((e) => e.columna === "coeficiente")).toBe(true);
+    }
+  });
+});
+
+describe("validarFilaActualizacion — costo y coeficiente", () => {
+  it("devuelve costo y coeficiente, nunca precio", () => {
+    const { datos, errores } = validarFilaActualizacion(
+      { sku: "YIMA-TER-1", nombre: "Termo", costo: 3075, coeficiente: 2.05, stock: 4 },
+      2,
+      new Map([["YIMA-TER-1", 101]]),
+    );
+
+    expect(errores).toEqual([]);
+    expect(datos).toEqual({ nombre: "Termo", costo: "3075", coeficiente: "2.05", stock: 4 });
+    expect(datos).not.toHaveProperty("precio");
+  });
+
+  it("exige el costo: una celda en blanco al actualizar no significa 'dejalo como está'", () => {
+    // Mismo criterio que ya tenía `stock` en este flujo: la planilla se exporta
+    // completa, así que una celda vacía es un borrado accidental, no una
+    // omisión deliberada.
+    const { datos, errores } = validarFilaActualizacion(
+      { sku: "YIMA-TER-1", nombre: "Termo", coeficiente: 2.05, stock: 4 },
+      2,
+      new Map([["YIMA-TER-1", 101]]),
+    );
+
+    expect(datos).toBeNull();
+    expect(errores[0].columna).toBe("costo");
   });
 });

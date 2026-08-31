@@ -16,7 +16,9 @@ const ULTIMA_FILA = MAX_FILAS + 1;
 const FILA_EJEMPLO = {
   nombre: `${MARCA_EJEMPLO} — Vela de soja lavanda`,
   descripcion: "Vela artesanal de cera de soja con aroma a lavanda.",
-  precio: 1500,
+  costo: 1500,
+  // El precio de venta sale de `costo × coeficiente`: 1500 × 2,05 = 3.075.
+  coeficiente: 2.05,
   stock: 10,
   fraseComercial: "Relajá tu casa en 30 segundos.",
   caracteristicas: "Cera de soja 100%\nMecha de algodón",
@@ -104,18 +106,33 @@ export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNA
   };
 
   for (let fila = 2; fila <= ultimaFila; fila++) {
-    // `whole` y no `decimal`: la columna `Product.precio` es `Decimal(10, 0)`,
-    // así que un precio con centavos lo rechaza `normalizarPrecio`
+    // `whole` y no `decimal`: la columna `Product.costo` es `Decimal(10, 0)`,
+    // así que un costo con centavos lo rechaza `normalizarCosto`
     // (`lib/importProductos.js`) recién al importar. Que Excel lo frene al
     // tipearlo le ahorra al admin descubrirlo con el archivo entero cargado.
-    validar(fila, "precio", {
+    validar(fila, "costo", {
       type: "whole",
       operator: "greaterThan",
       formulae: [0],
       allowBlank: true,
       showErrorMessage: true,
-      errorTitle: "Precio inválido",
-      error: "El precio tiene que ser un número entero mayor a 0, sin decimales.",
+      errorTitle: "Costo inválido",
+      error: "El costo tiene que ser un número entero mayor a 0, sin decimales.",
+    });
+
+    // `decimal` acá SÍ, al revés que el costo: el coeficiente es el único campo
+    // con decimales del sistema (`Decimal(5, 2)`). Excel no sabe acotar la
+    // CANTIDAD de decimales, así que un 2,055 lo frena `normalizarCoeficiente`
+    // al importar; lo que esta validación cubre es el rango.
+    validar(fila, "coeficiente", {
+      type: "decimal",
+      operator: "between",
+      formulae: [0.01, 999.99],
+      allowBlank: true,
+      showErrorMessage: true,
+      errorTitle: "Coeficiente inválido",
+      error:
+        "El coeficiente multiplica al costo (2,05 = ×2,05). Tiene que estar entre 0,01 y 999,99. Vacío = 1.",
     });
 
     validar(fila, "stock", {

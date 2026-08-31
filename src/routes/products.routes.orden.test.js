@@ -76,6 +76,14 @@ describe("GET /api/products - ?orden=", () => {
     "fotos-desc": [{ fotos: { _count: "desc" } }, { id: "asc" }],
     recientes: [{ createdAt: "desc" }, { id: "desc" }],
     vistas: [{ vistas: "desc" }, { id: "asc" }],
+    // Los dos criterios de la pantalla de Costos y precios. Sus columnas son
+    // NULLABLE, a diferencia de todas las de arriba: un producto sin costo
+    // cargado ordena igual, agrupado en un extremo según cómo ubique los NULL
+    // el connector.
+    "costo-asc": [{ costo: "asc" }, { id: "asc" }],
+    "costo-desc": [{ costo: "desc" }, { id: "asc" }],
+    "coeficiente-asc": [{ coeficiente: "asc" }, { id: "asc" }],
+    "coeficiente-desc": [{ coeficiente: "desc" }, { id: "asc" }],
   };
 
   for (const [valor, orderBy] of Object.entries(esperados)) {

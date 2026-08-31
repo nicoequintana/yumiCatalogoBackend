@@ -101,7 +101,8 @@ function post(fields) {
     .set("Authorization", authHeader)
     .field("nombre", "Bruma Facial")
     .field("descripcion", "Descripción de prueba")
-    .field("precio", "100");
+    .field("precio", "100")
+      .field("costo", "100");
   for (const [key, value] of Object.entries(fields)) {
     req = req.field(key, value);
   }
@@ -203,6 +204,7 @@ describe("PUT /api/products/:id reemplaza listas y especificaciones (full replac
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
       .field("precio", "100")
+      .field("costo", "100")
       .field("beneficios", JSON.stringify([{ texto: "Nuevo beneficio" }]));
 
     expect(res.status).toBe(200);

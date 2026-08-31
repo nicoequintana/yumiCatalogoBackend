@@ -56,59 +56,42 @@ describe("parseEspecificaciones", () => {
   });
 });
 
-describe("validarCamposBase — precio", () => {
-  // Mismo criterio que `normalizarPrecio` del importador de planillas
-  // (`lib/importProductos.js`): entero, finito y mayor a 0. Antes el formulario
-  // era más laxo que el `.xlsx`: un precio negativo entraba a la base (y de ahí
-  // a los snapshots de `ItemOrden` de futuras órdenes), y `"Infinity"` pasaba
-  // el chequeo de NaN y reventaba contra el `Decimal` de Prisma con un 500.
+describe("validarCamposBase — el precio salió de acá", () => {
+  // `precio` dejó de ser una entrada del contrato el 31/08/2026: el precio de
+  // venta se deriva de `costo × coeficiente` y no se tipea en ninguna pantalla.
+  //
+  // Las reglas que este bloque fijaba —entero, finito, mayor a 0, y los
+  // decimales en cero aceptados porque lo que se rechaza son los centavos y no
+  // la notación— NO desaparecieron: se mudaron al COSTO, que es el campo que
+  // ahora recibe ese número. Viven en `products.input.test.js`, sobre
+  // `validarCostoYCoeficiente`.
   const base = { nombre: "Vela", descripcion: "Aromática" };
 
-  it("acepta un precio entero positivo (número o string multipart)", () => {
-    expect(() => validarCamposBase({ ...base, precio: "1500" }, { esCreacion: true })).not.toThrow();
-    expect(() => validarCamposBase({ ...base, precio: 100 }, { esCreacion: true })).not.toThrow();
-    // Un entero escrito con decimales en cero sigue siendo entero: lo que se
-    // rechaza son los centavos, no la notación.
-    expect(() => validarCamposBase({ ...base, precio: "1500.00" }, { esCreacion: true })).not.toThrow();
+  it("ignora por completo un precio que venga en el body", () => {
+    // No es un 400 a propósito: el campo dejó de existir, así que un cliente
+    // viejo que todavía lo mande tiene que seguir funcionando. Lo que decide el
+    // precio es el costo, y de eso se ocupa el controller.
+    expect(() =>
+      validarCamposBase({ ...base, precio: "-50" }, { esCreacion: true }),
+    ).not.toThrow();
+    expect(() =>
+      validarCamposBase({ ...base, precio: "1500.60" }, { esCreacion: true }),
+    ).not.toThrow();
+    expect(() =>
+      validarCamposBase({ ...base, precio: "Infinity" }, { esCreacion: true }),
+    ).not.toThrow();
   });
 
-  // La columna es `Decimal(10, 0)`: si esto pasara, SQL Server guardaría 1501
-  // sin avisar y el admin vería un precio que no cargó. El 400 es lo único que
-  // convierte esa corrección silenciosa en algo que se puede ver y corregir.
-  it("rechaza un precio con centavos con 400", () => {
-    expect(() => validarCamposBase({ ...base, precio: "1500.60" }, { esCreacion: true })).toThrow(
+  it("sigue exigiendo nombre y descripción en el alta", () => {
+    expect(() => validarCamposBase({ descripcion: "Aromática" }, { esCreacion: true })).toThrow(
       expect.objectContaining({ status: 400 }),
     );
-    expect(() => validarCamposBase({ ...base, precio: 0.5 }, { esCreacion: true })).toThrow(
-      expect.objectContaining({ status: 400 }),
-    );
-  });
-
-  it("rechaza un precio negativo con 400", () => {
-    expect(() => validarCamposBase({ ...base, precio: "-50" }, { esCreacion: true })).toThrow(
-      expect.objectContaining({ status: 400 }),
-    );
-  });
-
-  it('rechaza "Infinity" con 400 (no es NaN, pero no es un precio)', () => {
-    expect(() => validarCamposBase({ ...base, precio: "Infinity" }, { esCreacion: true })).toThrow(
+    expect(() => validarCamposBase({ nombre: "Vela" }, { esCreacion: true })).toThrow(
       expect.objectContaining({ status: 400 }),
     );
   });
 
-  it("rechaza 0 con 400, igual que el importador (> 0 estricto)", () => {
-    expect(() => validarCamposBase({ ...base, precio: "0" }, { esCreacion: true })).toThrow(
-      expect.objectContaining({ status: 400 }),
-    );
-  });
-
-  it("rechaza un precio no numérico con 400", () => {
-    expect(() => validarCamposBase({ ...base, precio: "abc" }, { esCreacion: true })).toThrow(
-      expect.objectContaining({ status: 400 }),
-    );
-  });
-
-  it("en actualización, omitir el precio no valida nada", () => {
-    expect(() => validarCamposBase({ ...base, precio: undefined }, { esCreacion: false })).not.toThrow();
+  it("en actualización, omitir un campo no valida nada", () => {
+    expect(() => validarCamposBase({}, { esCreacion: false })).not.toThrow();
   });
 });

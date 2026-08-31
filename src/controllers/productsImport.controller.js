@@ -10,6 +10,7 @@
 import { prisma } from "../lib/prisma.js";
 import { generarSkusUnicos } from "../lib/sku.js";
 import { procesarArchivo, procesarArchivoActualizacion } from "../lib/importProductos.js";
+import { calcularPrecio } from "../lib/precios.js";
 import { generarPlantilla } from "../lib/plantillaProductos.js";
 import { generarExportacion } from "../lib/exportarProductos.js";
 import { logAudit } from "../lib/logAudit.js";
@@ -126,7 +127,7 @@ export async function exportar(_req, res, next) {
     // comercial, listas ni especificaciones, así que traerlas de la base era
     // pagar los joins de todo el catálogo para descartarlas.
     const productos = await prisma.product.findMany({
-      select: { sku: true, nombre: true, precio: true, stock: true },
+      select: { sku: true, nombre: true, costo: true, coeficiente: true, stock: true },
       orderBy: { id: "asc" },
     });
 
@@ -149,7 +150,11 @@ function dataDeAlta(datos, sku) {
   return {
     nombre: datos.nombre,
     descripcion: datos.descripcion,
-    precio: datos.precio,
+    // El alta por planilla deriva el precio igual que el alta por formulario:
+    // `costo × coeficiente`, redondeado al peso. La planilla ya no trae precio.
+    precio: String(calcularPrecio(datos.costo, datos.coeficiente)),
+    costo: datos.costo,
+    coeficiente: datos.coeficiente,
     etiqueta: datos.etiqueta,
     categoriaId: datos.categoriaId,
     sku,
@@ -174,7 +179,7 @@ function dataDeAlta(datos, sku) {
 /**
  * Arma el `data` de actualización de un producto existente.
  *
- * **Solo `nombre`, `precio` y `stock`.** Es EXACTAMENTE lo que viaja en el
+ * **Solo `nombre`, `costo`, `coeficiente` y `stock`.** Es EXACTAMENTE lo que viaja en el
  * `.xlsx` (`COLUMNAS_ACTUALIZACION` en `lib/importProductos.js`), y esa
  * correspondencia es la garantía central de este flujo: lo que el archivo no
  * trae, la actualización no toca.
@@ -196,7 +201,12 @@ function dataDeAlta(datos, sku) {
 function dataDeActualizacion(datos) {
   return {
     nombre: datos.nombre,
-    precio: datos.precio,
+    // `precio` NO va acá, y no es un olvido: desde el 31/08/2026 se deriva del
+    // costo, y el único que lo publica es `aplicarPreciosMasivo`. Una subida de
+    // planilla deja los productos en `Difiere` hasta que alguien aplique — que
+    // es exactamente la revisión que un cambio de precios masivo más necesita.
+    costo: datos.costo,
+    coeficiente: datos.coeficiente,
     stock: datos.stock,
   };
 }
@@ -205,7 +215,7 @@ function dataDeActualizacion(datos) {
  * `POST /api/products/actualizar-masivo` — sube el mismo `.xlsx` que exporta
  * `GET /products/export` y actualiza los productos matcheados por `sku`.
  *
- * Cuatro columnas: `sku`, `nombre`, `precio`, `stock`. Solo esos tres últimos
+ * Cinco columnas: `sku`, `nombre`, `costo`, `coeficiente`, `stock`. Solo esos cuatro últimos
  * campos se escriben. **Todo lo demás del producto queda intacto** —
  * descripción, categoría, etiqueta, contenido comercial, características,
  * listas, especificaciones, `sku`, `visibleEnCatalogo`, `destacado`, `orden`,
@@ -230,13 +240,22 @@ export async function actualizarMasivo(req, res, next) {
     // Sin la consulta de categorías: la planilla ya no tiene esa columna, así
     // que no hay nada que resolver contra ella.
     const productosExistentes = await prisma.product.findMany({
-      select: { id: true, sku: true, precio: true, stock: true },
+      select: { id: true, sku: true, costo: true, coeficiente: true, stock: true },
     });
     const idsPorSku = new Map(productosExistentes.map((p) => [p.sku, p.id]));
-    // Snapshot previo, para que la auditoría pueda mostrar precio/stock
-    // antes -> después de cada producto tocado.
+    // Snapshot previo para la auditoría. `precio` salió de acá junto con el
+    // resto: esta operación ya no lo escribe, así que registrarlo sugeriría un
+    // cambio que no ocurrió. Los históricos pueden tener las dos columnas de
+    // costeo en `null`, de ahí el `?.`.
     const antesPorId = new Map(
-      productosExistentes.map((p) => [p.id, { precio: p.precio.toString(), stock: p.stock }]),
+      productosExistentes.map((p) => [
+        p.id,
+        {
+          costo: p.costo?.toString() ?? null,
+          coeficiente: p.coeficiente?.toString() ?? null,
+          stock: p.stock,
+        },
+      ]),
     );
 
     let procesado;
@@ -276,7 +295,11 @@ export async function actualizarMasivo(req, res, next) {
         entidad: "Producto",
         entidadId: resultado.id,
         detalle: {
-          precio: { antes: antes?.precio ?? null, despues: resultado.precio.toString() },
+          costo: { antes: antes?.costo ?? null, despues: resultado.costo?.toString() ?? null },
+          coeficiente: {
+            antes: antes?.coeficiente ?? null,
+            despues: resultado.coeficiente?.toString() ?? null,
+          },
           stock: { antes: antes?.stock ?? null, despues: resultado.stock },
         },
       });

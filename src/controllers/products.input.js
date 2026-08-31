@@ -116,7 +116,16 @@ export function validarOrdenFotos(ordenFotos, { idsConservados, cantidadNuevas }
   }
 }
 
-export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion }) {
+/**
+ * Valida nombre y descripción.
+ *
+ * **`precio` ya NO entra acá.** Desde el 31/08/2026 el precio de venta no se
+ * tipea en ninguna pantalla: sale de `costo × coeficiente`. El alta lo calcula y
+ * lo escribe; la edición ni siquiera lo toca, para que cambiar un costo deje el
+ * producto en `Difiere` hasta que alguien lo aplique desde Costos y precios.
+ * Ver `validarCostoYCoeficiente`, que es donde vive ahora la validación de plata.
+ */
+export function validarCamposBase({ nombre, descripcion }, { esCreacion }) {
   if (esCreacion || nombre !== undefined) {
     if (typeof nombre !== "string" || nombre.trim() === "") {
       throw httpError(400, "El nombre del producto es obligatorio.");
@@ -127,26 +136,39 @@ export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion 
       throw httpError(400, "La descripción del producto es obligatoria.");
     }
   }
-  if (esCreacion || precio !== undefined) {
-    // Mismo criterio que `normalizarPrecio` en `lib/importProductos.js`:
-    // entero, finito y mayor a 0. El chequeo viejo (`!Number.isNaN`) dejaba
-    // entrar precios negativos a la base (y de ahí a los snapshots de
-    // `ItemOrden` de futuras órdenes) y aceptaba `"Infinity"`, que no es NaN
-    // pero revienta contra el `Decimal` de Prisma con un 500.
-    //
-    // El decimal se RECHAZA, no se redondea. La columna es `Decimal(10, 0)`:
-    // si esto dejara pasar `1500.60`, SQL Server lo guardaría como `1501`
-    // sin avisarle a nadie, y el admin vería en el listado un precio que no
-    // es el que cargó. Un 400 que nombra el problema es mejor que una
-    // corrección silenciosa de la plata.
-    const numero = Number(precio);
-    if (precio === undefined || precio === null || precio === "" || !Number.isFinite(numero) || numero <= 0) {
-      throw httpError(400, "El precio del producto debe ser un número mayor a 0.");
-    }
-    if (!Number.isInteger(numero)) {
-      throw httpError(400, "El precio del producto debe ser un número entero, sin decimales.");
-    }
-  }
+}
+
+/**
+ * Coeficiente con el que entra un producto cuando nadie declara otro.
+ *
+ * **Es 1, el neutro: `costo × 1 = costo`.** Un producto sin margen elegido entra
+ * valuado a lo que costó, que es el mínimo que no da pérdida — nunca a un precio
+ * inventado por un default arbitrario.
+ *
+ * ⚠️ **El costo de esa elección: un producto recién cargado figura `AL_DIA` en la
+ * pantalla de precios sin tener precio real**, porque el publicado coincide con
+ * el calculado. Es correcto según la definición del estado y es engañoso igual.
+ * Lo que delata a un producto pendiente es el coeficiente en 1, no el estado; de
+ * ahí el chip "Sin precio real" de `AdminPrecios.jsx`.
+ */
+export const COEFICIENTE_POR_DEFECTO = "1";
+
+/**
+ * El coeficiente recibido, o el neutro si no vino ninguno.
+ *
+ * **Cubre las tres formas de "no vino": ausente, nulo y cadena vacía.** Las tres
+ * llegan en la práctica —un `<input>` sin tocar manda `""`, una celda de Excel
+ * en blanco manda `null`, un cliente viejo no manda el campo— y tratarlas
+ * distinto haría que el alta funcione o falle según de dónde vino, que es
+ * exactamente el tipo de diferencia que nadie relaciona con la causa.
+ *
+ * El COSTO no tiene equivalente y no debe tenerlo: es un dato del negocio que
+ * nadie puede inventar, así que su ausencia es un 400 y no un default.
+ */
+export function coeficienteODefecto(valor) {
+  if (valor === undefined || valor === null) return COEFICIENTE_POR_DEFECTO;
+  if (typeof valor === "string" && valor.trim() === "") return COEFICIENTE_POR_DEFECTO;
+  return valor;
 }
 
 /**
@@ -160,8 +182,48 @@ export function validarCamposBase({ nombre, descripcion, precio }, { esCreacion 
  *
  * La rama de `null` no es un detalle: sin ella, un costo cargado por error
  * quedaría pegado al producto para siempre.
+ *
+ * El `modo` restringe cuáles de esas tres formas se aceptan, y los tres son
+ * distintos a propósito:
+ *
+ *   `"libre"` (default) → las tres. Lo usa `aplicarPreciosMasivo`, donde el
+ *      coeficiente del lote es opcional: omitirlo significa "usá el de cada
+ *      producto". Cablear ahí un requisito rompería ese endpoint sin que nada lo
+ *      relacione con este cambio.
+ *   `"alta"`   → el costo TIENE que venir con valor. Sin él no hay precio
+ *      posible, y la columna `precio` es NOT NULL.
+ *   `"edicion"` → omitir un campo está bien (el `PUT` es parcial: un request que
+ *      solo reordena fotos no tiene por qué hablar de plata), pero VACIARLO no.
+ *
+ * Esa última distinción es la que hace usable la edición. Con el costo exigido
+ * de forma incondicional, un `PUT` que solo cambia una foto fallaría por un
+ * campo que no menciona — y un producto histórico sin costo cargado quedaría
+ * imposible de editar hasta para corregirle una falta de ortografía. Lo que hay
+ * que impedir es que alguien BORRE el costo de un producto, no que lo omita.
+ *
+ * El COEFICIENTE no se exige en ningún modo: tiene un neutro correcto y el
+ * llamador lo aplica con `coeficienteODefecto`.
  */
-export function validarCostoYCoeficiente({ costo, coeficiente }) {
+export function validarCostoYCoeficiente({ costo, coeficiente }, { modo = "libre" } = {}) {
+  // Se chequea ANTES de normalizar para distinguir "ausente" de "vacío": son la
+  // misma cosa para el resto de la función, y acá son justamente lo que hay que
+  // separar.
+  const ausente = (valor) => valor === undefined;
+  const vaciado = (valor) =>
+    valor === null || (typeof valor === "string" && valor.trim() === "");
+
+  if (modo === "alta" && (ausente(costo) || vaciado(costo))) {
+    throw httpError(400, "El costo del producto es obligatorio.");
+  }
+  if (modo === "edicion") {
+    if (vaciado(costo)) {
+      throw httpError(400, "El costo del producto no se puede borrar.");
+    }
+    if (vaciado(coeficiente)) {
+      throw httpError(400, "El coeficiente del producto no se puede borrar.");
+    }
+  }
+
   let costoNormalizado;
   if (costo !== undefined) {
     const crudo = typeof costo === "string" ? costo.trim() : costo;

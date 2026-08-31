@@ -288,13 +288,30 @@ describe("PATCH /api/products/:id/costeo", () => {
     expect(res.body.estadoPrecio).toBe("DIFIERE");
   });
 
-  it("un valor vacío borra la columna", async () => {
+  /**
+   * Hasta el 31/08/2026 un valor vacío BORRABA la columna, y era correcto: el
+   * costo era opcional y un dato cargado por error tenía que poder sacarse.
+   *
+   * Desde que el precio de venta se deriva de `costo × coeficiente`, borrarlo
+   * deja al producto sin forma de recalcular su propio precio — el catálogo
+   * seguiría mostrando el último número aplicado, ya sin nada que lo explique.
+   * Por eso ahora es un 400. Omitir el campo sigue permitido: esta pantalla
+   * guarda celda por celda y manda uno solo de los dos por vez.
+   */
+  it("rechaza vaciar la columna, pero sigue aceptando que se omita", async () => {
     const { prisma } = await import("../lib/prisma.js");
     prisma.product.findUnique = findUniqueMock;
 
-    await conAuth(request(buildApp()).patch("/api/products/5/costeo").send({ costo: "" }));
+    const res = await conAuth(
+      request(buildApp()).patch("/api/products/5/costeo").send({ costo: "" }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/costo.*no se puede borrar/i);
 
-    expect(updateMock.mock.calls.at(-1)[0].data.costo).toBeNull();
+    // Solo el coeficiente: el costo no viaja y su columna queda intacta.
+    updateMock.mockClear();
+    await conAuth(request(buildApp()).patch("/api/products/5/costeo").send({ coeficiente: "2.5" }));
+    expect(updateMock.mock.calls.at(-1)[0].data.costo).toBeUndefined();
   });
 
   it("rechaza un body sin ninguno de los dos campos", async () => {

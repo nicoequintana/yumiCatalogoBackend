@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validarCostoYCoeficiente } from "./products.input.js";
+import { coeficienteODefecto, validarCostoYCoeficiente } from "./products.input.js";
 
 /**
  * Validación de los dos campos nuevos del editor de producto.
@@ -93,5 +93,88 @@ describe("validarCostoYCoeficiente", () => {
       costo: "14504",
       coeficiente: "2.05",
     });
+  });
+});
+
+/**
+ * Desde el 31/08/2026 el precio de venta no se tipea: sale de
+ * `costo × coeficiente`. Eso vuelve obligatorios a los dos campos en el alta y
+ * en la edición.
+ *
+ * **La obligatoriedad es del LLAMADOR, no del validador.** `aplicarPreciosMasivo`
+ * usa esta misma función para el coeficiente que se aplica a un lote, y ahí es y
+ * sigue siendo opcional (`{ids, coeficiente?}`). Meter el requisito adentro del
+ * validador rompería ese endpoint sin que nada lo relacione con este cambio.
+ */
+describe("validarCostoYCoeficiente — modos", () => {
+  it('"libre" (el default) acepta ausencia y vaciado: es lo que usa precios-masivo', () => {
+    expect(validarCostoYCoeficiente({})).toEqual({ costo: undefined, coeficiente: undefined });
+    expect(validarCostoYCoeficiente({ costo: "", coeficiente: "" })).toEqual({
+      costo: null,
+      coeficiente: null,
+    });
+  });
+
+  it('"alta" exige el costo', () => {
+    expect(() => validarCostoYCoeficiente({ coeficiente: "2.05" }, { modo: "alta" })).toThrow(
+      /costo/i,
+    );
+    expect(() =>
+      validarCostoYCoeficiente({ costo: "", coeficiente: "2.05" }, { modo: "alta" }),
+    ).toThrow(/costo/i);
+  });
+
+  it('"alta" NO exige el coeficiente: tiene un neutro y lo aplica el llamador', () => {
+    expect(validarCostoYCoeficiente({ costo: "1500" }, { modo: "alta" })).toEqual({
+      costo: "1500",
+      coeficiente: undefined,
+    });
+  });
+
+  /**
+   * La distinción central del modo "edicion", y la que hace usable el PUT: es
+   * un endpoint PARCIAL. Un request que solo reordena fotos no menciona el
+   * costo, y fallarle por un campo que no nombra lo volvería inservible — de
+   * paso dejando a cualquier producto histórico sin costo imposible de editar
+   * hasta para corregirle una falta de ortografía.
+   *
+   * Lo que hay que impedir es que alguien BORRE el costo de un producto, no que
+   * lo omita.
+   */
+  it('"edicion" permite OMITIR pero no VACIAR', () => {
+    expect(validarCostoYCoeficiente({}, { modo: "edicion" })).toEqual({
+      costo: undefined,
+      coeficiente: undefined,
+    });
+    expect(() => validarCostoYCoeficiente({ costo: "" }, { modo: "edicion" })).toThrow(
+      /costo.*no se puede borrar/i,
+    );
+    expect(() => validarCostoYCoeficiente({ coeficiente: null }, { modo: "edicion" })).toThrow(
+      /coeficiente.*no se puede borrar/i,
+    );
+  });
+
+  it("el coeficiente neutro (1) es válido en todos los modos", () => {
+    for (const modo of ["libre", "alta", "edicion"]) {
+      expect(validarCostoYCoeficiente({ costo: "1500", coeficiente: "1" }, { modo })).toEqual({
+        costo: "1500",
+        coeficiente: "1",
+      });
+    }
+  });
+});
+
+describe("coeficienteODefecto", () => {
+  it("cubre las tres formas de 'no vino'", () => {
+    // Las tres llegan en la práctica: un input sin tocar manda "", una celda de
+    // Excel en blanco manda null, un cliente viejo no manda el campo.
+    expect(coeficienteODefecto(undefined)).toBe("1");
+    expect(coeficienteODefecto(null)).toBe("1");
+    expect(coeficienteODefecto("   ")).toBe("1");
+  });
+
+  it("no toca un valor real", () => {
+    expect(coeficienteODefecto("2.05")).toBe("2.05");
+    expect(coeficienteODefecto(2.05)).toBe(2.05);
   });
 });

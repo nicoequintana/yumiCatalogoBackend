@@ -11,13 +11,20 @@ import { aplicarValidaciones } from "./plantillaProductos.js";
  * `.xlsx` y produce datos de producto, este toma un producto y produce la
  * fila de `.xlsx` que, leída de nuevo, tiene que devolver el mismo dato.
  *
- * **Desde el 25/08/2026 son cuatro columnas: `sku`, `nombre`, `precio` y
- * `stock`.** El archivo existe para retocar precios y stock de un catálogo ya
- * cargado; las dieciséis columnas anteriores obligaban a scrollear entre
- * textos largos para llegar al número que se quería cambiar. Lo que NO viaja
- * en el archivo queda intacto al actualizar (ver `COLUMNAS_ACTUALIZACION` en
- * `importProductos.js`), así que este recorte es también la garantía de que
- * una subida no pisa la descripción ni el contenido comercial.
+ * **Desde el 31/08/2026 son cinco columnas: `sku`, `nombre`, `costo`,
+ * `coeficiente` y `stock`.** Eran cuatro y la tercera era `precio`; el cambio
+ * acompaña al precio de venta pasando a derivarse de `costo × coeficiente`, así
+ * que la planilla trae ahora lo que lo GENERA en vez del resultado.
+ *
+ * Consecuencia que hay que tener presente: **este archivo ya no puede cambiar un
+ * precio publicado.** Sube costos, y los productos quedan en `Difiere` hasta que
+ * alguien aplique desde Costos y precios — con su tabla antes→después de por
+ * medio, que es exactamente la revisión que una subida masiva más necesita.
+ *
+ * El recorte original (de dieciséis columnas a unas pocas) sigue vigente por su
+ * propio motivo: lo que NO viaja en el archivo queda intacto al actualizar (ver
+ * `COLUMNAS_ACTUALIZACION` en `importProductos.js`), así que es la garantía de
+ * que una subida no pisa la descripción ni el contenido comercial.
  */
 
 /**
@@ -27,19 +34,29 @@ import { aplicarValidaciones } from "./plantillaProductos.js";
  * Función pura: no sabe nada de Prisma ni de Excel más allá del array que
  * devuelve.
  *
- * `precio` sale como `Number` y no como string para que Excel lo trate como
- * número de verdad — un string en la celda rompe la validación `whole` que
- * aplica `aplicarValidaciones` y deja el archivo con el aviso de "número
+ * `costo` y `coeficiente` salen como `Number` y no como string para que Excel
+ * los trate como números de verdad — un string en la celda rompe la validación
+ * que aplica `aplicarValidaciones` y deja el archivo con el aviso de "número
  * almacenado como texto" en cada fila.
  *
- * @param {{sku?: string, nombre?: string, precio?: unknown, stock?: number}} producto
+ * **Un producto sin coeficiente cargado sale con el neutro, no en blanco.** Los
+ * históricos previos a esta feature tienen la columna en `null`, y una celda
+ * vacía volvería como el mismo neutro al releerla: emitirlo explícito hace que
+ * el round-trip sea una identidad de verdad y que el admin vea con qué margen
+ * está trabajando ese producto en vez de tener que adivinarlo.
+ *
+ * @param {{sku?: string, nombre?: string, costo?: unknown, coeficiente?: unknown, stock?: number}} producto
  * @returns {Array<string|number|null>}
  */
 export function productoAFila(producto) {
+  const numeroONulo = (valor) =>
+    valor === null || valor === undefined ? null : Number(valor);
+
   return [
     producto.sku ?? "",
     producto.nombre ?? "",
-    producto.precio === null || producto.precio === undefined ? null : Number(producto.precio),
+    numeroONulo(producto.costo),
+    numeroONulo(producto.coeficiente) ?? 1,
     producto.stock ?? 0,
   ];
 }

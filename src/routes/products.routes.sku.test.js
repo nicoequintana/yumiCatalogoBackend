@@ -79,7 +79,8 @@ describe("crear() genera el sku", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
-      .field("precio", "100");
+      .field("precio", "100")
+      .field("costo", "100");
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledWith(
@@ -126,7 +127,8 @@ describe("crear() genera el sku", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
-      .field("precio", "100");
+      .field("precio", "100")
+      .field("costo", "100");
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledTimes(2);

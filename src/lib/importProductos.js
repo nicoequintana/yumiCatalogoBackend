@@ -74,23 +74,28 @@ function textoOpcional(celda) {
 }
 
 /**
- * Normaliza el precio a string entero, que es lo que espera Prisma para la
- * columna `Decimal(10, 0)` (mismo formato que usa `crear` con `String(precio)`).
+ * Normaliza el costo a string entero, que es lo que espera Prisma para la
+ * columna `Decimal(10, 0)`.
+ *
+ * Reemplazó a `normalizarPrecio` el 31/08/2026, cuando el precio de venta pasó
+ * a derivarse de `costo × coeficiente` y dejó de viajar en la planilla. La regla
+ * es la misma de antes, aplicada al campo que ahora recibe ese número.
  *
  * ExcelJS devuelve un número real cuando la celda es numérica, pero un archivo
  * editado en otra herramienta puede traerlo como texto con coma decimal
  * ("1500,50") — la coma se sigue interpretando como separador decimal para
  * poder DETECTARLA, no para aceptarla.
  *
- * Un precio con decimales se RECHAZA (mismo criterio que `validarCamposBase`
- * en `controllers/products.input.js`): la columna es entera, así que
- * redondear acá le cambiaría el precio a un producto sin que la planilla ni
- * el informe de importación lo mencionen. Un error de fila que nombra el
- * problema es lo único que le da al admin la chance de corregir el archivo.
+ * Un costo con decimales se RECHAZA (mismo criterio que `validarCostoYCoeficiente`
+ * en `controllers/products.input.js`): la columna es entera, así que redondear
+ * acá le cambiaría el costo a un producto sin que la planilla ni el informe lo
+ * mencionen — y de ese número redondeado saldría después un precio de venta que
+ * nadie pidió. Un error de fila que nombra el problema es lo único que le da al
+ * admin la chance de corregir el archivo.
  *
- * @returns {string|null} el precio normalizado, o `null` si no es válido
+ * @returns {string|null} el costo normalizado, o `null` si no es válido
  */
-function normalizarPrecio(celda) {
+function normalizarCosto(celda) {
   if (celda === null || celda === undefined || celda === "") return null;
 
   const numero = typeof celda === "number" ? celda : Number(String(celda).trim().replace(",", "."));
@@ -101,9 +106,50 @@ function normalizarPrecio(celda) {
 }
 
 /**
+ * Coeficiente por defecto de la planilla. **Espejo manual de
+ * `COEFICIENTE_POR_DEFECTO` en `controllers/products.input.js`** — este módulo
+ * es `lib/` y no importa de `controllers/`, que es la dirección de dependencia
+ * que el proyecto ya respeta.
+ *
+ * Si divergen, un producto cargado por planilla entra con un margen distinto que
+ * el mismo producto cargado por formulario, sin ningún error.
+ */
+const COEFICIENTE_PLANILLA_POR_DEFECTO = "1";
+
+/**
+ * Normaliza el coeficiente a string, con las reglas de su columna `Decimal(5, 2)`.
+ *
+ * **Es el único campo con decimales del sistema**, así que sus reglas son las
+ * opuestas a las del costo: acá el decimal es legítimo y lo que se acota es
+ * cuántos hay. La coma se acepta como separador — "2,05" y "2.05" son el mismo
+ * número sin ninguna ambigüedad.
+ *
+ * Una celda vacía cae al neutro y NO es un error, a diferencia del costo: el
+ * costo es un dato del negocio que nadie puede inventar, el coeficiente tiene un
+ * valor correcto por defecto (1, que deja el precio igual al costo).
+ *
+ * @returns {string|null} el coeficiente normalizado, o `null` si no es válido
+ */
+function normalizarCoeficiente(celda) {
+  if (celda === null || celda === undefined || celda === "") {
+    return COEFICIENTE_PLANILLA_POR_DEFECTO;
+  }
+
+  const texto = String(celda).trim().replace(",", ".");
+  const numero = Number(texto);
+
+  if (!Number.isFinite(numero) || numero <= 0 || numero > 999.99) return null;
+  // Un tercer decimal se redondearía en silencio contra `Decimal(5, 2)` y el
+  // precio calculado dejaría de coincidir con el que muestra el panel.
+  if ((texto.split(".")[1]?.length ?? 0) > 2) return null;
+
+  return String(numero);
+}
+
+/**
  * Núcleo compartido de validación de fila: las reglas de campo (nombre,
- * descripción, precio, stock, categoría, especificaciones) que usan tanto el
- * alta (`validarFila`) como la actualización (`validarFilaActualizacion`).
+ * descripción, costo, coeficiente, stock, categoría, especificaciones) que usan
+ * tanto el alta (`validarFila`) como la actualización (`validarFilaActualizacion`).
  *
  * Privada a propósito — el `sku` NO es parte de este núcleo porque el alta ni
  * siquiera tiene esa columna. Acumula TODOS los errores de la fila antes de
@@ -125,9 +171,18 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
   const descripcion = textoOpcional(fila.descripcion);
   if (descripcion === null) error("descripcion", fila.descripcion ?? "", "La descripción es obligatoria.");
 
-  const precio = normalizarPrecio(fila.precio);
-  if (precio === null) {
-    error("precio", fila.precio ?? "", "El precio debe ser un número entero mayor a 0, sin decimales.");
+  const costo = normalizarCosto(fila.costo);
+  if (costo === null) {
+    error("costo", fila.costo ?? "", "El costo debe ser un número entero mayor a 0, sin decimales.");
+  }
+
+  const coeficiente = normalizarCoeficiente(fila.coeficiente);
+  if (coeficiente === null) {
+    error(
+      "coeficiente",
+      fila.coeficiente ?? "",
+      "El coeficiente debe ser un número mayor a 0 y hasta 999,99, con dos decimales como máximo.",
+    );
   }
 
   let stock = 0;
@@ -164,7 +219,8 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
     datos: {
       nombre,
       descripcion,
-      precio,
+      costo,
+      coeficiente,
       stock,
       etiqueta: textoOpcional(fila.etiqueta),
       categoriaId,
@@ -224,9 +280,18 @@ function validarCamposDeActualizacion(fila, numeroFila) {
   const nombre = textoOpcional(fila.nombre);
   if (nombre === null) error("nombre", fila.nombre ?? "", "El nombre es obligatorio.");
 
-  const precio = normalizarPrecio(fila.precio);
-  if (precio === null) {
-    error("precio", fila.precio ?? "", "El precio debe ser un número entero mayor a 0, sin decimales.");
+  const costo = normalizarCosto(fila.costo);
+  if (costo === null) {
+    error("costo", fila.costo ?? "", "El costo debe ser un número entero mayor a 0, sin decimales.");
+  }
+
+  const coeficiente = normalizarCoeficiente(fila.coeficiente);
+  if (coeficiente === null) {
+    error(
+      "coeficiente",
+      fila.coeficiente ?? "",
+      "El coeficiente debe ser un número mayor a 0 y hasta 999,99, con dos decimales como máximo.",
+    );
   }
 
   let stock = null;
@@ -243,7 +308,7 @@ function validarCamposDeActualizacion(fila, numeroFila) {
 
   if (errores.length > 0) return { datos: null, errores };
 
-  return { datos: { nombre, precio, stock }, errores: [] };
+  return { datos: { nombre, costo, coeficiente, stock }, errores: [] };
 }
 
 /**
@@ -310,7 +375,8 @@ export function validarFilaActualizacion(fila, numeroFila, idsPorSku) {
 export const COLUMNAS = [
   "nombre",
   "descripcion",
-  "precio",
+  "costo",
+  "coeficiente",
   "stock",
   "categoria",
   "etiqueta",
@@ -343,7 +409,7 @@ export const COLUMNAS = [
  * `controllers/productsImport.controller.js`, que es donde esa garantía se
  * cumple o se rompe.
  */
-export const COLUMNAS_ACTUALIZACION = ["sku", "nombre", "precio", "stock"];
+export const COLUMNAS_ACTUALIZACION = ["sku", "nombre", "costo", "coeficiente", "stock"];
 
 export const NOMBRE_HOJA = "Productos";
 

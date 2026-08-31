@@ -8,7 +8,8 @@ function productoDePrueba(extra = {}) {
     id: 42,
     sku: "VEL-1234",
     nombre: "Vela de soja",
-    precio: 1500,
+    costo: 1500,
+    coeficiente: 2.05,
     stock: 12,
     ...extra,
   };
@@ -24,7 +25,7 @@ describe("productoAFila", () => {
   it("mapea el producto al orden de COLUMNAS_ACTUALIZACION", () => {
     const fila = productoAFila(productoDePrueba());
 
-    expect(fila).toEqual(["VEL-1234", "Vela de soja", 1500, 12]);
+    expect(fila).toEqual(["VEL-1234", "Vela de soja", 1500, 2.05, 12]);
   });
 
   // Cuatro columnas y cuatro valores: si esto se desalinea, el archivo escribe
@@ -38,19 +39,30 @@ describe("productoAFila", () => {
       productoDePrueba({ descripcion: "texto largo", etiqueta: "Nuevo", categoria: { nombre: "Velas" } }),
     );
 
-    expect(fila).toEqual(["VEL-1234", "Vela de soja", 1500, 12]);
+    expect(fila).toEqual(["VEL-1234", "Vela de soja", 1500, 2.05, 12]);
   });
 
-  it("emite el precio como number, no como string", () => {
-    // Un string en la celda rompe la validación `whole` de Excel y deja el
-    // aviso de "número almacenado como texto" en cada fila.
-    const fila = productoAFila(productoDePrueba({ precio: "1500" }));
+  it("emite costo y coeficiente como number, no como string", () => {
+    // Un string en la celda rompe la validación de Excel y deja el aviso de
+    // "número almacenado como texto" en cada fila.
+    const fila = productoAFila(productoDePrueba({ costo: "1500", coeficiente: "2.05" }));
 
-    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("precio")]).toBe(1500);
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("costo")]).toBe(1500);
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("coeficiente")]).toBe(2.05);
+  });
+
+  it("un producto sin coeficiente sale con el neutro, no en blanco", () => {
+    // Los históricos previos a esta feature tienen la columna en null. Una
+    // celda vacía volvería como el mismo 1 al releerla, así que emitirlo
+    // explícito hace del round-trip una identidad de verdad — y le muestra al
+    // admin con qué margen está trabajando en vez de hacérselo adivinar.
+    const fila = productoAFila(productoDePrueba({ coeficiente: null }));
+
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("coeficiente")]).toBe(1);
   });
 
   it("tolera un producto sin stock declarado", () => {
-    expect(productoAFila({ sku: "X", nombre: "Y", precio: 1 })).toEqual(["X", "Y", 1, 0]);
+    expect(productoAFila({ sku: "X", nombre: "Y", costo: 1 })).toEqual(["X", "Y", 1, 1, 0]);
   });
 });
 
@@ -75,13 +87,17 @@ describe("generarExportacion", () => {
     expect(wb.worksheets).toHaveLength(1);
   });
 
-  it("valida precio y stock como enteros en el rango real de filas", async () => {
+  it("valida costo y stock como enteros, y el coeficiente como decimal", async () => {
     const wb = await abrir(await generarExportacion([productoDePrueba()]));
     const hoja = wb.getWorksheet("Productos");
 
-    const precio = hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("precio") + 1).dataValidation;
-    expect(precio.type).toBe("whole");
-    expect(precio.operator).toBe("greaterThan");
+    const costo = hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("costo") + 1).dataValidation;
+    expect(costo.type).toBe("whole");
+    expect(costo.operator).toBe("greaterThan");
+
+    // `decimal` y no `whole`: es el único campo con decimales del sistema.
+    const coef = hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("coeficiente") + 1).dataValidation;
+    expect(coef.type).toBe("decimal");
 
     const stock = hoja.getCell(2, COLUMNAS_ACTUALIZACION.indexOf("stock") + 1).dataValidation;
     expect(stock.type).toBe("whole");
@@ -119,7 +135,8 @@ describe("generarExportacion — round trip", () => {
     expect(id).toBe(producto.id);
     expect(datos).toEqual({
       nombre: producto.nombre,
-      precio: String(producto.precio),
+      costo: String(producto.costo),
+      coeficiente: String(producto.coeficiente),
       stock: producto.stock,
     });
   });

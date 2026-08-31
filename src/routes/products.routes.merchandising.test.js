@@ -94,7 +94,8 @@ describe("POST /api/products valida stock/destacado", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
-      .field("precio", "100");
+      .field("precio", "100")
+      .field("costo", "100");
     for (const [key, value] of Object.entries(fields)) {
       req = req.field(key, value);
     }
@@ -181,7 +182,8 @@ describe("PUT /api/products/:id respeta esCreacion:false para merchandising", ()
       .set("Authorization", authHeader)
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
-      .field("precio", "100");
+      .field("precio", "100")
+      .field("costo", "100");
 
     expect(res.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith(
@@ -200,6 +202,7 @@ describe("PUT /api/products/:id respeta esCreacion:false para merchandising", ()
       .field("nombre", "Bruma Facial")
       .field("descripcion", "Descripción de prueba")
       .field("precio", "100")
+      .field("costo", "100")
       .field("stock", "-1");
 
     expect(res.status).toBe(400);

@@ -72,17 +72,17 @@ describe("generarPlantilla", () => {
     expect(estricta.dataValidation.showErrorMessage).toBe(true);
   });
 
-  it("bloquea precios <= 0 o con decimales, y stock negativo o decimal", async () => {
+  it("bloquea costos <= 0 o con decimales, y stock negativo o decimal", async () => {
     const wb = await abrir(await generarPlantilla(["Velas"]));
     const hoja = wb.getWorksheet("Productos");
 
-    const precio = hoja.getCell(2, COLUMNAS.indexOf("precio") + 1).dataValidation;
+    const costo = hoja.getCell(2, COLUMNAS.indexOf("costo") + 1).dataValidation;
     // `whole`, no `decimal`: la columna de la base es `Decimal(10, 0)` y el
     // importador rechaza los centavos. Que Excel los frene al tipearlos evita
     // descubrirlo con la planilla entera cargada.
-    expect(precio.type).toBe("whole");
-    expect(precio.operator).toBe("greaterThan");
-    expect(precio.showErrorMessage).toBe(true);
+    expect(costo.type).toBe("whole");
+    expect(costo.operator).toBe("greaterThan");
+    expect(costo.showErrorMessage).toBe(true);
 
     const stock = hoja.getCell(2, COLUMNAS.indexOf("stock") + 1).dataValidation;
     expect(stock.type).toBe("whole");
@@ -103,7 +103,7 @@ describe("generarPlantilla", () => {
     const nombre = ejemplo.getCell(COLUMNAS.indexOf("nombre") + 1).value;
     expect(nombre).toBeTruthy();
     expect(String(nombre).startsWith(MARCA_EJEMPLO)).toBe(true);
-    expect(ejemplo.getCell(COLUMNAS.indexOf("precio") + 1).value).toBeTypeOf("number");
+    expect(ejemplo.getCell(COLUMNAS.indexOf("costo") + 1).value).toBeTypeOf("number");
   });
 
   it("ROUND-TRIP: la plantilla sin editar no deja ninguna fila de datos al leerla", async () => {

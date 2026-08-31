@@ -26,6 +26,7 @@ import {
   validarCamposBase,
   validarCamposMerchandising,
   validarCostoYCoeficiente,
+  coeficienteODefecto,
   validarOrdenFotos,
 } from "./products.input.js";
 import {
@@ -107,6 +108,17 @@ const ORDENES_LISTADO = {
   // id más alto es el más nuevo. Con `asc` la fila más reciente de un lote
   // cargado de una sola vez quedaría última dentro de su propio grupo.
   recientes: [{ createdAt: "desc" }, { id: "desc" }],
+  // Los dos criterios de la pantalla de Costos y precios, donde la pregunta no
+  // es por el precio publicado sino por lo que lo genera.
+  //
+  // Sus columnas son NULLABLE, a diferencia de todas las de arriba: un producto
+  // sin costo cargado se agrupa en un extremo del listado según cómo ubique los
+  // NULL el connector, no desaparece ni se intercala. Que "ordené por costo y
+  // los sin costo quedaron todos juntos" es el comportamiento, no un bug.
+  "costo-asc": [{ costo: "asc" }, { id: "asc" }],
+  "costo-desc": [{ costo: "desc" }, { id: "asc" }],
+  "coeficiente-asc": [{ coeficiente: "asc" }, { id: "asc" }],
+  "coeficiente-desc": [{ coeficiente: "desc" }, { id: "asc" }],
 };
 
 function elegirOrden(valor) {
@@ -586,12 +598,21 @@ export async function crear(req, res, next) {
   let producto = null;
   try {
     const {
-      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
+      nombre, descripcion, etiqueta, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
-    validarCamposBase({ nombre, descripcion, precio }, { esCreacion: true });
+    validarCamposBase({ nombre, descripcion }, { esCreacion: true });
     const merchandising = validarCamposMerchandising({ stock, destacado });
-    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
+    // Obligatorios: de este par sale el precio de venta, y sin él la columna
+    // `precio` (NOT NULL) no tiene ningún valor correcto que escribir.
+    const costeo = validarCostoYCoeficiente(
+      { costo, coeficiente: coeficienteODefecto(coeficiente) },
+      { modo: "alta" },
+    );
+    // Se calcula ACÁ y no en la lectura: el precio es una columna escrita, no
+    // un derivado que se recalcula en cada respuesta. En el alta ese primer
+    // valor es siempre el calculado — no hay precio previo que preservar.
+    const precioCalculado = calcularPrecio(costeo.costo, costeo.coeficiente);
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas) ?? [];
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO") ?? [];
@@ -622,12 +643,17 @@ export async function crear(req, res, next) {
           data: {
             nombre: nombre.trim(),
             descripcion: descripcion.trim(),
-            precio: String(precio),
-            // El precio NO se deriva del costo acá: se escribe el que vino en
-            // el formulario. Cambiar el costo nunca mueve el precio publicado
-            // por su cuenta — eso lo hace la aplicación explícita del panel.
-            costo: costeo.costo ?? null,
-            coeficiente: costeo.coeficiente ?? null,
+            // El precio SE DERIVA: `costo × coeficiente`, redondeado al peso.
+            // No se acepta uno tipeado, ni acá ni en la edición.
+            //
+            // Que el ALTA sí lo escriba y la EDICIÓN no es deliberado: un
+            // producto nuevo no tiene precio publicado que proteger, y la
+            // columna es NOT NULL. Editar, en cambio, deja el producto en
+            // `Difiere` hasta que alguien aplique desde Costos y precios —
+            // publicar ahí evaporaría ese paso de revisión.
+            precio: String(precioCalculado),
+            costo: costeo.costo,
+            coeficiente: costeo.coeficiente,
             etiqueta: etiqueta?.trim() || null,
             categoriaId: categoriaId ? Number(categoriaId) : null,
             sku: generarSku(nombre.trim()),
@@ -718,12 +744,18 @@ export async function actualizar(req, res, next) {
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
     const {
-      nombre, descripcion, precio, etiqueta, categoriaId, stock, destacado,
+      nombre, descripcion, etiqueta, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
-    validarCamposBase({ nombre, descripcion, precio }, { esCreacion: false });
+    validarCamposBase({ nombre, descripcion }, { esCreacion: false });
     const merchandising = validarCamposMerchandising({ stock, destacado });
-    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
+    // Modo "edicion": omitir el costeo está bien —el PUT es parcial, y un
+    // request que solo reordena fotos no tiene por qué hablar de plata— pero
+    // BORRARLO no, porque dejaría al producto sin forma de recalcular su precio.
+    //
+    // El neutro NO se aplica acá, a diferencia del alta: un PUT que no menciona
+    // el coeficiente tiene que dejar la columna como está, no pisarla con un 1.
+    const costeo = validarCostoYCoeficiente({ costo, coeficiente }, { modo: "edicion" });
 
     const caracteristicas = parseCaracteristicas(req.body.caracteristicas);
     const beneficios = parseListas(req.body.beneficios, "BENEFICIO");
@@ -772,10 +804,12 @@ export async function actualizar(req, res, next) {
           data: {
             nombre: nombre !== undefined ? nombre.trim() : undefined,
             descripcion: descripcion !== undefined ? descripcion.trim() : undefined,
-            precio: precio !== undefined ? String(precio) : undefined,
-            // `undefined` deja la columna como está, `null` la borra. Es la
-            // semántica que devuelve `validarCostoYCoeficiente` y la que hace
-            // que un campo vaciado en el formulario efectivamente saque el dato.
+            // `precio` NO se escribe en la edición, y no es un olvido: es lo
+            // que sostiene el flujo `Difiere` → `Aplicar`. Cambiar un costo acá
+            // deja el producto marcado hasta que una persona aplique desde
+            // Costos y precios, con su tabla antes→después de por medio. Que la
+            // edición publicara sola convertiría cada retoque de costo en un
+            // cambio de precio al catálogo público sin ninguna revisión.
             costo: costeo.costo,
             coeficiente: costeo.coeficiente,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
@@ -1265,7 +1299,11 @@ export async function actualizarCosteo(req, res, next) {
     if (costo === undefined && coeficiente === undefined) {
       throw httpError(400, "Debe enviar costo o coeficiente.");
     }
-    const costeo = validarCostoYCoeficiente({ costo, coeficiente });
+    // Mismo modo que el PUT: se puede mandar solo uno de los dos (la tabla de
+    // precios guarda campo por campo, al salir de cada celda), pero ninguno se
+    // puede vaciar. Antes un `""` borraba la columna, y desde que el precio se
+    // deriva eso deja al producto sin forma de recalcularlo.
+    const costeo = validarCostoYCoeficiente({ costo, coeficiente }, { modo: "edicion" });
 
     const existente = await prisma.product.findUnique({ where: { id } });
     if (!existente) throw httpError(404, "Producto no encontrado.");

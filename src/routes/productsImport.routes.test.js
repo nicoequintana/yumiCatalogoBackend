@@ -107,7 +107,7 @@ describe("POST /api/products/import", () => {
   it("responde 401 sin token y no escribe nada", async () => {
     const res = await request(buildApp())
       .post("/api/products/import")
-      .attach("archivo", await xlsxCon([{ nombre: "A", descripcion: "d", precio: 1 }]), "p.xlsx");
+      .attach("archivo", await xlsxCon([{ nombre: "A", descripcion: "d", costo: 1 }]), "p.xlsx");
 
     expect(res.status).toBe(401);
     expect(transactionMock).not.toHaveBeenCalled();
@@ -133,8 +133,8 @@ describe("POST /api/products/import", () => {
       .attach(
         "archivo",
         await xlsxCon([
-          { nombre: "Vela", descripcion: "Lavanda", precio: 1500, categoria: "Velas" },
-          { nombre: "Difusor", descripcion: "Cítrico", precio: 2000 },
+          { nombre: "Vela", descripcion: "Lavanda", costo: 1500, categoria: "Velas" },
+          { nombre: "Difusor", descripcion: "Cítrico", costo: 2000 },
         ]),
         "p.xlsx",
       );
@@ -155,9 +155,9 @@ describe("POST /api/products/import", () => {
       .attach(
         "archivo",
         await xlsxCon([
-          { nombre: "Vela", descripcion: "Lavanda", precio: 1500 },
-          { nombre: "", descripcion: "x", precio: 100 },
-          { nombre: "Difusor", descripcion: "x", precio: 2000 },
+          { nombre: "Vela", descripcion: "Lavanda", costo: 1500 },
+          { nombre: "", descripcion: "x", costo: 100 },
+          { nombre: "Difusor", descripcion: "x", costo: 2000 },
         ]),
         "p.xlsx",
       );
@@ -178,7 +178,7 @@ describe("POST /api/products/import", () => {
         "archivo",
         await xlsxCon([
           { nombre: "A", descripcion: "d", precio: "abc" },
-          { nombre: "B", descripcion: "d", precio: 100, categoria: "Bazr" },
+          { nombre: "B", descripcion: "d", costo: 100, categoria: "Bazr" },
         ]),
         "p.xlsx",
       );
@@ -186,7 +186,7 @@ describe("POST /api/products/import", () => {
     expect(res.status).toBe(400);
     expect(res.body.errores).toHaveLength(2);
     expect(res.body.errores.map((e) => [e.fila, e.columna])).toEqual([
-      [2, "precio"],
+      [2, "costo"],
       [3, "categoria"],
     ]);
   });
@@ -207,7 +207,7 @@ describe("POST /api/products/import", () => {
       Promise.resolve({ ...data, id: 1, fotos: [], caracteristicas: [], listas: [], especificaciones: [] }),
     );
 
-    const filas = Array.from({ length: 20 }, () => ({ nombre: "Vela", descripcion: "d", precio: 100 }));
+    const filas = Array.from({ length: 20 }, () => ({ nombre: "Vela", descripcion: "d", costo: 100 }));
 
     const res = await request(buildApp())
       .post("/api/products/import")
@@ -238,8 +238,8 @@ describe("POST /api/products/import", () => {
 
     try {
       const filas = [
-        { nombre: "Vela", descripcion: "d", precio: 100 },
-        { nombre: "Vela", descripcion: "d", precio: 100 },
+        { nombre: "Vela", descripcion: "d", costo: 100 },
+        { nombre: "Vela", descripcion: "d", costo: 100 },
       ];
 
       const res = await request(buildApp())
@@ -263,7 +263,7 @@ describe("POST /api/products/import", () => {
     await request(buildApp())
       .post("/api/products/import")
       .set("Authorization", authHeader)
-      .attach("archivo", await xlsxCon([{ nombre: "Vela", descripcion: "d", precio: 1500 }]), "p.xlsx");
+      .attach("archivo", await xlsxCon([{ nombre: "Vela", descripcion: "d", costo: 1500 }]), "p.xlsx");
 
     // `logAudit` es fire-and-forget: se espera un tick para que corra.
     await new Promise((resolve) => setImmediate(resolve));
@@ -283,9 +283,9 @@ describe("GET /api/products/export", () => {
     expect(res.status).toBe(401);
   });
 
-  it("devuelve un .xlsx de cuatro columnas, sin auditoría (es una lectura)", async () => {
+  it("devuelve un .xlsx de cinco columnas, sin auditoría (es una lectura)", async () => {
     productFindManyMock.mockResolvedValue([
-      { sku: "VEL-1", nombre: "Vela", precio: decimal("1500"), stock: 3 },
+      { sku: "VEL-1", nombre: "Vela", costo: decimal("1500"), coeficiente: decimal("2.05"), stock: 3 },
     ]);
 
     const res = await request(buildApp())
@@ -303,8 +303,8 @@ describe("GET /api/products/export", () => {
     await wb.xlsx.load(res.body);
     const hoja = wb.getWorksheet("Productos");
 
-    expect(hoja.getRow(1).values.slice(1)).toEqual(["sku", "nombre", "precio", "stock"]);
-    expect(hoja.getRow(2).values.slice(1)).toEqual(["VEL-1", "Vela", 1500, 3]);
+    expect(hoja.getRow(1).values.slice(1)).toEqual(["sku", "nombre", "costo", "coeficiente", "stock"]);
+    expect(hoja.getRow(2).values.slice(1)).toEqual(["VEL-1", "Vela", 1500, 2.05, 3]);
     // La hoja `Listas` se fue con las columnas `categoria`/`etiqueta`.
     expect(wb.getWorksheet("Listas")).toBeUndefined();
   });
@@ -312,7 +312,7 @@ describe("GET /api/products/export", () => {
   // Guarda del costo: el `select` no debe volver a pedir relaciones que la
   // planilla ya no lleva. Con el catálogo entero, esos joins son caros y
   // íntegramente descartables.
-  it("consulta solo los cuatro campos, sin joins de contenido", async () => {
+  it("consulta solo los cinco campos, sin joins de contenido", async () => {
     productFindManyMock.mockResolvedValue([]);
 
     await request(buildApp()).get("/api/products/export").set("Authorization", authHeader);
@@ -321,7 +321,8 @@ describe("GET /api/products/export", () => {
     expect(productFindManyMock.mock.calls[0][0].select).toEqual({
       sku: true,
       nombre: true,
-      precio: true,
+      costo: true,
+      coeficiente: true,
       stock: true,
     });
     // Tampoco hace falta la consulta de categorías que alimentaba el desplegable.
@@ -335,7 +336,7 @@ describe("POST /api/products/actualizar-masivo", () => {
       .post("/api/products/actualizar-masivo")
       .attach(
         "archivo",
-        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", precio: 1500, stock: 3 }]),
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", costo: 1500, stock: 3 }]),
         "productos.xlsx",
       );
 
@@ -379,7 +380,7 @@ describe("POST /api/products/actualizar-masivo", () => {
       .set("Authorization", authHeader)
       .attach(
         "archivo",
-        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela renovada", precio: 1800, stock: 9 }]),
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela renovada", costo: 1800, stock: 9 }]),
         "productos.xlsx",
       );
 
@@ -390,13 +391,18 @@ describe("POST /api/products/actualizar-masivo", () => {
     expect(productCreateMock).not.toHaveBeenCalled();
     expect(productUpdateMock).toHaveBeenCalledTimes(1);
 
-    // EL test central de esta feature: el `data` lleva TRES campos y ninguno
+    // EL test central de esta feature: el `data` lleva CUATRO campos y ninguno
     // más. Cualquier campo extra acá le pisa a todo el catálogo un dato que la
     // planilla nunca trajo, en silencio.
+    //
+    // `precio` en particular NO puede estar: desde el 31/08/2026 se deriva del
+    // costo y solo lo publica `aplicarPreciosMasivo`, así que una subida de
+    // planilla deja los productos en `Difiere` hasta que alguien aplique.
     expect(productUpdateMock.mock.calls[0][0]).toMatchObject({ where: { id: 101 } });
     expect(productUpdateMock.mock.calls[0][0].data).toEqual({
       nombre: "Vela renovada",
-      precio: "1800",
+      costo: "1800",
+      coeficiente: "1",
       stock: 9,
     });
 
@@ -432,7 +438,7 @@ describe("POST /api/products/actualizar-masivo", () => {
       .set("Authorization", authHeader)
       .attach(
         "archivo",
-        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", precio: 1500, stock: 3 }]),
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", costo: 1500, stock: 3 }]),
         "productos.xlsx",
       );
 
@@ -461,8 +467,8 @@ describe("POST /api/products/actualizar-masivo", () => {
       .attach(
         "archivo",
         await xlsxConActualizacion([
-          { sku: "VEL-1", nombre: "Vela", precio: 1500, stock: 1 },
-          { sku: "NOEXISTE", nombre: "Difusor", precio: 2000, stock: 1 },
+          { sku: "VEL-1", nombre: "Vela", costo: 1500, stock: 1 },
+          { sku: "NOEXISTE", nombre: "Difusor", costo: 2000, stock: 1 },
         ]),
         "productos.xlsx",
       );
@@ -496,16 +502,18 @@ describe("POST /api/products/actualizar-masivo", () => {
     expect(res.body.errores[0]).toMatchObject({ columna: "sku" });
   });
 
-  it("audita la actualización por producto, con precio y stock antes/después", async () => {
+  it("audita la actualización por producto, con costeo y stock antes/después", async () => {
     productFindManyMock.mockResolvedValue([
-      { id: 101, sku: "VEL-1", precio: decimal("1500"), stock: 3 },
+      { id: 101, sku: "VEL-1", costo: decimal("1500"), coeficiente: decimal("1"), stock: 3 },
     ]);
     productUpdateMock.mockResolvedValue({
       id: 101,
       sku: "VEL-1",
       nombre: "Vela renovada",
       descripcion: "d",
-      precio: decimal("1800"),
+      precio: decimal("1500"),
+      costo: decimal("1800"),
+      coeficiente: decimal("1"),
       stock: 9,
       caracteristicas: [],
       listas: [],
@@ -521,7 +529,7 @@ describe("POST /api/products/actualizar-masivo", () => {
       .set("Authorization", authHeader)
       .attach(
         "archivo",
-        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela renovada", precio: 1800, stock: 9 }]),
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela renovada", costo: 1800, stock: 9 }]),
         "productos.xlsx",
       );
 
@@ -531,8 +539,11 @@ describe("POST /api/products/actualizar-masivo", () => {
           accion: "ACTUALIZAR_MASIVO",
           entidad: "Producto",
           entidadId: 101,
+          // `precio` NO se audita acá: esta operación ya no lo escribe, así que
+          // registrarlo sugeriría un cambio que no ocurrió.
           detalle: JSON.stringify({
-            precio: { antes: "1500", despues: "1800" },
+            costo: { antes: "1500", despues: "1800" },
+            coeficiente: { antes: "1", despues: "1" },
             stock: { antes: 3, despues: 9 },
           }),
         }),
@@ -583,7 +594,7 @@ describe("las dos rutas de planilla emiten la forma admin del producto", () => {
       .set("Authorization", authHeader)
       .attach(
         "archivo",
-        await xlsxCon([{ nombre: "Vela", descripcion: "Aroma lavanda", precio: 3075, stock: 3 }]),
+        await xlsxCon([{ nombre: "Vela", descripcion: "Aroma lavanda", costo: 1500, coeficiente: 2.05, stock: 3 }]),
         "productos.xlsx",
       );
 
@@ -607,7 +618,7 @@ describe("las dos rutas de planilla emiten la forma admin del producto", () => {
       .set("Authorization", authHeader)
       .attach(
         "archivo",
-        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", precio: 3075, stock: 3 }]),
+        await xlsxConActualizacion([{ sku: "VEL-1", nombre: "Vela", costo: 1500, coeficiente: 2.05, stock: 3 }]),
         "productos.xlsx",
       );
 
