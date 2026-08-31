@@ -11,7 +11,7 @@
     "lint": "oxlint"
   },
   "dependencies": {
-    "@prisma/adapter-mssql": "^7.9.1",
+    "@prisma/adapter-mssql": "7.9.1",
     "@prisma/client": "7.9.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
@@ -32,5 +32,9 @@
     "oxlint": "^1.79.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "deepmerge-ts": ">=8.0.0",
+    "uuid": "^11.1.1"
   }
 }
