@@ -55,6 +55,12 @@ describe("filaSolicitada", () => {
     expect(typeof ordenes).toBe("number");
     expect(typeof facturacion).toBe("number");
   });
+
+  // El nombre es texto libre (snapshot de `nombreProducto`): un `=...` se
+  // ejecutaría como fórmula al abrir el reporte. Se fuerza a texto.
+  it("antepone un apóstrofo a un nombre de producto que parece una fórmula", () => {
+    expect(filaSolicitada(fila({ nombre: "=1+1" }))[1]).toBe("'=1+1");
+  });
 });
 
 describe("generarExportacionSolicitados", () => {

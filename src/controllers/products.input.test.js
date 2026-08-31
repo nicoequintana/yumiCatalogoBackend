@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { coeficienteODefecto, validarCostoYCoeficiente } from "./products.input.js";
+import {
+  coeficienteODefecto,
+  parsearCategoriaId,
+  validarArchivos,
+  validarCostoYCoeficiente,
+} from "./products.input.js";
+
+// Buffers con firmas reales de cada formato (solo importan los primeros bytes).
+const JPEG_VALIDO = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+const MP4_VALIDO = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+const BASURA = Buffer.from("<script>alert(1)</script>", "utf8");
 
 /**
  * Validación de los dos campos nuevos del editor de producto.
@@ -161,6 +171,75 @@ describe("validarCostoYCoeficiente — modos", () => {
         coeficiente: "1",
       });
     }
+  });
+});
+
+/**
+ * Defensa en profundidad: `validarArchivos` confirma los BYTES reales de cada
+ * archivo, no solo el mimetype que declara el cliente (que multer ya filtró,
+ * pero es falsificable). Un `.html` rotulado `image/png` pasa el filtro de
+ * multer y tiene que morir acá, antes de subirse a Cloudinary.
+ */
+describe("validarArchivos — magic bytes", () => {
+  const foto = (buffer, mimetype = "image/jpeg") => ({ buffer, mimetype, size: buffer.length });
+
+  it("acepta una foto cuyos bytes coinciden con el mimetype", () => {
+    expect(() =>
+      validarArchivos({ fotosNuevas: [foto(JPEG_VALIDO)], fotosExistentesCount: 0, video: [] }),
+    ).not.toThrow();
+  });
+
+  it("rechaza con 400 una foto con MIME mentido (bytes no son imagen)", () => {
+    expect(() =>
+      validarArchivos({ fotosNuevas: [foto(BASURA)], fotosExistentesCount: 0, video: [] }),
+    ).toThrow(expect.objectContaining({ status: 400 }));
+  });
+
+  it("acepta un video cuyos bytes coinciden con el mimetype", () => {
+    expect(() =>
+      validarArchivos({
+        fotosNuevas: [],
+        fotosExistentesCount: 0,
+        video: [{ buffer: MP4_VALIDO, mimetype: "video/mp4", size: MP4_VALIDO.length }],
+      }),
+    ).not.toThrow();
+  });
+
+  it("rechaza con 400 un video con contenido que no es MP4 ni WEBM", () => {
+    expect(() =>
+      validarArchivos({
+        fotosNuevas: [],
+        fotosExistentesCount: 0,
+        video: [{ buffer: BASURA, mimetype: "video/mp4", size: BASURA.length }],
+      }),
+    ).toThrow(expect.objectContaining({ status: 400 }));
+  });
+});
+
+/**
+ * `parsearCategoriaId` es la guarda que evita que un `categoriaId` no numérico
+ * llegue a Prisma como `NaN` y explote como 500. Vacío/ausente sigue siendo
+ * "sin categoría" (`null`); un valor presente pero no entero es un 400 limpio.
+ */
+describe("parsearCategoriaId", () => {
+  it("trata ausente/nulo/vacío como sin categoría", () => {
+    expect(parsearCategoriaId(undefined)).toBeNull();
+    expect(parsearCategoriaId(null)).toBeNull();
+    expect(parsearCategoriaId("")).toBeNull();
+    expect(parsearCategoriaId("   ")).toBeNull();
+  });
+
+  it("acepta un entero válido (string o número)", () => {
+    expect(parsearCategoriaId("5")).toBe(5);
+    expect(parsearCategoriaId(5)).toBe(5);
+  });
+
+  it("rechaza con 400 un valor no numérico", () => {
+    expect(() => parsearCategoriaId("abc")).toThrow(expect.objectContaining({ status: 400 }));
+  });
+
+  it("rechaza con 400 un valor fraccionario (categoriaId es Int en el schema)", () => {
+    expect(() => parsearCategoriaId("1.5")).toThrow(expect.objectContaining({ status: 400 }));
   });
 });
 

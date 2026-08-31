@@ -19,9 +19,11 @@ const { requireAuth, authOpcional } = await import("./auth.middleware.js");
 
 beforeEach(() => {
   usuarioFindUniqueMock.mockReset();
-  // Por defecto el usuario del token existe: es el caso normal, y así los
-  // tests que no hablan de revocación no tienen que setearlo uno por uno.
-  usuarioFindUniqueMock.mockResolvedValue({ id: 1 });
+  // Por defecto el usuario del token existe y su versión de sesión es la 0 (la
+  // que backfillea la migración): es el caso normal, y así los tests que no
+  // hablan de revocación no tienen que setearlo uno por uno. Los tokens de esos
+  // tests se firman con `tokenVersion: 0` para coincidir.
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
 });
 
 function buildApp() {
@@ -57,7 +59,7 @@ describe("requireAuth", () => {
   });
 
   it("deja pasar si el token es válido", async () => {
-    const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+    const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "24h" });
     const res = await request(buildApp())
       .get("/protegido")
       .set("Authorization", `Bearer ${token}`);
@@ -66,21 +68,27 @@ describe("requireAuth", () => {
   });
 
   it("expone la identidad del admin en req.usuario a partir del payload del token", async () => {
-    const token = jwt.sign({ sub: 7, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+      expiresIn: "24h",
+    });
     const res = await request(buildApp())
       .get("/quien-soy")
       .set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
+    // `req.usuario` es solo la identidad — `tokenVersion` no se filtra a los
+    // controllers ni a la auditoría.
     expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test" });
   });
 
-  it("tolera tokens viejos sin email en el payload (email queda null, no rompe)", async () => {
-    // Tokens emitidos antes de agregar `email` al payload siguen siendo
-    // válidos hasta que expiren (7 días) — no deben tirar 401 ni romper.
-    const tokenViejo = jwt.sign({ sub: 3 }, "test-secret", { expiresIn: "7d" });
+  it("tolera tokens sin email en el payload (email queda null, no rompe)", async () => {
+    // Un token con `tokenVersion` válido pero sin el claim `email` (por ejemplo
+    // uno emitido antes de agregar `email` al payload) deja `email` en `null`,
+    // sin tirar 401 ni romper. Se firma con `tokenVersion: 0` para aislar la
+    // normalización del email de la revocación por versión.
+    const tokenSinEmail = jwt.sign({ sub: 3, tokenVersion: 0 }, "test-secret", { expiresIn: "24h" });
     const res = await request(buildApp())
       .get("/quien-soy")
-      .set("Authorization", `Bearer ${tokenViejo}`);
+      .set("Authorization", `Bearer ${tokenSinEmail}`);
     expect(res.status).toBe(200);
     expect(res.body.usuario).toEqual({ id: 3, email: null });
   });
@@ -105,7 +113,9 @@ describe("authOpcional", () => {
   });
 
   it("expone la identidad del admin cuando el token es válido", async () => {
-    const token = jwt.sign({ sub: 7, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+      expiresIn: "24h",
+    });
     const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test" });
@@ -154,7 +164,9 @@ describe("revocación de sesión: el usuario del token tiene que seguir existien
   // Borrar un admin desde /catalogo/admin/usuarios tiene que revocarle el
   // acceso YA, no dentro de 7 días cuando expire su JWT. El caso de uso típico
   // de borrar un usuario es exactamente ese.
-  const token = jwt.sign({ sub: 7, email: "borrado@yima.test" }, "test-secret", { expiresIn: "7d" });
+  const token = jwt.sign({ sub: 7, email: "borrado@yima.test", tokenVersion: 0 }, "test-secret", {
+    expiresIn: "24h",
+  });
 
   it("requireAuth responde 401 con un token válido de un usuario que ya no existe", async () => {
     usuarioFindUniqueMock.mockResolvedValue(null);
@@ -165,17 +177,17 @@ describe("revocación de sesión: el usuario del token tiene que seguir existien
     expect(res.body).toEqual({ error: "No autorizado." });
   });
 
-  it("requireAuth consulta solo el id (no trae passwordHash ni nada más)", async () => {
+  it("requireAuth consulta solo { id, tokenVersion } (no trae passwordHash ni nada más)", async () => {
     await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
 
     expect(usuarioFindUniqueMock).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { id: true },
+      select: { id: true, tokenVersion: true },
     });
   });
 
-  it("requireAuth deja pasar cuando el usuario del token sigue existiendo", async () => {
-    usuarioFindUniqueMock.mockResolvedValue({ id: 7 });
+  it("requireAuth deja pasar cuando el usuario del token sigue existiendo y su versión coincide", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0 });
 
     const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
 
@@ -206,6 +218,103 @@ describe("revocación de sesión: el usuario del token tiene que seguir existien
     // en un logout masivo — y cualquier operación real va a fallar igual
     // contra esa misma base con su propio error.
     usuarioFindUniqueMock.mockRejectedValue(new Error("DB caída"));
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("revocación de sesión por versión de token (tokenVersion)", () => {
+  // Cambiar la contraseña de un admin incrementa su `tokenVersion` en la base;
+  // el JWT lleva la versión con la que se emitió. Si el token quedó atrás
+  // (versión anterior a la de la base), la sesión está revocada — es lo que
+  // hace que rotar la contraseña cierre en el acto todas las sesiones ya
+  // abiertas, no dentro de 24 h cuando expire cada token.
+
+  it("requireAuth deja pasar cuando la versión del token coincide con la de la base", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 3 });
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 3 }, "test-secret", {
+      expiresIn: "24h",
+    });
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("requireAuth trae { id, tokenVersion } en UNA sola consulta", async () => {
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+      expiresIn: "24h",
+    });
+
+    await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(usuarioFindUniqueMock).toHaveBeenCalledTimes(1);
+    expect(usuarioFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { id: true, tokenVersion: true },
+    });
+  });
+
+  it("requireAuth responde 401 si la versión del token quedó atrás de la de la base", async () => {
+    // La contraseña se rotó después de emitir este token: la base ya va por la
+    // versión 4 y el token sigue en la 3.
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 4 });
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 3 }, "test-secret", {
+      expiresIn: "24h",
+    });
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "No autorizado." });
+  });
+
+  it("requireAuth revoca un token VIEJO sin claim tokenVersion frente al 0 de la base (fail-closed deliberado)", async () => {
+    // Los tokens emitidos antes de esta feature no traen el claim. NO coinciden
+    // con el 0 con que la migración backfilleó la columna, así que quedan
+    // revocados: el deploy fuerza un único re-login e invalida todo token viejo
+    // en circulación.
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0 });
+    const tokenViejo = jwt.sign({ sub: 7, email: "admin@yima.test" }, "test-secret", { expiresIn: "24h" });
+
+    const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${tokenViejo}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "No autorizado." });
+  });
+
+  it("authOpcional degrada a anónimo (200, sin usuario) si la versión del token quedó atrás — NUNCA corta", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 4 });
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 3 }, "test-secret", {
+      expiresIn: "24h",
+    });
+
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("authOpcional también revoca un token viejo sin claim tokenVersion (degrada a anónimo)", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0 });
+    const tokenViejo = jwt.sign({ sub: 7, email: "admin@yima.test" }, "test-secret", { expiresIn: "24h" });
+
+    const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${tokenViejo}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.usuario).toBeNull();
+  });
+
+  it("una versión desincronizada NO revoca si la consulta falla (fail-open ante error de DB, no ante versión distinta)", async () => {
+    // El fail-open cubre SOLO el error de la consulta. Una versión distinta con
+    // la consulta respondiendo bien sí revoca — son dos cosas separadas.
+    usuarioFindUniqueMock.mockRejectedValue(new Error("DB caída"));
+    const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 3 }, "test-secret", {
+      expiresIn: "24h",
+    });
 
     const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
 

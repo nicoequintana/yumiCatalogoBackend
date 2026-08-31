@@ -1,6 +1,8 @@
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
+import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
+import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 
 /**
@@ -234,6 +236,17 @@ export async function guardarImagen(req, res, next) {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) throw httpError(404, "Categoría no encontrada.");
     if (!req.file) throw httpError(400, "No llegó ninguna imagen.");
+
+    // Defensa en profundidad (content sniffing): el `fileFilter` de multer ya
+    // validó el mimetype declarado contra `ALLOWED_PHOTO_MIMES`, pero es
+    // falsificable. Se confirma que los BYTES reales sean los de una imagen
+    // permitida antes de subir nada a Cloudinary.
+    if (
+      !ALLOWED_PHOTO_MIMES.includes(req.file.mimetype) ||
+      !contenidoCoincideConMime(req.file.buffer, req.file.mimetype)
+    ) {
+      throw httpError(400, "El contenido de la imagen no corresponde a un archivo JPG, PNG o WEBP válido.");
+    }
 
     const actual = await prisma.categoria.findUnique({ where: { id } });
     if (!actual) throw httpError(404, "Categoría no encontrada.");

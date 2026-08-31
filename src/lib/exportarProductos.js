@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { COLUMNAS_ACTUALIZACION, NOMBRE_HOJA } from "./importProductos.js";
 import { aplicarValidaciones } from "./plantillaProductos.js";
+import { sanitizarCelda } from "./sanitizarCelda.js";
 
 /**
  * Exportación del catálogo a `.xlsx`, para el flujo de ACTUALIZACIÓN masiva
@@ -53,8 +54,11 @@ export function productoAFila(producto) {
     valor === null || valor === undefined ? null : Number(valor);
 
   return [
+    // El `sku` NO se sanitiza: es la clave de matcheo del round-trip con
+    // `POST /products/actualizar-masivo`, y un apóstrofo antepuesto rompería el
+    // matcheo. El `nombre` sí, porque es texto libre que abre Excel.
     producto.sku ?? "",
-    producto.nombre ?? "",
+    sanitizarCelda(producto.nombre ?? ""),
     numeroONulo(producto.costo),
     numeroONulo(producto.coeficiente) ?? 1,
     producto.stock ?? 0,

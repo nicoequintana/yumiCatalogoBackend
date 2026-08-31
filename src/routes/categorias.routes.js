@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import * as categoriasController from "../controllers/categorias.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
+import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTO_BYTES, ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 
 const router = Router();
@@ -30,11 +31,21 @@ const uploadImagen = multer({
   },
 });
 
+// Techo de lectura pública (600/5min por IP), mismo criterio que los GET
+// públicos de producto: este listado no tenía ningún límite y pega a la base
+// en cada carga de `/coleccion` y de la home. 600 es holgadísimo para
+// navegación humana real y corta el flood/scraping.
+const limitadorLecturaPublica = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
+});
+
 // GET es PÚBLICO a propósito: el listado de categorías alimenta los filtros
 // de la página pública `/coleccion` (`Coleccion.jsx`) y la sección "Explorá
 // por categoría" de la home, las dos navegables sin login. Todas las rutas de
 // escritura son operaciones del panel admin y van protegidas.
-router.get("/", categoriasController.listar);
+router.get("/", limitadorLecturaPublica, categoriasController.listar);
 router.post("/", requireAuth, categoriasController.crear);
 
 router.put("/:id", requireAuth, categoriasController.actualizar);

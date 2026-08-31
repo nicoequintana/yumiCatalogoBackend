@@ -99,6 +99,11 @@ export async function actualizar(req, res, next) {
     if (password) {
       validarPassword(password);
       data.passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+      // Rotar la contraseña invalida TODOS los JWT emitidos antes del cambio:
+      // `requireAuth` compara la versión del token contra esta columna y revoca
+      // si difieren (ver `middlewares/auth.middleware.js`). Solo se incrementa
+      // al cambiar la contraseña — cambiar el email no debe cerrar sesiones.
+      data.tokenVersion = { increment: 1 };
     }
 
     const usuario = await prisma.usuario.update({ where: { id }, data });

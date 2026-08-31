@@ -93,6 +93,23 @@ describe("GET /api/products - filtros de listado", () => {
     });
   });
 
+  it("escapa los comodines de LIKE del término (% no debe viajar como wildcard)", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    // `%25` es un `%` codificado en la query string.
+    await request(buildApp()).get("/api/products?search=50%25OFF");
+
+    // Sin escape, `contains: "50%OFF"` matchearía cualquier producto en la base
+    // porque el `%` es un comodín. El término tiene que llegar a Prisma con el
+    // metacaracter neutralizado como clase de caracteres.
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where.OR).toEqual([
+      { nombre: { contains: "50[%]OFF" } },
+      { sku: { contains: "50[%]OFF" } },
+      { categoria: { nombre: { contains: "50[%]OFF" } } },
+    ]);
+  });
+
   it("search por SKU encuentra el producto aunque no coincida el nombre", async () => {
     findManyMock.mockResolvedValue([]);
 

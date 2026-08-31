@@ -62,17 +62,21 @@ app.use(
     // `sameorigin` que trae helmet, porque este backend no enmarca nada.
     frameguard: { action: "deny" },
 
-    // HSTS DESACTIVADO A PROPÓSITO — no porque no convenga, sino porque es
-    // una decisión de deploy sobre el dominio entero (y el default de helmet
-    // incluye `includeSubDomains`, que afectaría a cualquier subdominio
-    // vecino). Activarlo va junto con la decisión equivalente en nginx, no
-    // por separado desde el código de la API.
+    // HSTS DESACTIVADO EN ESTE SERVICIO a propósito: la cabecera
+    // `Strict-Transport-Security` la emite el nginx del frontend (ver
+    // `frontend/nginx.conf`), que es el borde HTTPS del dominio y abarca sus
+    // subdominios con `includeSubDomains`. Emitirla también desde acá sería
+    // redundante y dividiría en dos lugares una decisión de dominio único.
     hsts: false,
   }),
 );
 
 app.use(cors({ origin: CORS_ORIGIN }));
-app.use(express.json());
+// Límite de body EXPLÍCITO en vez del default implícito de 100kb: fija el
+// contrato y lo vuelve inmune a un cambio de default de Express. 100kb cubre de
+// sobra a los endpoints públicos de escritura — una orden con el máximo de 100
+// items pesa unos pocos KB, y `POST /eventos` y el login son cuerpos mínimos.
+app.use(express.json({ limit: "100kb" }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });

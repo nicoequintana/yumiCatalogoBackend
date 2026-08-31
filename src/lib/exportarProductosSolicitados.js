@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { sanitizarCelda } from "./sanitizarCelda.js";
 
 /**
  * Exportación a `.xlsx` de la grilla de productos solicitados
@@ -40,7 +41,9 @@ const SIN_SKU = "—";
 export function filaSolicitada(solicitado) {
   return [
     solicitado.sku ?? SIN_SKU,
-    solicitado.nombre ?? "",
+    // `nombre` es el snapshot `nombreProducto`, texto libre: se fuerza a texto
+    // para que un `=...` no se ejecute como fórmula al abrir el reporte.
+    sanitizarCelda(solicitado.nombre ?? ""),
     solicitado.unidades ?? 0,
     solicitado.ordenes ?? 0,
     Number(solicitado.facturacion ?? 0),

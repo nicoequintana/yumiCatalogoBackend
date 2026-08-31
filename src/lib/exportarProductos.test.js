@@ -64,6 +64,22 @@ describe("productoAFila", () => {
   it("tolera un producto sin stock declarado", () => {
     expect(productoAFila({ sku: "X", nombre: "Y", costo: 1 })).toEqual(["X", "Y", 1, 1, 0]);
   });
+
+  // Neutralización de inyección de fórmulas: un nombre que empieza con `=` (o
+  // `+`, `-`, `@`, TAB, CR) se ejecutaría como fórmula al abrir el .xlsx.
+  it("antepone un apóstrofo a un nombre que parece una fórmula", () => {
+    const fila = productoAFila(productoDePrueba({ nombre: "=HYPERLINK(\"http://evil\")" }));
+
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("nombre")]).toBe("'=HYPERLINK(\"http://evil\")");
+  });
+
+  // El `sku` es la CLAVE de matcheo del round-trip: sanitizarlo cambiaría el
+  // valor y la re-importación no encontraría el producto. Se deja intacto.
+  it("no sanitiza el sku, que es la clave de matcheo", () => {
+    const fila = productoAFila(productoDePrueba({ sku: "-RARO-1" }));
+
+    expect(fila[COLUMNAS_ACTUALIZACION.indexOf("sku")]).toBe("-RARO-1");
+  });
 });
 
 describe("generarExportacion", () => {

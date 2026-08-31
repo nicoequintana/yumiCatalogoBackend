@@ -8,6 +8,7 @@ import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
+import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { mapOrden } from "./ordenes.mapper.js";
@@ -274,8 +275,10 @@ function construirFiltrosOrdenes(query) {
   // Sin `mode: "insensitive"` a propósito: el conector mssql de Prisma no lo
   // soporta y la collation por defecto de esta base ya es case-insensitive
   // (mismo criterio que `products.controller.js`'s `construirFiltrosListado`).
+  // Los metacaracteres de LIKE se escapan antes del `contains` — ver
+  // `lib/escaparLike.js`.
   if (typeof query.nombre === "string" && query.nombre !== "") {
-    filtroCliente.nombre = { contains: query.nombre };
+    filtroCliente.nombre = { contains: escaparLike(query.nombre) };
   }
   if (Object.keys(filtroCliente).length > 0) where.cliente = filtroCliente;
 

@@ -63,6 +63,10 @@ function buildApp() {
 const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
+// Buffer con firma JPEG real: la validación de magic bytes del controller
+// rechaza contenido que no corresponda al mimetype declarado.
+const JPEG_VALIDO = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+
 beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
@@ -228,7 +232,7 @@ describe("imagen de categoría", () => {
     const res = await request(buildApp())
       .put("/api/categorias/1/imagen")
       .set("Authorization", authHeader)
-      .attach("imagen", Buffer.from("bytes-jpeg"), {
+      .attach("imagen", JPEG_VALIDO, {
         filename: "cocina.jpg",
         contentType: "image/jpeg",
       });
@@ -238,6 +242,29 @@ describe("imagen de categoría", () => {
     // Fuera de producción la carpeta va prefijada — ver el test de abajo.
     expect(subirArchivoMock).toHaveBeenCalledWith(expect.any(Buffer), "image", "test/categorias");
     expect(eliminarArchivoMock).toHaveBeenCalledWith("categorias/vieja", "image");
+  });
+
+  it("rechaza contenido que no es una imagen aunque declare image/jpeg (magic bytes)", async () => {
+    // Un `.html`/ejecutable rotulado image/jpeg pasa el filtro de mimetype de
+    // multer; el content sniffing del controller tiene que frenarlo ANTES de
+    // subir nada a Cloudinary.
+    categoriaMock.findUnique.mockResolvedValue({ id: 1, nombre: "Cocina" });
+    subirArchivoMock.mockResolvedValue({
+      cloudinaryPublicId: "categorias/nueva",
+      cloudinaryResourceType: "image",
+      url: "https://cdn.test/nueva.jpg",
+    });
+
+    const res = await request(buildApp())
+      .put("/api/categorias/1/imagen")
+      .set("Authorization", authHeader)
+      .attach("imagen", Buffer.from("<script>alert(1)</script>", "utf8"), {
+        filename: "cocina.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(400);
+    expect(subirArchivoMock).not.toHaveBeenCalled();
   });
 
   it("rechaza un formato no permitido con 400, no con 500", async () => {

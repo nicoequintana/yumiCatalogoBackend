@@ -179,6 +179,18 @@ model Usuario {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String
+  /// Versión de sesión del usuario. Se incrementa al cambiar la contraseña
+  /// para invalidar TODOS los JWT emitidos antes del cambio: el login copia
+  /// este número como claim `tokenVersion` en el token, y `requireAuth`
+  /// (src/middlewares/auth.middleware.js) lo compara contra esta columna en
+  /// cada request. Si difieren, la sesión está revocada.
+  ///
+  /// `@default(0)` hace que el ADD COLUMN sea seguro para las filas existentes
+  /// (backfill implícito a 0) y evita romper el `prisma migrate deploy` que el
+  /// Dockerfile corre al arrancar. Un token viejo emitido antes de esta feature
+  /// no trae el claim y por eso NO coincide con este 0 — queda revocado, que es
+  /// el comportamiento fail-closed buscado.
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
 }
 

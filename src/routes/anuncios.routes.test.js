@@ -47,7 +47,9 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+  expiresIn: "7d",
+});
 const authHeader = `Bearer ${token}`;
 
 const FILA = { id: 1, texto: "Envíos a todo el país", activo: true, orden: 0 };
@@ -55,7 +57,7 @@ const FILA = { id: 1, texto: "Envíos a todo el país", activo: true, orden: 0 }
 beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
-  usuarioFindUniqueMock.mockResolvedValue({ id: 1 });
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
   anuncioMock.findMany.mockResolvedValue([FILA]);
   anuncioMock.count.mockResolvedValue(0);
   anuncioMock.aggregate.mockResolvedValue({ _max: { orden: null } });

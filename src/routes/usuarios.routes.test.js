@@ -15,12 +15,16 @@ const deleteManyMock = vi.fn();
 const countMock = vi.fn();
 const auditCreateMock = vi.fn();
 
-// `requireAuth` ahora verifica que el usuario del token exista, con un
-// `findUnique` de forma fija (`select: { id: true }`). Se rutea a un mock
-// propio para que los `mockResolvedValueOnce` de los tests del controller no
-// se los consuma el middleware.
+// `requireAuth` verifica la sesión del token con un `findUnique` de forma fija
+// (`select: { id: true, tokenVersion: true }`). Se rutea a un mock propio para
+// que los `mockResolvedValueOnce` de los tests del controller no se los consuma
+// el middleware.
 function rutearFindUnique(args) {
-  const esChequeoDeAuth = args?.select && Object.keys(args.select).length === 1 && args.select.id === true;
+  const esChequeoDeAuth =
+    args?.select &&
+    args.select.id === true &&
+    args.select.tokenVersion === true &&
+    Object.keys(args.select).length === 2;
   return esChequeoDeAuth ? authFindUniqueMock(args) : findUniqueMock(args);
 }
 
@@ -55,7 +59,9 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+  expiresIn: "24h",
+});
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
@@ -68,8 +74,9 @@ beforeEach(() => {
   countMock.mockReset();
   auditCreateMock.mockReset();
   auditCreateMock.mockResolvedValue({ id: 1 });
-  // El admin del token existe por defecto: es el caso normal de toda la suite.
-  authFindUniqueMock.mockResolvedValue({ id: 1 });
+  // El admin del token existe y su versión de sesión coincide con la del token
+  // (0): es el caso normal de toda la suite.
+  authFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
 });
 
 describe("GET /api/usuarios", () => {
@@ -189,6 +196,37 @@ describe("PUT /api/usuarios/:id", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("El email no tiene un formato válido.");
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("incrementa tokenVersion al cambiar la contraseña (revoca las sesiones ya abiertas)", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "otro@test.com", passwordHash: "hash-viejo", tokenVersion: 1 });
+    updateMock.mockResolvedValue({ id: 2, email: "otro@test.com", createdAt: new Date("2026-01-01") });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ password: "clave-nueva-123" });
+
+    expect(res.status).toBe(200);
+    const dataPasada = updateMock.mock.calls[0][0].data;
+    // Rotar la contraseña invalida todos los JWT emitidos antes del cambio.
+    expect(dataPasada.tokenVersion).toEqual({ increment: 1 });
+    expect(dataPasada.passwordHash).toBeDefined();
+  });
+
+  it("NO incrementa tokenVersion cuando el update es solo de email (cambiar el email no cierra sesiones)", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "viejo@test.com", passwordHash: "hash", tokenVersion: 1 });
+    findUniqueMock.mockResolvedValueOnce(null); // chequeo de email duplicado
+    updateMock.mockResolvedValue({ id: 2, email: "nuevo@test.com", createdAt: new Date("2026-01-01") });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@test.com" });
+
+    expect(res.status).toBe(200);
+    const dataPasada = updateMock.mock.calls[0][0].data;
+    expect(dataPasada.tokenVersion).toBeUndefined();
   });
 });
 

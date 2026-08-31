@@ -18,7 +18,12 @@
 // Variables sin las cuales el backend no puede funcionar de verdad:
 // - DATABASE_URL: `lib/prisma.js` construye el adapter con ella al importarse.
 // - JWT_SECRET: sin esto, `jwt.sign` en el login tira y nadie puede entrar al
-//   admin (y un secreto vacío haría falsificable cualquier token).
+//   admin (y un secreto vacío haría falsificable cualquier token). Además de
+//   estar presente, tiene que ser FUERTE: con HS256 toda la autenticación del
+//   admin depende de su entropía, así que un secreto corto o predecible es
+//   crackeable offline (hashcat) y equivale a un admin abierto. Por eso se
+//   valida también su longitud mínima (`JWT_SECRET_MIN_BYTES`), no solo su
+//   presencia.
 // - CLOUDINARY_*: storage principal de fotos y video (ver CLAUDE.md).
 // - SMTP_USER / SMTP_PASSWORD: sin credenciales de Gmail no sale ninguna
 //   notificación de órdenes. Van acá y no en una validación perezosa por el
@@ -33,6 +38,12 @@
 //   con esta variable vacía en EasyPanel publicaría un sitemap entero
 //   apuntando a `localhost` sin un solo error en los logs — justo el modo de
 //   falla silenciosa que esta validación existe para evitar.
+// - BACKEND_PUBLIC_URL: mismo criterio que FRONTEND_URL. `lib/urlsPublicas.js`
+//   cae a `http://localhost:4000` si falta, y de ahí sale la URL pública del
+//   backend que `seo.controller.js` inyecta en el HTML server-side para
+//   crawlers. Sin esta variable, un deploy arrancaría verde con el fallback
+//   localhost y emitiría enlaces internos rotos hacia `localhost` sin un solo
+//   error en los logs.
 //
 // Las de Google Drive quedan afuera aposta: son legado de solo lectura y solo
 // hacen falta mientras existan productos con medios sin migrar, así que un
@@ -47,7 +58,14 @@ export const VARIABLES_REQUERIDAS = [
   "SMTP_PASSWORD",
   "MAIL_ADMIN_DESTINO",
   "FRONTEND_URL",
+  "BACKEND_PUBLIC_URL",
 ];
+
+// Longitud mínima, en bytes, del JWT_SECRET. Con HS256 la seguridad de toda la
+// sesión del admin depende de la entropía del secreto; por debajo de 32 bytes
+// es crackeable offline. 32 bytes es el tamaño de bloque de SHA-256, el piso
+// razonable para la clave de un HMAC-SHA256.
+export const JWT_SECRET_MIN_BYTES = 32;
 
 /**
  * Devuelve el listado de variables requeridas que faltan o están vacías.
@@ -63,6 +81,27 @@ export function variablesFaltantes(entorno = process.env) {
     const valor = entorno[nombre];
     return valor === undefined || valor === null || String(valor).trim() === "";
   });
+}
+
+/**
+ * Indica si JWT_SECRET está presente pero es demasiado corto para HS256.
+ *
+ * Un secreto ausente o vacío NO se reporta acá: ya lo cubre
+ * `variablesFaltantes` como faltante, y duplicarlo en el mensaje de arranque
+ * confundiría el diagnóstico ("falta" y "es débil" a la vez). La cuenta es en
+ * BYTES, no en caracteres: un secreto con caracteres multibyte tiene más bytes
+ * de entropía que su largo en caracteres, y es la longitud en bytes la que le
+ * importa al HMAC.
+ *
+ * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @returns {boolean}
+ */
+export function jwtSecretDebil(entorno = process.env) {
+  const valor = entorno.JWT_SECRET;
+  if (valor === undefined || valor === null || String(valor).trim() === "") {
+    return false;
+  }
+  return Buffer.byteLength(String(valor), "utf8") < JWT_SECRET_MIN_BYTES;
 }
 
 /**
@@ -84,7 +123,35 @@ export function mensajeDeFaltantes(faltantes) {
 }
 
 /**
- * Valida el entorno y corta el arranque si falta algo.
+ * Arma el mensaje de arranque combinando TODOS los problemas detectados —
+ * variables faltantes y un JWT_SECRET débil — en un solo texto. Mismo criterio
+ * que `mensajeDeFaltantes`: reportar todo junto para no obligar a un ciclo de
+ * reinicio por problema.
+ *
+ * @param {object} problemas
+ * @param {string[]} [problemas.faltantes=[]]
+ * @param {boolean} [problemas.secretoDebil=false]
+ * @returns {string}
+ */
+export function mensajeDeProblemas({ faltantes = [], secretoDebil = false } = {}) {
+  const bloques = [];
+  if (faltantes.length > 0) {
+    bloques.push(mensajeDeFaltantes(faltantes));
+  }
+  if (secretoDebil) {
+    bloques.push(
+      [
+        `No se puede arrancar el backend: JWT_SECRET es demasiado corto (necesita al menos ${JWT_SECRET_MIN_BYTES} bytes).`,
+        "Con HS256 un secreto corto es crackeable offline y deja el admin abierto.",
+        "Generá uno nuevo con `openssl rand -base64 48` y volvé a desplegar.",
+      ].join("\n"),
+    );
+  }
+  return bloques.join("\n\n");
+}
+
+/**
+ * Valida el entorno y corta el arranque si falta algo o si JWT_SECRET es débil.
  *
  * `exit` y `log` se inyectan para poder testear el camino de falla sin matar
  * el proceso de test.
@@ -97,8 +164,9 @@ export function mensajeDeFaltantes(faltantes) {
  */
 export function validarEntorno({ entorno = process.env, exit = process.exit, log = console.error } = {}) {
   const faltantes = variablesFaltantes(entorno);
-  if (faltantes.length > 0) {
-    log(mensajeDeFaltantes(faltantes));
+  const secretoDebil = jwtSecretDebil(entorno);
+  if (faltantes.length > 0 || secretoDebil) {
+    log(mensajeDeProblemas({ faltantes, secretoDebil }));
     exit(1);
   }
   return faltantes;

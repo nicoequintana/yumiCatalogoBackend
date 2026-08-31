@@ -4,7 +4,12 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
 import { httpError } from "../lib/httpError.js";
 
-const JWT_EXPIRES_IN = "7d";
+// Ventana de vida del token. Se bajó de 7 días a 24 horas para acotar la
+// exposición de un token robado que pase inadvertido: la revocación por
+// `tokenVersion` cierra las sesiones en el acto cuando el admin cambia su
+// contraseña, pero no cubre un robo silencioso donde la víctima no cambia nada.
+// Contra ese caso, la única defensa es que el token caduque pronto.
+const JWT_EXPIRES_IN = "24h";
 const SALT_ROUNDS = 10;
 
 // Hash señuelo contra el que se compara cuando el email NO existe.
@@ -46,9 +51,16 @@ export async function login(req, res, next) {
     // la DB en cada request. Solo datos de identificación — nunca el
     // passwordHash ni ningún otro secreto: el payload de un JWT va firmado,
     // no cifrado, y cualquiera con el token puede leerlo.
-    const token = jwt.sign({ sub: usuario.id, email: usuario.email }, process.env.JWT_SECRET, {
-      expiresIn: JWT_EXPIRES_IN,
-    });
+    //
+    // `tokenVersion` es la versión de sesión con la que se emite el token.
+    // `requireAuth` la compara contra la columna homónima de `Usuario`: cuando
+    // el admin cambia su contraseña, la columna se incrementa y todos los
+    // tokens emitidos antes quedan revocados. NO es un secreto — es un contador.
+    const token = jwt.sign(
+      { sub: usuario.id, email: usuario.email, tokenVersion: usuario.tokenVersion },
+      process.env.JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN },
+    );
     res.json({ token });
   } catch (err) {
     next(err);

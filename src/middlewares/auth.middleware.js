@@ -25,6 +25,12 @@ function identidadDesdeToken(req) {
     return {
       id: Number.isInteger(id) ? id : null,
       email: typeof payload?.email === "string" ? payload.email : null,
+      // Versión de sesión con la que se emitió el token. Numérica del payload,
+      // o `null` si el token es viejo (emitido antes de esta feature) y no la
+      // trae — un `null` NO coincide con el 0 de la base, así que `sesionRevocada`
+      // lo trata como revocado. La normalización vive acá para que `requireAuth`
+      // y `authOpcional` reciban exactamente la misma forma.
+      tokenVersion: Number.isInteger(payload?.tokenVersion) ? payload.tokenVersion : null,
     };
   } catch {
     return null;
@@ -32,35 +38,50 @@ function identidadDesdeToken(req) {
 }
 
 /**
- * ¿El usuario del token fue borrado de la base?
+ * ¿La sesión del token está revocada?
  *
- * Existe para que borrar un admin desde `/catalogo/admin/usuarios` le revoque
- * el acceso YA, no dentro de 7 días cuando expire su JWT — el caso de uso
- * típico de borrar un usuario es exactamente quitarle el acceso. Sin esto,
- * `requireAuth` nunca consultaba la base y un admin eliminado seguía operando
- * con todos los permisos hasta que su token venciera.
+ * Dos motivos de revocación, ambos resueltos con UNA sola consulta que trae
+ * `{ id, tokenVersion }` del usuario del token:
+ *
+ *  (a) EL USUARIO YA NO EXISTE (`fila === null`). Borrar un admin desde
+ *      `/catalogo/admin/usuarios` le corta el acceso YA, no dentro de 24 h
+ *      cuando expire su JWT — el caso de uso típico de borrar un usuario es
+ *      exactamente ese. Sin esto, `requireAuth` nunca consultaba la base y un
+ *      admin eliminado seguía operando con todos los permisos hasta expirar.
+ *
+ *  (b) LA VERSIÓN DEL TOKEN QUEDÓ ATRÁS. Al cambiar la contraseña, la columna
+ *      `tokenVersion` de `Usuario` se incrementa; todos los tokens emitidos
+ *      antes llevan una versión anterior y quedan invalidados en el acto. Antes
+ *      no había forma de revocar por cambio de contraseña: la única revocación
+ *      era borrar el usuario. La comparación es ESTRICTA: un token viejo SIN el
+ *      claim (normalizado a `null`) no coincide con el `0` con que la migración
+ *      backfilleó la columna, así que también queda revocado. Eso es
+ *      DELIBERADO y fail-closed — el primer deploy fuerza un único re-login e
+ *      invalida cualquier token viejo en circulación.
  *
  * Costo consciente: una consulta por request CON token (`findUnique` por PK
- * trayendo solo `{ id }` sobre una tabla de un puñado de filas). Las requests
- * anónimas del catálogo público no pagan nada — sin token no hay nada que
- * verificar. Se descartó un `tokenVersion` en `Usuario`: exige migración y
- * más código para el mismo resultado con este volumen de tráfico admin.
+ * trayendo solo `{ id, tokenVersion }` sobre una tabla de un puñado de filas).
+ * Las requests anónimas del catálogo público no pagan nada — sin token no hay
+ * nada que verificar.
  *
- * FAIL-OPEN deliberado: solo la respuesta definitiva de Prisma (`null` = la
- * fila no existe) revoca. Si la consulta falla (base caída, timeout), se deja
- * pasar: cortar acá convertiría un hipo de DB en un logout masivo, y la
- * operación real va a fallar igual contra esa misma base con su propio error.
- * Un `id` no numérico (token viejo con `sub` raro) tampoco revoca — no hay
- * fila que buscar y el login real siempre firma `sub` con el id numérico.
+ * FAIL-OPEN deliberado, SOLO ante error de la consulta: si Prisma no contesta
+ * (base caída, timeout), se deja pasar. Cortar acá convertiría un hipo de DB en
+ * un logout masivo, y la operación real va a fallar igual contra esa misma base
+ * con su propio error. Ojo con la distinción: una versión distinta con la
+ * consulta respondiendo bien SÍ revoca — el fail-open cubre el ERROR de la
+ * consulta, nunca una versión desincronizada. Un `id` no numérico (token viejo
+ * con `sub` raro) tampoco revoca: no hay fila que buscar y el login real
+ * siempre firma `sub` con el id numérico.
  */
-async function usuarioFueBorrado(usuario) {
+async function sesionRevocada(usuario) {
   if (!Number.isInteger(usuario.id)) return false;
   try {
     const fila = await prisma.usuario.findUnique({
       where: { id: usuario.id },
-      select: { id: true },
+      select: { id: true, tokenVersion: true },
     });
-    return fila === null;
+    if (fila === null) return true;
+    return usuario.tokenVersion !== fila.tokenVersion;
   } catch {
     return false;
   }
@@ -77,24 +98,31 @@ async function usuarioFueBorrado(usuario) {
  * resuelve contra la DB — así ninguna request admin paga un round-trip extra
  * solo para poder loguear.
  *
- * Tokens emitidos ANTES de que el login agregara el claim `email` siguen
- * siendo válidos hasta que expiren (7 días): en ese caso `email` queda `null`
- * en vez de romper la request. Mismo criterio con un `sub` no numérico — se
- * normaliza a `null` en vez de propagar un `NaN` hacia la columna `usuarioId`.
+ * Tokens emitidos ANTES de que el login agregara el claim `email`, si todavía
+ * no expiraron, dejan `email` en `null` en vez de romper la request. Mismo
+ * criterio con un `sub` no numérico — se normaliza a `null` en vez de propagar
+ * un `NaN` hacia la columna `usuarioId`. (Un token tan viejo que tampoco trae
+ * `tokenVersion` queda revocado por otro motivo: ver `sesionRevocada`.)
+ *
+ * `req.usuario` se expone acotado a `{ id, email }`: la identidad que consume
+ * la auditoría. `tokenVersion` es un detalle interno del mecanismo de sesión y
+ * no forma parte de la identidad, así que no se filtra a los controllers ni a
+ * `logAudit`.
  *
  * El comportamiento de 401 no cambia: token ausente, inválido o expirado
  * responde `401` directo, sin llamar a `next()`. Un token válido de un usuario
- * BORRADO también es 401 (ver `usuarioFueBorrado`) — mismo cuerpo que un token
- * inválido, para no confirmar desde afuera si una cuenta existió.
+ * BORRADO —o con una versión de sesión revocada— también es 401 (ver
+ * `sesionRevocada`), con el mismo cuerpo que un token inválido, para no
+ * confirmar desde afuera si una cuenta existió.
  */
 export async function requireAuth(req, res, next) {
   const usuario = identidadDesdeToken(req);
 
-  if (!usuario || (await usuarioFueBorrado(usuario))) {
+  if (!usuario || (await sesionRevocada(usuario))) {
     return res.status(401).json({ error: "No autorizado." });
   }
 
-  req.usuario = usuario;
+  req.usuario = { id: usuario.id, email: usuario.email };
   next();
 }
 
@@ -114,7 +142,7 @@ export async function requireAuth(req, res, next) {
  * anónimo. Estos endpoints son el catálogo público: un visitante sin sesión es
  * el caso NORMAL, no el caso de error. Fallar la request por una credencial
  * que el llamador no necesitaba convierte un token viejo en una pantalla rota
- * — el admin cuyo token de 7 días venció mientras miraba `/coleccion` vería el
+ * — el admin cuyo token de 24 h venció mientras miraba `/coleccion` vería el
  * catálogo público caído en vez de, simplemente, el catálogo público. "No pude
  * probar quién sos" y "sos anónimo" son la misma respuesta en un endpoint
  * público.
@@ -128,12 +156,15 @@ export async function requireAuth(req, res, next) {
  */
 export async function authOpcional(req, _res, next) {
   const usuario = identidadDesdeToken(req);
-  // El chequeo de existencia también aplica acá: sin él, el token de un admin
-  // BORRADO seguiría marcando la request como admin (`esRequestDeAdmin`) y
-  // mostrando productos ocultos hasta expirar. Pero el resultado nunca corta
-  // la request: "tu usuario ya no existe" degrada a anónimo, igual que un
-  // token vencido — este es el catálogo público.
-  if (usuario && !(await usuarioFueBorrado(usuario))) req.usuario = usuario;
+  // El chequeo de revocación también aplica acá: sin él, el token de un admin
+  // BORRADO —o con una versión de sesión revocada— seguiría marcando la request
+  // como admin (`esRequestDeAdmin`) y mostrando productos ocultos hasta
+  // expirar. Pero el resultado nunca corta la request: "tu sesión ya no vale"
+  // degrada a anónimo, igual que un token vencido — este es el catálogo
+  // público. `req.usuario` se acota a `{ id, email }` igual que en `requireAuth`.
+  if (usuario && !(await sesionRevocada(usuario))) {
+    req.usuario = { id: usuario.id, email: usuario.email };
+  }
   next();
 }
 

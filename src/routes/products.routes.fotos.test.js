@@ -6,6 +6,10 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
+// Buffer con firma JPEG real: la validación de magic bytes (`validarArchivos`)
+// rechaza cualquier contenido que no corresponda al mimetype declarado.
+const JPEG_VALIDO = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+
 const updateMock = vi.fn();
 const findUniqueMock = vi.fn();
 const findUniqueOrThrowMock = vi.fn();
@@ -140,7 +144,7 @@ describe("PUT /products/:id — orden explícito de fotos", () => {
           { tipo: "existente", id: 11 },
         ]),
       )
-      .attach("fotos", Buffer.from("fake-jpeg"), { filename: "portada.jpg", contentType: "image/jpeg" })
+      .attach("fotos", JPEG_VALIDO, { filename: "portada.jpg", contentType: "image/jpeg" })
       .expect(200);
 
     // La nueva se lleva el orden 0; las existentes se corren a 1 y 2.
@@ -157,7 +161,7 @@ describe("PUT /products/:id — orden explícito de fotos", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Lámpara")
       .field("fotosExistentes", JSON.stringify([10, 11]))
-      .attach("fotos", Buffer.from("fake-jpeg"), { filename: "extra.jpg", contentType: "image/jpeg" })
+      .attach("fotos", JPEG_VALIDO, { filename: "extra.jpg", contentType: "image/jpeg" })
       .expect(200);
 
     expect(ordenesAsignados()).toEqual({ 10: 0, 11: 1 });

@@ -7,6 +7,7 @@ import { logAudit } from "../lib/logAudit.js";
 import { calcularPrecio } from "../lib/precios.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { httpError } from "../lib/httpError.js";
+import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import {
   LIST_SELECT,
@@ -21,6 +22,7 @@ import {
   parseEspecificaciones,
   parseFotosExistentes,
   parseListas,
+  parsearCategoriaId,
   parsearOrdenFotos,
   validarArchivos,
   validarCamposBase,
@@ -201,7 +203,10 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   if (query.destacado !== undefined) where.destacado = true;
 
   if (typeof query.search === "string" && query.search.trim() !== "") {
-    const termino = query.search.trim();
+    // Se escapan los metacaracteres de LIKE (`%`, `_`, `[`) antes de armar el
+    // `contains`: Prisma parametriza el valor pero NO los escapa, así que sin
+    // esto un `50%` matchearía cualquier producto. Ver `lib/escaparLike.js`.
+    const termino = escaparLike(query.search.trim());
 
     // No `mode: "insensitive"` here on purpose: this database's default
     // collation is SQL_Latin1_General_CP1_CI_AS (case-insensitive already,
@@ -603,6 +608,9 @@ export async function crear(req, res, next) {
     } = req.body;
     validarCamposBase({ nombre, descripcion }, { esCreacion: true });
     const merchandising = validarCamposMerchandising({ stock, destacado });
+    // Guarda ANTES de tocar la base: un `categoriaId` no numérico es un 400
+    // limpio, no un `NaN` que revienta en Prisma como 500.
+    const categoriaIdParseado = parsearCategoriaId(categoriaId);
     // Obligatorios: de este par sale el precio de venta, y sin él la columna
     // `precio` (NOT NULL) no tiene ningún valor correcto que escribir.
     const costeo = validarCostoYCoeficiente(
@@ -655,7 +663,7 @@ export async function crear(req, res, next) {
             costo: costeo.costo,
             coeficiente: costeo.coeficiente,
             etiqueta: etiqueta?.trim() || null,
-            categoriaId: categoriaId ? Number(categoriaId) : null,
+            categoriaId: categoriaIdParseado,
             sku: generarSku(nombre.trim()),
             stock: merchandising.stock ?? 0,
             destacado: merchandising.destacado ?? false,
@@ -749,6 +757,11 @@ export async function actualizar(req, res, next) {
     } = req.body;
     validarCamposBase({ nombre, descripcion }, { esCreacion: false });
     const merchandising = validarCamposMerchandising({ stock, destacado });
+    // Guarda ANTES de subir media: un `categoriaId` no numérico es un 400 limpio
+    // en vez de un `NaN` -> 500 de Prisma. `undefined` deja la columna intacta
+    // (el PUT es parcial); `null`/vacío la pone en "sin categoría".
+    const categoriaIdParseado =
+      categoriaId !== undefined ? parsearCategoriaId(categoriaId) : undefined;
     // Modo "edicion": omitir el costeo está bien —el PUT es parcial, y un
     // request que solo reordena fotos no tiene por qué hablar de plata— pero
     // BORRARLO no, porque dejaría al producto sin forma de recalcular su precio.
@@ -813,7 +826,7 @@ export async function actualizar(req, res, next) {
             costo: costeo.costo,
             coeficiente: costeo.coeficiente,
             etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
-            categoriaId: categoriaId !== undefined ? (categoriaId ? Number(categoriaId) : null) : undefined,
+            categoriaId: categoriaIdParseado,
             stock: merchandising.stock,
             destacado: merchandising.destacado,
             fraseComercial: fraseComercial !== undefined ? fraseComercial?.trim() || null : undefined,

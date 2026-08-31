@@ -8,6 +8,7 @@
 
 import { httpError } from "../lib/httpError.js";
 import { MAX_FOTOS, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
+import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 
 export function parseCaracteristicas(raw) {
   if (raw === undefined) return undefined;
@@ -324,6 +325,35 @@ export function validarCamposMerchandising({ stock, destacado }) {
   return { stock: stockNormalizado, destacado: destacadoNormalizado };
 }
 
+/**
+ * Normaliza y valida el `categoriaId` que llega en el body de alta/edición.
+ *
+ * - Ausente, `null`, o string vacío/espacios -> `null` ("sin categoría").
+ * - Entero válido (string o número) -> el número.
+ * - Cualquier otra cosa -> `httpError(400)`.
+ *
+ * Existe para que un valor no numérico no llegue a Prisma como `NaN` sobre una
+ * columna `Int` (un `PrismaClientValidationError` -> 500 en `crear`/`actualizar`).
+ * Espeja la guarda `Number.isInteger` que `construirFiltrosListado` ya aplica al
+ * filtro `?categoria=` del listado público.
+ *
+ * NO decide entre "no tocar" (edición parcial) y "poner en null": eso lo resuelve
+ * el llamador según si el campo vino en el request.
+ *
+ * @param {*} valor el `categoriaId` crudo del body
+ * @returns {number|null}
+ */
+export function parsearCategoriaId(valor) {
+  if (valor === undefined || valor === null) return null;
+  if (typeof valor === "string" && valor.trim() === "") return null;
+
+  const id = Number(valor);
+  if (!Number.isInteger(id)) {
+    throw httpError(400, "La categoría seleccionada no es válida.");
+  }
+  return id;
+}
+
 export function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
   if (fotosExistentesCount + fotosNuevas.length > MAX_FOTOS) {
     throw httpError(400, `Un producto admite un máximo de ${MAX_FOTOS} fotos.`);
@@ -332,8 +362,18 @@ export function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
     if (foto.size > MAX_FOTO_BYTES) {
       throw httpError(413, "Cada foto debe pesar como máximo 15MB.");
     }
+    // Defensa en profundidad (content sniffing): multer ya filtró el `mimetype`
+    // declarado, pero es falsificable. Se confirma que los BYTES reales sean los
+    // de una imagen del tipo declarado antes de subir nada a Cloudinary.
+    if (!contenidoCoincideConMime(foto.buffer, foto.mimetype)) {
+      throw httpError(400, "El contenido de una de las imágenes no coincide con un archivo JPEG, PNG o WEBP válido.");
+    }
   }
   if (video && video.length > 1) {
     throw httpError(400, "Un producto admite un único video.");
+  }
+  // Mismo chequeo de contenido para el video, si vino uno.
+  if (video && video[0] && !contenidoCoincideConMime(video[0].buffer, video[0].mimetype)) {
+    throw httpError(400, "El contenido del video no coincide con un archivo MP4 o WEBM válido.");
   }
 }

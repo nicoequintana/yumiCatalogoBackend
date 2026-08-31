@@ -36,7 +36,7 @@ vi.mock("../lib/prisma.js", () => ({
       count: vi.fn().mockResolvedValue(0),
     },
     auditLog: { create: (...args) => auditCreateMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
     $transaction: async (fn) => fn({ product: { update: (...args) => updateMock(...args) } }),
   },
@@ -66,7 +66,9 @@ function buildApp() {
 }
 
 function conAuth(peticion) {
-  const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+  const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+    expiresIn: "7d",
+  });
   return peticion.set("Authorization", `Bearer ${token}`);
 }
 

@@ -109,6 +109,15 @@ function post(fields) {
   return req;
 }
 
+describe("POST /api/products — guarda de categoriaId", () => {
+  it("un categoriaId no numérico responde 400, no 500, y no toca la base", async () => {
+    const res = await post({ categoriaId: "abc" });
+
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/products agrupa listas por tipo y expone especificaciones", () => {
   it("devuelve fraseComercial, beneficios, usos y especificaciones en la respuesta", async () => {
     const productoCreado = {

@@ -41,7 +41,7 @@ vi.mock("../lib/prisma.js", () => ({
       count: vi.fn().mockResolvedValue(0),
     },
     auditLog: { create: (...args) => auditCreateMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
     $transaction: async (fn) =>
       fn({
         product: {
@@ -85,7 +85,7 @@ function buildApp() {
   return app;
 }
 
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 /** Fila que devuelven `create`/`update`, con las relaciones que espera el mapper. */
 function filaProducto(extra = {}) {

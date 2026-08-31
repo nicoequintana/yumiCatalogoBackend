@@ -55,6 +55,33 @@ describe("POST /api/auth/login", () => {
     expect(decoded.email).toBe("admin@test.com");
   });
 
+  it("incluye tokenVersion del usuario en el payload del token (para la revocación por cambio de contraseña)", async () => {
+    const passwordHash = await bcrypt.hash("clave-correcta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@test.com", passwordHash, tokenVersion: 4 });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@test.com", password: "clave-correcta" });
+
+    const decoded = jwt.verify(res.body.token, "test-secret");
+    expect(decoded.tokenVersion).toBe(4);
+  });
+
+  it("firma el token con una expiración de 24 horas, no de 7 días", async () => {
+    const passwordHash = await bcrypt.hash("clave-correcta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@test.com", passwordHash, tokenVersion: 0 });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@test.com", password: "clave-correcta" });
+
+    const decoded = jwt.verify(res.body.token, "test-secret");
+    // 24 h = 86400 s. La ventana corta acota la exposición de un token robado
+    // que pase inadvertido; la revocación por tokenVersion cubre el cambio de
+    // contraseña de forma inmediata.
+    expect(decoded.exp - decoded.iat).toBe(24 * 60 * 60);
+  });
+
   it("nunca incluye el passwordHash en el payload del token", async () => {
     const passwordHash = await bcrypt.hash("clave-correcta", 10);
     findUniqueMock.mockResolvedValue({ id: 1, email: "admin@test.com", passwordHash });

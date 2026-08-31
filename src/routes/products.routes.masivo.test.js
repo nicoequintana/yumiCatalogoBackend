@@ -44,7 +44,7 @@ vi.mock("../lib/prisma.js", () => ({
     },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
   },
 }));
@@ -76,7 +76,9 @@ function buildApp() {
 }
 
 function tokenValido() {
-  return jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+  return jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+    expiresIn: "7d",
+  });
 }
 
 function conAuth(peticion) {

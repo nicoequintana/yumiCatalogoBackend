@@ -90,8 +90,17 @@ async function esperarTicks(ticks) {
   for (let i = 0; i < ticks; i += 1) await Promise.resolve();
 }
 
+// Firmas reales que exige la validación de magic bytes (`validarArchivos`). El
+// identificador de cada archivo (`foto-0`, `video-0`) viaja DESPUÉS de la firma,
+// así que el mock lo extrae por regex ignorando los bytes binarios de cabecera.
+const FIRMA_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+const FIRMA_MP4 = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+const fotoBuffer = (id) => Buffer.concat([FIRMA_JPEG, Buffer.from(id)]);
+const videoBuffer = (id) => Buffer.concat([FIRMA_MP4, Buffer.from(id)]);
+
 const subirArchivoMock = vi.fn(async (buffer, resourceType) => {
-  const nombre = buffer.toString();
+  // El identificador va después de la firma binaria; se lo extrae por patrón.
+  const nombre = buffer.toString("latin1").match(/(?:foto|video)-\d+/)?.[0] ?? buffer.toString();
   const plan = planSubidas[nombre] ?? {};
 
   medidorSubidas.enVuelo += 1;
@@ -186,7 +195,7 @@ beforeEach(() => {
 /** Adjunta N fotos cuyo contenido es su propio identificador (`foto-0`, ...). */
 function adjuntarFotos(peticion, cantidad) {
   for (let i = 0; i < cantidad; i += 1) {
-    peticion.attach("fotos", Buffer.from(`foto-${i}`), {
+    peticion.attach("fotos", fotoBuffer(`foto-${i}`), {
       filename: `foto-${i}.jpg`,
       contentType: "image/jpeg",
     });
@@ -308,8 +317,8 @@ describe("PUT /api/products/:id — subida de fotos en paralelo", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Lámpara")
       .field("fotosExistentes", JSON.stringify([]))
-      .attach("fotos", Buffer.from("foto-0"), { filename: "foto-0.jpg", contentType: "image/jpeg" })
-      .attach("video", Buffer.from("video-0"), { filename: "clip.mp4", contentType: "video/mp4" });
+      .attach("fotos", fotoBuffer("foto-0"), { filename: "foto-0.jpg", contentType: "image/jpeg" })
+      .attach("video", videoBuffer("video-0"), { filename: "clip.mp4", contentType: "video/mp4" });
 
     expect(res.status).toBe(502);
     expect(eliminarArchivoMock.mock.calls.map(([publicId]) => publicId)).toEqual(["pub-video-0"]);

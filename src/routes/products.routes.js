@@ -122,13 +122,38 @@ const limitadorInteraccionesPublicas = crearLimitadorDeVelocidad({
   message: "Demasiadas interacciones seguidas. Probá de nuevo en unos minutos.",
 });
 
+// Los GET públicos de lectura no tenían ningún techo, a diferencia de `/og` o
+// `/sitemap` que sí. Importa sobre todo en `GET /:id`: su rama pública
+// EJECUTA una escritura (incrementa `Product.vistas` e inserta en
+// `EventoTrafico`, la tabla que más crece), así que sin límite un flood no
+// solo escanea el catálogo sino que envenena el contador de vistas y engorda
+// la tabla de analytics. 600 cada 5 minutos por IP es holgadísimo para
+// navegación humana real y corta el scraping y el spam de vistas.
+const limitadorLecturaPublica = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
+});
+
+// La generación de imágenes dispara el flujo de n8n/gpt-image-1, cuyo costo es
+// externo y monetario (créditos de generación). Aunque la ruta ya exige auth,
+// un token comprometido o un loop descuidado no debe poder quemar la cuenta
+// sin freno, así que se le pone un techo propio y mucho más bajo. 20 por hora
+// por IP alcanza de sobra para el uso real (una persona cargando fotos de
+// productos desde el editor) y frena cualquier abuso.
+const limitadorGenerarImagenes = crearLimitadorDeVelocidad({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: "Alcanzaste el límite de generaciones de imágenes. Esperá un rato antes de reintentar.",
+});
+
 const router = Router();
 
 // `authOpcional` en los dos GET públicos: siguen sirviendo a visitantes
 // anónimos, pero cuando el llamador presenta un JWT válido el controller lo ve
 // en `req.usuario` y habilita la vista admin (ocultos + agotados). Es lo que
 // reemplaza al viejo `?admin=1`, que otorgaba esa vista a cualquiera.
-router.get("/", authOpcional, productsController.listar);
+router.get("/", limitadorLecturaPublica, authOpcional, productsController.listar);
 router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
 // `/export` alimenta el flujo de ACTUALIZACIÓN masiva (exportar -> editar a
 // mano -> volver a subir). Va ANTES de `GET /:id`, mismo motivo que
@@ -147,9 +172,9 @@ router.get("/salud", requireAuth, productsController.salud);
 // publicado nunca fueron secretas—, pero un producto con
 // `visibleEnCatalogo: false` responde 404 salvo que el llamador presente un
 // JWT válido.
-router.get("/:id/video", authOpcional, productsMediaController.streamVideo);
-router.get("/:id/fotos/:fotoId", authOpcional, productsMediaController.streamFoto);
-router.get("/:id", authOpcional, productsController.obtenerPorId);
+router.get("/:id/video", limitadorLecturaPublica, authOpcional, productsMediaController.streamVideo);
+router.get("/:id/fotos/:fotoId", limitadorLecturaPublica, authOpcional, productsMediaController.streamFoto);
+router.get("/:id", limitadorLecturaPublica, authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 // Acciones masivas del listado del admin. Van ANTES de cualquier ruta `/:id`
 // del mismo método: si se declararan después, Express matchearía
@@ -174,7 +199,7 @@ router.post("/:id/favorito", limitadorInteraccionesPublicas, authOpcional, produ
 // Dispara el flujo de n8n que genera las imágenes del producto. No colisiona
 // con ninguna otra ruta POST: las que existen son `/`, `/import`,
 // `/eliminar-masivo`, `/actualizar-masivo`, `/:id/compartir` y `/:id/favorito`.
-router.post("/:id/generar-imagenes", requireAuth, uploadReferencias, productsController.generarImagenes);
+router.post("/:id/generar-imagenes", limitadorGenerarImagenes, requireAuth, uploadReferencias, productsController.generarImagenes);
 // Carpeta de imágenes generadas por n8n (`productos/{sku}`). El DELETE NO
 // borra las que ya son fotos del producto: son el mismo archivo.
 router.get("/:id/imagenes-generadas", requireAuth, imagenesGeneradasController.listar);

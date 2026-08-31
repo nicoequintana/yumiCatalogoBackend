@@ -242,6 +242,18 @@ describe("GET /api/ordenes", () => {
     expect(res.body.total).toBe(1);
     expect(res.body.data).toHaveLength(1);
   });
+
+  it("escapa los comodines de LIKE del filtro por nombre de cliente", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    // `%25` es un `%` codificado en la query string. Sin escape, el `%` viajaría
+    // como comodín de LIKE y el filtro devolvería clientes que no se pidieron.
+    await request(buildApp()).get("/api/ordenes?nombre=Pe%25rez").set("Authorization", authHeader);
+
+    const { where } = ordenFindManyMock.mock.calls[0][0];
+    expect(where.cliente.nombre).toEqual({ contains: "Pe[%]rez" });
+  });
 });
 
 describe("GET /api/ordenes/:id", () => {
