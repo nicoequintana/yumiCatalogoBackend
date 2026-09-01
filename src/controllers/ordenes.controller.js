@@ -519,34 +519,40 @@ function esItemDesligado(item) {
 
 /**
  * PATCH /api/ordenes/:id/estado — cambia el estado de una orden, protegido
- * con requireAuth. Validación manual contra los 5 valores válidos.
+ * con requireAuth. Validación manual contra los 4 valores válidos.
  *
  * Deliberadamente SIN máquina de estados: cualquier estado válido puede
  * pasar a cualquier otro (incluso ENTREGADA -> PENDIENTE), sin restricciones
  * sobre el estado de origen. Decisión de diseño ya cerrada en el plan del
  * sprint — el admin es humano y puede necesitar corregir errores de carga.
  *
- * Descuento de stock: al entrar a CONFIRMADA sin tener ya el stock tomado, se
- * descuenta `cantidad` del `stock` de cada producto de la orden (transacción
- * única con el cambio de estado). **Quien manda es `stockDescontado`, no el
- * estado**: si ya estaba CONFIRMADA y se vuelve a guardar CONFIRMADA (no-op de
- * estado), o si se pasó a EN_PREPARACION/ENTREGADA y de ahí de vuelta a
- * CONFIRMADA, el stock NO se descuenta de nuevo; ese caso de re-confirmación
- * queda fuera de alcance (decisión de producto: si hace falta corregir, se
- * ajusta el stock a mano desde el form del producto). La ÚNICA re-confirmación
- * que sí vuelve a descontar es la que viene después de una cancelación, porque
- * esa devolvió las unidades y apagó el flag.
+ * Descuento de stock: al entrar a cualquiera de los dos estados de
+ * `ESTADOS_CON_STOCK_TOMADO` (EN_PREPARACION, ENTREGADA) sin tener ya el
+ * stock tomado, se descuenta `cantidad` del `stock` de cada producto de la
+ * orden (transacción única con el cambio de estado). **Quien manda es
+ * `stockDescontado`, no el estado**: si la orden ya tenía el flag encendido
+ * — porque ya estaba en uno de esos dos estados, porque se guarda de nuevo
+ * el mismo, o porque pasa de EN_PREPARACION a ENTREGADA (o al revés) — el
+ * stock NO se descuenta de nuevo; ese caso de re-confirmación queda fuera de
+ * alcance (decisión de producto: si hace falta corregir, se ajusta el stock
+ * a mano desde el form del producto). La ÚNICA re-confirmación que sí vuelve
+ * a descontar es la que viene después de una cancelación, porque esa
+ * devolvió las unidades y apagó el flag.
  *
  * Todo el descuento es a prueba de concurrencia, y eso pide dos cosas:
  *
- *   1. La ENTRADA a CONFIRMADA se decide con una escritura guardada
- *      (`updateMany` con `estado: { not: "CONFIRMADA" }`), nunca con una
- *      lectura. Bajo READ COMMITTED dos PATCH simultáneos pueden ambos releer
- *      PENDIENTE dentro de su transacción, pero solo uno logra que ese
- *      `updateMany` matchee la fila — el `count` de esa escritura es el
- *      árbitro de quién descuenta. La relectura dentro de la transacción
- *      sigue existiendo, pero solo para los items a descontar y el estado
- *      anterior de la auditoría, jamás para decidir el descuento.
+ *   1. La ENTRADA a un estado que toma stock se decide con una escritura
+ *      guardada (`updateMany` con `stockDescontado: false` como guarda
+ *      ENTERA), nunca con una lectura. Adrede SIN condición sobre el estado
+ *      de origen: con DOS estados que descuentan, algo como
+ *      `estado: { not: "ENTREGADA" }` dejaría que EN_PREPARACION ->
+ *      ENTREGADA matcheara la fila y descontara una segunda vez. Bajo READ
+ *      COMMITTED dos PATCH simultáneos pueden ambos releer el mismo estado
+ *      dentro de su transacción, pero solo uno logra que ese `updateMany`
+ *      matchee la fila — el `count` de esa escritura es el árbitro de quién
+ *      descuenta. La relectura dentro de la transacción sigue existiendo,
+ *      pero solo para los items a descontar y el estado anterior de la
+ *      auditoría, jamás para decidir el descuento.
  *   2. La resta la hace la base con `decrement` sobre el valor vigente de la
  *      fila, no el proceso sobre un valor leído antes. SQL Server corre en
  *      READ COMMITTED: un leer-restar-escribir pierde el descuento de la
@@ -693,11 +699,13 @@ export async function actualizarEstado(req, res, next) {
         }
       }
 
-      // Escribe el estado pedido para las transiciones que no pasaron por la
-      // escritura guardada (destino no-CONFIRMADA, o re-guardar CONFIRMADA —
-      // en ambos casos es idempotente respecto de lo que ya decidió el
-      // updateMany) y devuelve la orden con el shape que espera el frontend
-      // (cliente + items, igual que obtenerPorId()).
+      // Escribe el estado pedido para las transiciones que la escritura
+      // guardada no aplicó — PENDIENTE, que no entra en ningún guardado, o un
+      // destino que sí lo intenta pero no matchea porque la orden ya tenía
+      // `stockDescontado` en el valor que esa guarda necesitaba (es
+      // idempotente respecto de lo que ya decidió el `updateMany`
+      // correspondiente) — y devuelve la orden con el shape que espera el
+      // frontend (cliente + items, igual que obtenerPorId()).
       return tx.orden.update({
         where: { id },
         data: { estado },
