@@ -226,7 +226,7 @@ model Orden {
   id        Int         @id @default(autoincrement())
   clienteId Int
   cliente   Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
-  // valores: PENDIENTE | CONFIRMADA | EN_PREPARACION | ENTREGADA | CANCELADA
+  // valores: PENDIENTE | EN_PREPARACION | ENTREGADA | CANCELADA
   // No es un enum porque SQL Server vía Prisma no los soporta: quien valida
   // de verdad es src/lib/estadosOrden.js, que es la única copia ejecutable.
   estado    String      @default("PENDIENTE") @db.VarChar(20)
