@@ -1,7 +1,8 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
-import { subtotalDeItem, sumarDecimales } from "../lib/dinero.js";
+import { subtotalDeItem, costoDeItem, sumarDecimales } from "../lib/dinero.js";
+import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 
 export async function listarErrorLogs(req, res, next) {
@@ -211,6 +212,22 @@ export function parsearPeriodo(query) {
  * (`precioUnitario * cantidad`), nunca el `precio` vivo del `Product`. Un
  * cambio de precio no debe reescribir la facturación histórica.
  *
+ * **`porEstado`**: desglose de la plata por estado de orden. Reemplaza a la
+ * vieja clave `pipeline`, que era este mismo dato calculado solo para
+ * PENDIENTE. Declara SIEMPRE los cuatro estados, también los que están en
+ * cero: un cero es la respuesta ("no tenés órdenes pendientes"), y omitir la
+ * entrada obligaría a la pantalla a distinguir "cero" de "no vino".
+ *
+ * Lleva TRES montos y no dos porque `ItemOrden.costoUnitario` es nullable:
+ * `venta` suma todas las líneas, `costo` suma solo las que tienen costo, y
+ * `ventaConCosto` es la facturación de ESAS MISMAS líneas. Sin la tercera
+ * clave, la ganancia (`ventaConCosto - costo`) se calcularía contra
+ * facturación que nunca aportó ningún costo y saldría inflada — el mismo error
+ * que contar los `null` como cero, con más pasos.
+ *
+ * `CANCELADA` viaja con sus montos igual que el resto: este endpoint informa,
+ * y qué se muestra lo decide la pantalla.
+ *
  * **Estrategia de consulta**: una sola query trae las órdenes del período con
  * sus items, y el resto se reduce en memoria en O(n) sobre los items. No se usa
  * `groupBy`/`aggregate` de Prisma porque no sabe agregar una *expresión*
@@ -238,6 +255,7 @@ export async function resumenVentas(req, res, next) {
             productId: true,
             nombreProducto: true,
             precioUnitario: true,
+            costoUnitario: true,
             cantidad: true,
           },
         },
@@ -252,8 +270,6 @@ export async function resumenVentas(req, res, next) {
     let unidadesVendidas = 0;
     let itemsFacturados = 0;
 
-    let pipelineValor = new Decimal(0);
-    let pipelineOrdenes = 0;
     let ordenesCanceladas = 0;
 
     // productId -> { productId, nombre, unidades, facturacion }
@@ -261,24 +277,66 @@ export async function resumenVentas(req, res, next) {
     // "YYYY-MM-DD" -> Decimal de ingresos de ese día
     const porDia = new Map();
 
-    for (const orden of ordenes) {
-      if (orden.estado === "CANCELADA") {
-        ordenesCanceladas += 1;
-        continue;
-      }
+    /**
+     * estado -> { cantidadOrdenes, venta, costo, ventaConCosto }
+     *
+     * Se siembra con TODOS los estados en cero: la respuesta declara siempre
+     * los cuatro, también los vacíos. Un cero es la respuesta; una clave
+     * ausente obliga al consumidor a adivinar cuál de las dos cosas es.
+     *
+     * Son tres montos y no dos porque `costoUnitario` es nullable. `costo`
+     * suma solo las líneas que tienen costo, y `ventaConCosto` es la
+     * facturación de ESAS MISMAS líneas: sin la tercera clave, la ganancia
+     * (`ventaConCosto - costo`) se calcularía contra facturación que no aportó
+     * costo y saldría inflada.
+     */
+    const porEstado = new Map(
+      ESTADOS_ORDEN.map((estado) => [
+        estado,
+        {
+          cantidadOrdenes: 0,
+          venta: new Decimal(0),
+          costo: new Decimal(0),
+          ventaConCosto: new Decimal(0),
+        },
+      ]),
+    );
 
+    for (const orden of ordenes) {
       // Los subtotales por ítem se calculan UNA sola vez: el total de la orden
-      // es su suma, y el ranking por producto de más abajo los reusa por
-      // índice. Antes se multiplicaba `precioUnitario * cantidad` dos veces
-      // por ítem, una acá y otra en el ranking.
+      // es su suma, el desglose por estado los reusa por índice y el ranking
+      // por producto de más abajo también. Antes se multiplicaba
+      // `precioUnitario * cantidad` dos veces por ítem.
       const subtotales = orden.items.map(subtotalDeItem);
       const totalOrden = sumarDecimales(subtotales);
 
-      if (orden.estado === "PENDIENTE") {
-        // Pipeline: ingreso potencial, todavía no facturado. Se reporta
-        // separado para que nunca se lea como plata ya ganada.
-        pipelineOrdenes += 1;
-        pipelineValor = pipelineValor.plus(totalOrden);
+      // Acumulación por estado: ocurre para TODOS los estados, incluidos
+      // PENDIENTE y CANCELADA, que unas líneas más abajo cortan la iteración.
+      // Por eso va ANTES de esos `continue` y no después: si quedara después,
+      // el desglose reportaría en cero justamente los dos estados que existen
+      // para que se puedan mirar aparte del facturado.
+      const acumuladoEstado = porEstado.get(orden.estado);
+      // Un estado fuera de `ESTADOS_ORDEN` (una fila vieja, un valor escrito a
+      // mano en la base) no crea una entrada nueva: queda fuera del desglose
+      // en vez de inventarle al panel una categoría que el modelo no tiene.
+      if (acumuladoEstado) {
+        acumuladoEstado.cantidadOrdenes += 1;
+        acumuladoEstado.venta = acumuladoEstado.venta.plus(totalOrden);
+
+        for (const [indice, item] of orden.items.entries()) {
+          const costoItem = costoDeItem(item);
+          // Una línea sin costo queda fuera de las DOS sumas. Dejar su
+          // facturación en `ventaConCosto` inflaría la ganancia derivada
+          // exactamente igual que contar su costo como cero, solo que con un
+          // paso más de por medio.
+          if (costoItem === null) continue;
+          acumuladoEstado.costo = acumuladoEstado.costo.plus(costoItem);
+          acumuladoEstado.ventaConCosto = acumuladoEstado.ventaConCosto.plus(subtotales[indice]);
+        }
+      }
+
+      if (orden.estado === "CANCELADA") {
+        ordenesCanceladas += 1;
         continue;
       }
 
@@ -379,10 +437,15 @@ export async function resumenVentas(req, res, next) {
       ticketPromedio,
       unidadesVendidas,
       productosPorOrden,
-      pipeline: {
-        cantidadOrdenes: pipelineOrdenes,
-        valorTotal: pipelineValor.toFixed(0),
-      },
+      // El `Map` conserva el orden de inserción, que es el de `ESTADOS_ORDEN`,
+      // así que el array ya sale en orden de flujo sin ordenarlo aparte.
+      porEstado: [...porEstado.entries()].map(([estado, datos]) => ({
+        estado,
+        cantidadOrdenes: datos.cantidadOrdenes,
+        venta: datos.venta.toFixed(0),
+        costo: datos.costo.toFixed(0),
+        ventaConCosto: datos.ventaConCosto.toFixed(0),
+      })),
       ordenesCanceladas,
       tasaCancelacion,
       rankingProductos,

@@ -37,6 +37,12 @@ const authHeader = `Bearer ${token}`;
  * Construye una orden como la devuelve Prisma: `precioUnitario` llega como
  * `Decimal`, no como number, que es exactamente el caso que el controller
  * tiene que manejar sin perder precisión.
+ *
+ * `costoUnitario` es NULLABLE en el modelo, así que un ítem que no lo declara
+ * viaja como `null` — igual que toda línea anterior a que existiera la columna
+ * y toda línea de un producto sin costo cargado. Es el caso que separa "no se
+ * puede calcular el margen de esta línea" de "esta línea costó cero", y por eso
+ * el helper NO lo completa con un default.
  */
 function orden({ id, estado, createdAt, items = [] }) {
   return {
@@ -49,6 +55,10 @@ function orden({ id, estado, createdAt, items = [] }) {
       productId: item.productId,
       nombreProducto: item.nombreProducto,
       precioUnitario: new Decimal(item.precioUnitario),
+      costoUnitario:
+        item.costoUnitario === undefined || item.costoUnitario === null
+          ? null
+          : new Decimal(item.costoUnitario),
       cantidad: item.cantidad,
     })),
   };
@@ -128,7 +138,7 @@ describe("GET /api/admin/ventas", () => {
     expect(res.body.cantidadOrdenes).toBe(2);
   });
 
-  it("excluye PENDIENTE del ingreso y lo reporta aparte como pipeline", async () => {
+  it("excluye PENDIENTE del ingreso y lo reporta aparte en porEstado", async () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
@@ -148,9 +158,12 @@ describe("GET /api/admin/ventas", () => {
 
     expect(res.body.ingresosTotales).toBe("100");
     expect(res.body.cantidadOrdenes).toBe(1);
-    expect(res.body.pipeline.cantidadOrdenes).toBe(1);
-    expect(res.body.pipeline.valorTotal).toBe("1998");
-    // El pipeline no debe aparecer en el ranking ni en la serie de ingresos.
+    // El mismo dato que antes reportaba `pipeline`, ahora como una entrada más
+    // del desglose por estado: ingreso potencial que NO se suma al facturado.
+    const pendiente = res.body.porEstado.find((e) => e.estado === "PENDIENTE");
+    expect(pendiente.cantidadOrdenes).toBe(1);
+    expect(pendiente.venta).toBe("1998");
+    // Lo pendiente no debe aparecer en el ranking ni en la serie de ingresos.
     expect(res.body.rankingProductos.some((p) => p.nombre === "Difusor")).toBe(false);
   });
 
@@ -297,7 +310,14 @@ describe("GET /api/admin/ventas", () => {
     expect(res.body.productosPorOrden).toBe(0);
     expect(res.body.unidadesVendidas).toBe(0);
     expect(res.body.tasaCancelacion).toBe(0);
-    expect(res.body.pipeline).toMatchObject({ cantidadOrdenes: 0, valorTotal: "0" });
+    // Los cuatro estados viajan igual, en cero: un cero es la respuesta ("no
+    // tenés órdenes pendientes"), no la ausencia de respuesta.
+    expect(res.body.porEstado).toEqual([
+      { estado: "PENDIENTE", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "EN_PREPARACION", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "ENTREGADA", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "CANCELADA", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+    ]);
     expect(res.body.rankingProductos).toEqual([]);
     expect(Number.isNaN(res.body.tasaCancelacion)).toBe(false);
   });
@@ -468,6 +488,144 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
     expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
     // La fila de más no puede contaminar los números: se analiza el tope justo.
     expect(res.body.cantidadOrdenes).toBe(MAX_ORDENES_HISTORICO);
+  });
+});
+
+describe("GET /api/admin/ventas — porEstado", () => {
+  /**
+   * Fixture con los cuatro estados representados y, en la ENTREGADA, una línea
+   * CON costo y otra SIN costo — el caso que separa las tres claves de plata:
+   *
+   *   ENTREGADA       24000 x 2 = 48000   (costo 13250 x 2 = 26500)
+   *                    4000 x 1 =  4000   (sin costo)
+   *                              = 52000 de venta, 48000 de venta con costo
+   *   EN_PREPARACION   1000 x 3 =  3000   (costo   400 x 3 =  1200)
+   *   PENDIENTE         999 x 2 =  1998   (sin costo)
+   *   CANCELADA         500 x 1 =   500   (costo   200 x 1 =   200)
+   */
+  let respuesta;
+
+  beforeEach(async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 1,
+        estado: "ENTREGADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [
+          {
+            productId: 1,
+            nombreProducto: "Vela",
+            precioUnitario: "24000",
+            costoUnitario: "13250",
+            cantidad: 2,
+          },
+          // Sin `costoUnitario`: la línea existe y factura, pero no aporta costo.
+          { productId: 2, nombreProducto: "Difusor", precioUnitario: "4000", cantidad: 1 },
+        ],
+      }),
+      orden({
+        id: 2,
+        estado: "EN_PREPARACION",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [
+          {
+            productId: 3,
+            nombreProducto: "Jabón",
+            precioUnitario: "1000",
+            costoUnitario: "400",
+            cantidad: 3,
+          },
+        ],
+      }),
+      orden({
+        id: 3,
+        estado: "PENDIENTE",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [{ productId: 3, nombreProducto: "Jabón", precioUnitario: "999", cantidad: 2 }],
+      }),
+      orden({
+        id: 4,
+        estado: "CANCELADA",
+        createdAt: "2026-08-10T12:00:00Z",
+        items: [
+          {
+            productId: 1,
+            nombreProducto: "Vela",
+            precioUnitario: "500",
+            costoUnitario: "200",
+            cantidad: 1,
+          },
+        ],
+      }),
+    ]);
+
+    respuesta = await request(buildApp())
+      .get("/api/admin/ventas?desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+  });
+
+  it("trae los cuatro estados en orden de flujo, también los que están en cero", () => {
+    // Un cero es la respuesta ("no tenés órdenes pendientes"), no la ausencia
+    // de respuesta: omitir la entrada obligaría a la pantalla a distinguir
+    // "cero" de "no vino".
+    const estados = respuesta.body.porEstado.map((e) => e.estado);
+    expect(estados).toEqual(["PENDIENTE", "EN_PREPARACION", "ENTREGADA", "CANCELADA"]);
+  });
+
+  it("una línea sin costoUnitario queda fuera de costo Y de ventaConCosto", () => {
+    // Si quedara fuera del costo pero su facturación siguiera contando como
+    // facturación con costo, la ganancia derivada (ventaConCosto - costo)
+    // saldría inflada: el mismo error que sumar los null como cero, con más
+    // pasos.
+    const entregada = respuesta.body.porEstado.find((e) => e.estado === "ENTREGADA");
+
+    expect(entregada.cantidadOrdenes).toBe(1);
+    expect(entregada.venta).toBe("52000");
+    expect(entregada.ventaConCosto).toBe("48000");
+    expect(entregada.costo).toBe("26500");
+  });
+
+  it("la suma de los estados facturables coincide con ingresosTotales", () => {
+    // La misma plata desde dos agrupamientos distintos. Si no cierra, la
+    // pantalla se contradice sola.
+    const facturable = respuesta.body.porEstado
+      .filter((e) => ESTADOS_FACTURABLES.includes(e.estado))
+      .reduce((suma, e) => suma + Number(e.venta), 0);
+
+    expect(String(facturable)).toBe(respuesta.body.ingresosTotales);
+  });
+
+  it("acumula PENDIENTE, que no entra en ningún total facturado", () => {
+    const pendiente = respuesta.body.porEstado.find((e) => e.estado === "PENDIENTE");
+
+    expect(pendiente.cantidadOrdenes).toBe(1);
+    expect(pendiente.venta).toBe("1998");
+    // Sin costo en esa línea: las dos claves de margen quedan en cero.
+    expect(pendiente.costo).toBe("0");
+    expect(pendiente.ventaConCosto).toBe("0");
+  });
+
+  it("CANCELADA viaja con sus montos aunque la pantalla no los muestre", () => {
+    // El endpoint informa; qué se muestra lo decide la pantalla. Vaciar acá los
+    // montos de lo cancelado le sacaría a la pantalla la posibilidad de decidir.
+    const cancelada = respuesta.body.porEstado.find((e) => e.estado === "CANCELADA");
+
+    expect(cancelada.cantidadOrdenes).toBe(1);
+    expect(cancelada.venta).toBe("500");
+    expect(cancelada.costo).toBe("200");
+    expect(cancelada.ventaConCosto).toBe("500");
+  });
+
+  it("ya no emite la clave `pipeline`: la reemplaza la entrada PENDIENTE", () => {
+    expect(respuesta.body.pipeline).toBeUndefined();
+  });
+
+  it("pide costoUnitario en el select de items, o el costo llegaría siempre nulo", () => {
+    // Sin esa columna en el `select`, `costoDeItem` recibe `undefined` en cada
+    // línea y todo el desglose de costo sale en cero — sin error y sin nada que
+    // lo delate.
+    const args = ordenFindManyMock.mock.calls[0][0];
+    expect(args.select.items.select.costoUnitario).toBe(true);
   });
 });
 
