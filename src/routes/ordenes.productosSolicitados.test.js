@@ -172,7 +172,7 @@ describe("GET /api/ordenes/productos-solicitados", () => {
 
   it("cuenta una sola orden aunque el producto aparezca en dos lineas de ella", async () => {
     ordenFindManyMock.mockResolvedValue([
-      orden(1, "CONFIRMADA", [item({ cantidad: 1 }), item({ cantidad: 2 })]),
+      orden(1, "EN_PREPARACION", [item({ cantidad: 1 }), item({ cantidad: 2 })]),
     ]);
 
     const res = await pedirGrilla();

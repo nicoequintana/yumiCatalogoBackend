@@ -22,7 +22,7 @@ const TOP_RANKING = 10;
  * respondiendo un 500 — un dashboard caído en vez de uno con un número
  * aproximado.
  *
- * 20.000 es holgado para este negocio: son unas 55 órdenes CONFIRMADAS por día
+ * 20.000 es holgado para este negocio: son unas 55 órdenes facturables por día
  * sostenidas durante un año entero. Y sigue siendo barato de procesar: la
  * reducción es O(n) sobre filas chicas (id, fecha, cliente e items).
  *
@@ -55,7 +55,7 @@ const MS_POR_DIA = 24 * 60 * 60 * 1000;
  * expone por DNI y no por `id` interno.
  *
  * **Qué cuenta como compra**: los mismos `ESTADOS_FACTURABLES` que el
- * dashboard de ventas (CONFIRMADA en adelante). PENDIENTE y CANCELADA no
+ * dashboard de ventas (EN_PREPARACION en adelante). PENDIENTE y CANCELADA no
  * convierten a alguien en cliente ni suman facturación: si contaran, una
  * orden cancelada inflaría el conteo de clientes y la tasa de recompra.
  *

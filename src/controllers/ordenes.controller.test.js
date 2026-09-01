@@ -1023,7 +1023,7 @@ describe("actualizarEstado()", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("responde 400 si el estado no es uno de los 5 valores válidos", async () => {
+  it("responde 400 si el estado no es uno de los 4 valores válidos", async () => {
     ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
     const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "INVENTADO" } });

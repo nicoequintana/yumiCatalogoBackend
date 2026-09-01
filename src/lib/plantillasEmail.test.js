@@ -152,7 +152,7 @@ describe("plantillaCambioEstadoCliente", () => {
     );
   });
 
-  it("cubre los cinco estados sin devolver undefined en el asunto", () => {
+  it("cubre los cuatro estados sin devolver undefined en el asunto", () => {
     for (const estado of ESTADOS_ORDEN) {
       const { asunto } = plantillaCambioEstadoCliente({ ...ORDEN, estado });
       expect(asunto).not.toContain("undefined");

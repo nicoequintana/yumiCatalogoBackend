@@ -233,9 +233,10 @@ model Orden {
   // ¿Esta orden tiene stock TOMADO ahora mismo?
   //
   // No se deduce del estado a propósito: la re-confirmación está fuera de
-  // alcance (CONFIRMADA -> ENTREGADA -> CONFIRMADA no vuelve a descontar), así
-  // que "está en CONFIRMADA" no implica "tiene stock tomado". Sin esta columna,
-  // cancelar devolvería unidades que nunca se sacaron.
+  // alcance (EN_PREPARACION -> ENTREGADA -> EN_PREPARACION no vuelve a
+  // descontar), así que "está en un estado que toma stock" no implica por sí
+  // solo "hay que descontar ahora". Sin esta columna, cancelar devolvería
+  // unidades que nunca se sacaron.
   //
   // Lo enciende la escritura guardada que descuenta al confirmar y lo apaga la
   // que libera al cancelar; ese par de escrituras es lo que hace que el

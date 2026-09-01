@@ -154,7 +154,7 @@ export async function resumenOperacion(req, res, next) {
       }),
     ]);
 
-    // Los 5 estados siempre presentes, en cero si no hubo órdenes: la UI no
+    // Los 4 estados siempre presentes, en cero si no hubo órdenes: la UI no
     // tiene que distinguir entre "cero" y "no vino en la respuesta".
     const ordenesPorEstado = Object.fromEntries(ESTADOS_ORDEN.map((estado) => [estado, 0]));
     for (const fila of conteosPorEstado) {
