@@ -167,9 +167,37 @@ describe("plantillaCambioEstadoCliente", () => {
   });
 
   it("repite el detalle de la orden para que el mail se entienda solo", () => {
-    const { texto } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" });
+    const { texto } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "EN_PREPARACION" });
     expect(texto).toContain("Lámpara de sal");
     expect(texto).toContain("$33.000");
+  });
+});
+
+describe("copy por estado sin CONFIRMADA", () => {
+  const OPCIONES = { urlSitio: "https://yima-productos.com" };
+
+  it("el mail de EN_PREPARACION comunica que el pedido fue aceptado", () => {
+    const mail = plantillaCambioEstadoCliente({ ...ORDEN, estado: "EN_PREPARACION" }, OPCIONES);
+
+    // El asunto sigue lowercaseando la etiqueta ("está en preparación"), como
+    // ya hacía antes de este cambio — lo nuevo es que el CUERPO pasa a decir
+    // que el pedido fue aceptado, no solo que "se está preparando".
+    expect(mail.asunto).toContain("en preparación");
+    expect(mail.texto).toContain("Confirmamos tu pedido");
+  });
+
+  it("la barra de avance tiene tres pasos", () => {
+    const mail = plantillaCambioEstadoCliente({ ...ORDEN, estado: "ENTREGADA" }, OPCIONES);
+
+    // Tres celdas de la barra, cada una al 33% del ancho.
+    expect(mail.html.match(/width="33%"/g)).toHaveLength(3);
+    expect(mail.html).not.toContain('width="25%"');
+  });
+
+  it("una orden CANCELADA no dibuja barra de avance", () => {
+    const mail = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CANCELADA" }, OPCIONES);
+
+    expect(mail.html).not.toContain('width="33%"');
   });
 });
 
@@ -260,7 +288,7 @@ describe("documento HTML de los mails", () => {
     const htmls = [
       plantillaOrdenCreadaCliente(ORDEN, OPCIONES).html,
       plantillaOrdenCreadaAdmin(ORDEN, { ...OPCIONES, urlOrden: "https://yima.test/x" }).html,
-      plantillaCambioEstadoCliente({ ...ORDEN, estado: "CONFIRMADA" }, OPCIONES).html,
+      plantillaCambioEstadoCliente({ ...ORDEN, estado: "EN_PREPARACION" }, OPCIONES).html,
     ];
     for (const html of htmls) {
       expect(html).not.toContain("display:flex");
@@ -300,9 +328,8 @@ describe("estado en el mail de cambio de estado", () => {
       return (html.match(/background-color:#9d3e1d;border-radius:2px/g) ?? []).length;
     };
     expect(pasosCompletos("PENDIENTE")).toBe(1);
-    expect(pasosCompletos("CONFIRMADA")).toBe(2);
-    expect(pasosCompletos("EN_PREPARACION")).toBe(3);
-    expect(pasosCompletos("ENTREGADA")).toBe(4);
+    expect(pasosCompletos("EN_PREPARACION")).toBe(2);
+    expect(pasosCompletos("ENTREGADA")).toBe(3);
   });
 
   // Una orden cancelada no está "a un paso de entregarse": mostrar la barra

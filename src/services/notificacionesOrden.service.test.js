@@ -136,7 +136,7 @@ describe("notificarOrdenCreada", () => {
 
 describe("notificarCambioEstado", () => {
   it("reporta el envío exitoso", async () => {
-    const resultado = await notificarCambioEstado({ ...ORDEN, estado: "CONFIRMADA" });
+    const resultado = await notificarCambioEstado({ ...ORDEN, estado: "EN_PREPARACION" });
 
     expect(resultado).toEqual({ intentada: true, enviada: true });
     expect(enviarMailMock).toHaveBeenCalledTimes(1);
@@ -144,7 +144,7 @@ describe("notificarCambioEstado", () => {
   });
 
   it("no intenta nada y explica el motivo cuando el cliente no tiene email", async () => {
-    const sinEmail = { ...ORDEN, estado: "CONFIRMADA", cliente: { ...ORDEN.cliente, email: null } };
+    const sinEmail = { ...ORDEN, estado: "EN_PREPARACION", cliente: { ...ORDEN.cliente, email: null } };
 
     const resultado = await notificarCambioEstado(sinEmail);
 

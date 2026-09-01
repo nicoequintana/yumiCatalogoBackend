@@ -436,8 +436,7 @@ export function plantillaOrdenCreadaCliente(orden, { urlSitio } = {}) {
  */
 const INTRO_POR_ESTADO = {
   PENDIENTE: "Tu pedido volvió a quedar pendiente de confirmación.",
-  CONFIRMADA: "¡Confirmamos tu pedido! Ya lo estamos procesando.",
-  EN_PREPARACION: "Estamos preparando tu pedido.",
+  EN_PREPARACION: "¡Confirmamos tu pedido! Ya lo estamos preparando.",
   ENTREGADA: "¡Tu pedido fue entregado! Gracias por comprar en YIMA.",
   CANCELADA: "Tu pedido fue cancelado. Si no esperabas esto, escribinos y lo vemos.",
 };
@@ -448,8 +447,7 @@ const INTRO_POR_ESTADO = {
  */
 const TITULO_POR_ESTADO = {
   PENDIENTE: "Tu pedido volvió a quedar pendiente",
-  CONFIRMADA: "Confirmamos tu pedido",
-  EN_PREPARACION: "Estamos preparando tu pedido",
+  EN_PREPARACION: "Confirmamos tu pedido",
   ENTREGADA: "Tu pedido fue entregado",
   CANCELADA: "Tu pedido fue cancelado",
 };
@@ -463,25 +461,23 @@ const TITULO_POR_ESTADO = {
  */
 const ESTILO_ESTADO = {
   PENDIENTE: { fondo: "#ede7e4", texto: COLOR_TEXTO_SUAVE },
-  CONFIRMADA: { fondo: "#dbe6ac", texto: "#3c4519" },
   EN_PREPARACION: { fondo: "#e9c46a", texto: "#473600" },
   ENTREGADA: { fondo: "#586330", texto: "#ffffff" },
   CANCELADA: { fondo: "#ffdad6", texto: "#93000a" },
 };
 
-/** Los cuatro pasos del recorrido normal de un pedido, en orden. */
-const PASOS = ["Recibido", "Confirmado", "En preparación", "Entregado"];
+/** Los tres pasos del recorrido normal de un pedido, en orden. */
+const PASOS = ["Recibido", "En preparación", "Entregado"];
 
 /**
  * Cuántos pasos lleva completados cada estado. `CANCELADA` no está: una orden
- * cancelada no está "a tres pasos de entregarse", y dibujarle la barra
+ * cancelada no está "a un paso de entregarse", y dibujarle la barra
  * sugeriría que el pedido sigue en curso.
  */
 const PASO_DE_ESTADO = {
   PENDIENTE: 1,
-  CONFIRMADA: 2,
-  EN_PREPARACION: 3,
-  ENTREGADA: 4,
+  EN_PREPARACION: 2,
+  ENTREGADA: 3,
 };
 
 /** Chip con la etiqueta del estado, en su color. */
@@ -498,7 +494,7 @@ function chipEstado(estado, etiqueta) {
 }
 
 /**
- * Barra de avance de cuatro pasos.
+ * Barra de avance de los pasos de `PASOS`.
  *
  * Son celdas de tabla con `bgcolor` y 4 px de alto, no divs ni bordes: es la
  * única forma que renderiza igual en Outlook de escritorio, que ignora tanto
@@ -512,12 +508,16 @@ function barraProgreso(estado) {
   const completados = PASO_DE_ESTADO[estado];
   if (!completados) return "";
 
+  // Derivado de `PASOS.length`, no hardcodeado: así la cantidad de pasos y el
+  // ancho de cada celda no se pueden desincronizar si el recorrido cambia.
+  const anchoPaso = `${Math.floor(100 / PASOS.length)}%`;
+
   const barras = PASOS.map((_, indice) => {
     const relleno = indice < completados ? COLOR_PRIMARIO : COLOR_BORDE;
     const margen =
       indice === 0 ? "0 4px 0 0" : indice === PASOS.length - 1 ? "0 0 0 4px" : "0 4px";
     return `
-          <td width="25%" style="padding:${margen};">
+          <td width="${anchoPaso}" style="padding:${margen};">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
               <tr><td height="4" bgcolor="${relleno}" style="background-color:${relleno};border-radius:2px;font-size:0;line-height:4px;">&nbsp;</td></tr>
             </table>
