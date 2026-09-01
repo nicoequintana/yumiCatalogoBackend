@@ -31,13 +31,6 @@ describe("estadosOrden", () => {
     // descontar stock igual que pasar por EN_PREPARACION.
     expect(ESTADOS_CON_STOCK_TOMADO).toEqual(["EN_PREPARACION", "ENTREGADA"]);
   });
-
-  it("cada estado tiene etiqueta legible", () => {
-    for (const estado of ESTADOS_ORDEN) {
-      expect(typeof ETIQUETA_ESTADO[estado]).toBe("string");
-      expect(ETIQUETA_ESTADO[estado].length).toBeGreaterThan(0);
-    }
-  });
 });
 
 describe("ETIQUETA_ESTADO", () => {
