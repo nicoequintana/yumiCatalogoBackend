@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "@prisma/client/runtime/client.js";
-import { subtotalDeItem, sumarDecimales, totalDeItems } from "./dinero.js";
+import { subtotalDeItem, sumarDecimales, totalDeItems, costoDeItem } from "./dinero.js";
 
 /**
  * Guard de la regla que este módulo existe para sostener: la aritmética
@@ -60,5 +60,32 @@ describe("dinero — la aritmética es Decimal, no float", () => {
   it("divide sin cola de flotante (el caso de los promedios)", () => {
     expect(new Decimal("3001").div(3).toFixed(0)).toBe("1000");
     expect(new Decimal("3002").div(3).toFixed(0)).toBe("1001");
+  });
+});
+
+describe("costoDeItem", () => {
+  it("multiplica costo por cantidad con Decimal", () => {
+    const resultado = costoDeItem({ costoUnitario: "5000", cantidad: 3 });
+    expect(resultado.toFixed(0)).toBe("15000");
+  });
+
+  it("devuelve null —NUNCA cero— cuando la línea no tiene costo", () => {
+    // Este es el guard de toda la feature. `null` significa "no se puede
+    // calcular el margen de esta línea"; un `Decimal(0)` diría "esta venta no
+    // costó nada" e inflaría la ganancia sin que nada lo delate.
+    expect(costoDeItem({ costoUnitario: null, cantidad: 3 })).toBeNull();
+    expect(costoDeItem({ cantidad: 3 })).toBeNull();
+  });
+
+  it("un costo de cero SÍ es cero, no null", () => {
+    // Un producto que efectivamente costó 0 es un dato válido y distinto de
+    // "no sé cuánto costó".
+    const resultado = costoDeItem({ costoUnitario: "0", cantidad: 2 });
+    expect(resultado).not.toBeNull();
+    expect(resultado.toFixed(0)).toBe("0");
+  });
+
+  it("acepta Decimal, string y number sin perder precisión", () => {
+    expect(costoDeItem({ costoUnitario: 5000, cantidad: 2 }).toFixed(0)).toBe("10000");
   });
 });

@@ -33,6 +33,28 @@ export function subtotalDeItem(item) {
 }
 
 /**
+ * `costoUnitario * cantidad` de un solo ítem, en `Decimal`, o `null` si esa
+ * línea no tiene costo registrado.
+ *
+ * **Devuelve `null`, jamás `Decimal(0)`, y esa distinción es la feature
+ * entera.** `ItemOrden.costoUnitario` es nullable: vale `null` en toda orden
+ * anterior al 2026-08-29 (cuando se creó la columna) y en toda línea de un
+ * producto sin costo cargado. `null` significa "no se puede calcular el margen
+ * de esta línea"; un cero diría "esta venta no costó nada" y le inflaría la
+ * ganancia al negocio sin error, sin aviso y sin nada que lo delate.
+ *
+ * Un `costoUnitario` que vale cero de verdad SÍ devuelve `Decimal(0)`: es un
+ * dato válido y distinto de la ausencia de dato.
+ *
+ * @param {{ costoUnitario: unknown, cantidad: number }} item
+ * @returns {Decimal | null}
+ */
+export function costoDeItem(item) {
+  if (item.costoUnitario === null || item.costoUnitario === undefined) return null;
+  return new Decimal(item.costoUnitario).mul(item.cantidad);
+}
+
+/**
  * Total facturado de una lista de ítems de orden.
  *
  * Tolera `items` ausente (`null`/`undefined`) devolviendo cero: los tableros
