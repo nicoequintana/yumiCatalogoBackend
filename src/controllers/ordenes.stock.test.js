@@ -42,7 +42,7 @@ const { actualizarEstado } = await import("./ordenes.controller.js");
 function orden(overrides = {}) {
   return {
     id: 100,
-    estado: "CONFIRMADA",
+    estado: "EN_PREPARACION",
     stockDescontado: true,
     items: [
       { id: 1, ordenId: 100, productId: 1, nombreProducto: "Termo", precioUnitario: "100", cantidad: 2 },
@@ -141,31 +141,47 @@ beforeEach(() => {
 });
 
 describe("el descuento de stock ocurre exactamente una vez", () => {
-  it("la transición a CONFIRMADA exige stockDescontado: false", async () => {
+  it("la transición a EN_PREPARACION se guarda solo con stockDescontado: false", async () => {
     montarOrden({ estado: "PENDIENTE", stockDescontado: false });
 
-    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
     await actualizarEstado(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
-    // Sin esta condición, una orden EN_PREPARACION/ENTREGADA —que YA tiene el
-    // stock tomado— también cumple `estado != CONFIRMADA`, gana el `count: 1` y
-    // se le vuelve a restar el stock al catálogo. Sin error y sin aviso.
+    // `stockDescontado` es el ÚNICO árbitro. La condición sobre el estado de
+    // origen se sacó a propósito: con dos estados que descuentan,
+    // `estado: { not: "ENTREGADA" }` haría que EN_PREPARACION -> ENTREGADA
+    // matchee y descuente por segunda vez.
     expect(ordenUpdateManyMock.mock.calls[0][0].where).toEqual({
       id: 100,
-      estado: { not: "CONFIRMADA" },
       stockDescontado: false,
     });
+    expect(productUpdateManyMock).toHaveBeenCalled();
   });
 
-  it("re-confirmar una orden EN_PREPARACION no vuelve a descontar", async () => {
-    // La orden ya tiene el stock tomado, así que la guarda NO matchea. El
-    // `count: 0` lo produce el `where` real, no una constante del test: si
-    // alguien saca `stockDescontado: false` del controller, este `updateMany`
-    // matchea, descuenta, y el test se pone en rojo.
+  it("PENDIENTE directo a ENTREGADA descuenta stock", async () => {
+    // El agujero que este cambio cierra: sin máquina de estados este salto es
+    // legal, y antes escribía la etiqueta sin descontar nada mientras la orden
+    // ya contaba como venta.
+    montarOrden({ estado: "PENDIENTE", stockDescontado: false });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "ENTREGADA" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(productUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: 1, stock: { gte: 2 } },
+      data: { stock: { decrement: 2 } },
+    });
+    expect(detalleAuditado().stockDescontado).toBe(true);
+  });
+
+  it("EN_PREPARACION a ENTREGADA no vuelve a descontar", async () => {
+    // La orden ya tiene el stock tomado, así que la guarda no matchea. El
+    // `count: 0` lo produce el `where` real, no una constante del test.
     montarOrden({ estado: "EN_PREPARACION", stockDescontado: true });
 
-    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "ENTREGADA" } });
     await actualizarEstado(req, res, next);
 
     expect(next).not.toHaveBeenCalled();
@@ -173,19 +189,28 @@ describe("el descuento de stock ocurre exactamente una vez", () => {
     expect(detalleAuditado().stockDescontado).toBe(false);
   });
 
-  it("confirmar DESPUÉS de cancelar sí vuelve a descontar", async () => {
-    // Cancelar apagó el flag y ya devolvió las unidades, así que esta
-    // confirmación necesita volver a tomarlas. Es la única re-confirmación que
-    // debe descontar, y la guarda no puede romperla.
+  it("CANCELADA a EN_PREPARACION vuelve a descontar", async () => {
+    // Cancelar apagó el flag y devolvió las unidades, así que la orden vuelve
+    // a necesitarlas.
     montarOrden({ estado: "CANCELADA", stockDescontado: false });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
+    await actualizarEstado(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(productUpdateManyMock).toHaveBeenCalled();
+    expect(detalleAuditado().stockDescontado).toBe(true);
+  });
+
+  it("CONFIRMADA ya no es un estado válido", async () => {
+    montarOrden({ estado: "PENDIENTE", stockDescontado: false });
 
     const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
     await actualizarEstado(req, res, next);
 
-    expect(productUpdateManyMock).toHaveBeenCalledWith({
-      where: { id: 1, stock: { gte: 2 } },
-      data: { stock: { decrement: 2 } },
-    });
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next.mock.calls[0][0].status).toBe(400);
+    expect(ordenUpdateManyMock).not.toHaveBeenCalled();
   });
 });
 
@@ -198,7 +223,7 @@ describe("una línea sin producto no llega nunca a la base", () => {
   it("confirmar una orden con un producto borrado no emite un where con id null", async () => {
     montarOrden({ estado: "PENDIENTE", stockDescontado: false, items: ITEMS_MIXTOS });
 
-    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CONFIRMADA" } });
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
     await actualizarEstado(req, res, next);
 
     // El modo de falla real: `where: { id: null }` lo rechaza el validador de
@@ -218,7 +243,7 @@ describe("una línea sin producto no llega nunca a la base", () => {
   });
 
   it("cancelar una orden con un producto borrado no emite un where con id null", async () => {
-    montarOrden({ estado: "CONFIRMADA", stockDescontado: true, items: ITEMS_MIXTOS });
+    montarOrden({ estado: "EN_PREPARACION", stockDescontado: true, items: ITEMS_MIXTOS });
 
     const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "CANCELADA" } });
     await actualizarEstado(req, res, next);

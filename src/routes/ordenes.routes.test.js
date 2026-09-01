@@ -139,7 +139,7 @@ beforeEach(() => {
   ordenUpdateMock.mockReset();
   ordenUpdateManyMock.mockReset();
   // Por defecto la escritura guardada de transición matchea la fila (la
-  // orden NO estaba CONFIRMADA).
+  // orden NO tenía `stockDescontado: true`).
   ordenUpdateManyMock.mockResolvedValue({ count: 1 });
   ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
@@ -282,22 +282,22 @@ describe("GET /api/ordenes/:id", () => {
 
 describe("PATCH /api/ordenes/:id/estado", () => {
   it("responde 401 sin token", async () => {
-    const res = await request(buildApp()).patch("/api/ordenes/100/estado").send({ estado: "CONFIRMADA" });
+    const res = await request(buildApp()).patch("/api/ordenes/100/estado").send({ estado: "EN_PREPARACION" });
     expect(res.status).toBe(401);
   });
 
   it("responde 200 con token y actualiza el estado", async () => {
     ordenFindUniqueMock.mockResolvedValue(ORDEN);
     productUpdateManyMock.mockResolvedValue({ count: 1 });
-    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "EN_PREPARACION" });
 
     const res = await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA" });
+      .send({ estado: "EN_PREPARACION" });
 
     expect(res.status).toBe(200);
-    expect(res.body.estado).toBe("CONFIRMADA");
+    expect(res.body.estado).toBe("EN_PREPARACION");
     // El descuento lo resuelve la base sobre el valor vigente de la fila.
     expect(productUpdateManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -335,14 +335,14 @@ describe("PATCH /api/ordenes/:id/estado", () => {
 describe("auditoría de órdenes", () => {
   it("registra en AuditLog el cambio de estado, con el estado anterior y el nuevo", async () => {
     ordenFindUniqueMock.mockResolvedValue({ ...ORDEN, estado: "PENDIENTE" });
-    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "EN_PREPARACION" });
     productFindUniqueMock.mockResolvedValue(PRODUCTO_DISPONIBLE);
     productUpdateMock.mockResolvedValue({});
 
     await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA" });
+      .send({ estado: "EN_PREPARACION" });
 
     expect(auditCreateMock).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -352,7 +352,7 @@ describe("auditoría de órdenes", () => {
         usuarioEmail: "admin@yima.test",
         detalle: JSON.stringify({
           estadoAnterior: "PENDIENTE",
-          estadoNuevo: "CONFIRMADA",
+          estadoNuevo: "EN_PREPARACION",
           stockDescontado: true,
         }),
       }),
@@ -364,12 +364,12 @@ describe("auditoría de órdenes", () => {
     // El descuento guardado no matchea (stock quedó por debajo de lo pedido);
     // el segundo updateMany apoya la fila en 0.
     productUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
-    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "CONFIRMADA" });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "EN_PREPARACION" });
 
     const res = await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA" });
+      .send({ estado: "EN_PREPARACION" });
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(res.status).toBe(200);
@@ -379,7 +379,7 @@ describe("auditoría de órdenes", () => {
     // El AuditLog recibe el detalle estructurado del faltante, además del
     // cambio de estado.
     const detalle = JSON.parse(auditCreateMock.mock.calls[0][0].data.detalle);
-    expect(detalle.estadoNuevo).toBe("CONFIRMADA");
+    expect(detalle.estadoNuevo).toBe("EN_PREPARACION");
     expect(detalle.stockDescontado).toBe(true);
     expect(detalle.stockInsuficiente).toEqual([
       { productId: 1, nombreProducto: "Producto A", cantidadPedida: 1 },
@@ -527,7 +527,7 @@ describe("POST /api/ordenes — email obligatorio y notificaciones", () => {
 
 describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
   function prepararCambio() {
-    const confirmada = { ...ORDEN, estado: "CONFIRMADA" };
+    const confirmada = { ...ORDEN, estado: "EN_PREPARACION" };
     ordenFindUniqueMock.mockResolvedValue(ORDEN);
     ordenUpdateMock.mockResolvedValue(confirmada);
     return confirmada;
@@ -539,7 +539,7 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
     const res = await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA" });
+      .send({ estado: "EN_PREPARACION" });
 
     expect(res.status).toBe(200);
     expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
@@ -552,7 +552,7 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
     await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA", notificarCliente: false });
+      .send({ estado: "EN_PREPARACION", notificarCliente: false });
 
     expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
   });
@@ -563,7 +563,7 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
     const res = await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA", notificarCliente: true });
+      .send({ estado: "EN_PREPARACION", notificarCliente: true });
 
     expect(res.status).toBe(200);
     expect(notificarCambioEstadoMock).toHaveBeenCalledWith(confirmada);
@@ -581,10 +581,10 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
     const res = await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA", notificarCliente: true });
+      .send({ estado: "EN_PREPARACION", notificarCliente: true });
 
     expect(res.status).toBe(200);
-    expect(res.body.estado).toBe("CONFIRMADA");
+    expect(res.body.estado).toBe("EN_PREPARACION");
     expect(res.body.notificacion.enviada).toBe(false);
     expect(res.body.notificacion.error).toBe("Invalid login");
   });
@@ -612,7 +612,7 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
     await request(buildApp())
       .patch("/api/ordenes/100/estado")
       .set("Authorization", authHeader)
-      .send({ estado: "CONFIRMADA", notificarCliente: "si" });
+      .send({ estado: "EN_PREPARACION", notificarCliente: "si" });
 
     expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
   });

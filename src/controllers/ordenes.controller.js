@@ -6,7 +6,7 @@ import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitad
 import { MAX_ORDENES_HISTORICO } from "./admin.controller.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
-import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
+import { ESTADOS_ORDEN, ESTADOS_CON_STOCK_TOMADO } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
@@ -597,31 +597,23 @@ export async function actualizarEstado(req, res, next) {
 
       estadoAnterior = vigente.estado;
 
-      if (estado === "CONFIRMADA") {
-        // Escritura guardada: solo matchea si la orden todavía NO estaba
-        // CONFIRMADA **y no tiene el stock tomado**. El `count` es el árbitro
-        // de la transición — dos PATCH concurrentes pueden releer PENDIENTE los
-        // dos, pero solo uno de los dos consigue `count: 1` y descuenta.
+      if (ESTADOS_CON_STOCK_TOMADO.includes(estado)) {
+        // Escritura guardada: el árbitro de la transición es el `count` de esta
+        // escritura, nunca una relectura. Bajo READ COMMITTED dos PATCH
+        // concurrentes releen lo mismo, pero solo uno gana el X lock y obtiene
+        // `count: 1`.
         //
-        // `stockDescontado: false` es la mitad que faltaba, y su ausencia era un
-        // descuento doble: una orden en EN_PREPARACION o ENTREGADA tiene el
-        // stock TOMADO y sin embargo cumple `estado != CONFIRMADA`, así que
-        // volver a guardarla como CONFIRMADA matcheaba, daba `count: 1` y le
-        // restaba las unidades al catálogo por segunda vez. Sin error y sin
-        // aviso: el faltante recién aparecía como un producto agotado que en el
-        // depósito estaba. Es la condición simétrica de la que la cancelación ya
-        // llevaba abajo, y de ella depende que el descuento ocurra EXACTAMENTE
-        // una vez.
+        // `stockDescontado: false` es la guarda entera. La condición sobre el
+        // estado de origen se sacó al pasar a DOS estados que descuentan: con
+        // `estado: { not: "ENTREGADA" }`, la transición EN_PREPARACION ->
+        // ENTREGADA —que debe ser un no-op de stock— matchearía y restaría las
+        // unidades por segunda vez.
         //
-        // Cancelar apaga el flag, así que CANCELADA → CONFIRMADA sí vuelve a
-        // descontar. Eso es correcto: la cancelación ya había devuelto las
-        // unidades y la orden vuelve a necesitarlas.
-        //
-        // La misma escritura enciende `stockDescontado`: es lo que le permite
-        // a la cancelación saber que esta orden tiene stock tomado, sin tener
-        // que deducirlo del estado (ver el comentario de la columna).
+        // La misma escritura enciende el flag, que es lo que le permite a la
+        // cancelación saber que esta orden tiene stock tomado sin deducirlo del
+        // estado.
         const transicion = await tx.orden.updateMany({
-          where: { id, estado: { not: "CONFIRMADA" }, stockDescontado: false },
+          where: { id, stockDescontado: false },
           data: { estado, stockDescontado: true },
         });
         descontoStock = transicion.count === 1;
