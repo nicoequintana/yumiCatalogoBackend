@@ -66,6 +66,105 @@ beforeEach(() => {
   updateMock.mockReset();
 });
 
+describe("GET /api/products - filtros de stock y etiqueta", () => {
+  it("stock=sin trae solo los agotados (admin)", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/products?admin=1&stock=sin")
+      .set("Authorization", authHeader);
+
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({ stock: 0 });
+  });
+
+  it("stock=bajo es mayor que cero y menor que el umbral: ni agotados ni el 3", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/products?admin=1&stock=bajo")
+      .set("Authorization", authHeader);
+
+    const { where } = findManyMock.mock.calls[0][0];
+    // El 0 ya tiene su propio filtro (`sin`) y el 3 no es "menos de 3".
+    expect(where).toEqual({ stock: { gt: 0, lt: 3 } });
+  });
+
+  it("un valor de stock desconocido no filtra nada, como el resto de los filtros", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/products?admin=1&stock=cualquiercosa")
+      .set("Authorization", authHeader);
+
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toBeUndefined();
+  });
+
+  it("el filtro de stock NO abre la puerta de los agotados a un anónimo", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?stock=sin");
+
+    const { where } = findManyMock.mock.calls[0][0];
+    // La rama pública excluye agotados por diseño; un query param público no
+    // puede pisar esa guarda (mismo criterio que `ids`).
+    expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
+  });
+
+  it("etiqueta filtra por igualdad exacta y compone con las guardas públicas", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?etiqueta=Nuevo");
+
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toEqual({
+      visibleEnCatalogo: true,
+      stock: { gt: 0 },
+      etiqueta: "Nuevo",
+    });
+  });
+
+  it("una etiqueta vacía no filtra", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/products?admin=1&etiqueta=")
+      .set("Authorization", authHeader);
+
+    const { where } = findManyMock.mock.calls[0][0];
+    expect(where).toBeUndefined();
+  });
+});
+
+describe("GET /api/products/etiquetas", () => {
+  it("exige auth: las etiquetas en uso son dato del panel, no del catálogo público", async () => {
+    const res = await request(buildApp()).get("/api/products/etiquetas");
+
+    expect(res.status).toBe(401);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  it("devuelve las etiquetas distintas en uso, ordenadas y sin null", async () => {
+    findManyMock.mockResolvedValue([{ etiqueta: "Exclusivo" }, { etiqueta: "Nuevo" }]);
+
+    const res = await request(buildApp())
+      .get("/api/products/etiquetas")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ etiquetas: ["Exclusivo", "Nuevo"] });
+    // La forma de la consulta es el contrato: distinct sobre la columna, nunca
+    // traerse el catálogo entero para deduplicar en memoria.
+    expect(findManyMock.mock.calls[0][0]).toEqual({
+      where: { etiqueta: { not: null } },
+      select: { etiqueta: true },
+      distinct: ["etiqueta"],
+      orderBy: { etiqueta: "asc" },
+    });
+  });
+});
+
 describe("GET /api/products - filtros de listado", () => {
   it("filtra por categoria (numérico)", async () => {
     findManyMock.mockResolvedValue([]);

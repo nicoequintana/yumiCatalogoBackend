@@ -166,6 +166,9 @@ router.get("/resumen", requireAuth, productsController.resumen);
 // Estado del catálogo (completitud y exposición) para la pantalla "Salud del
 // catálogo". Mismo pisotón que `/resumen`: va ANTES de `GET /:id`.
 router.get("/salud", requireAuth, productsController.salud);
+// Declarada ANTES de las rutas `/:id`, mismo pisotón que evitan `/resumen` y
+// `/salud`: si no, Express matchea "etiquetas" como un id.
+router.get("/etiquetas", requireAuth, productsController.etiquetas);
 // Los dos proxies de media también llevan `authOpcional`: la media de un
 // producto oculto no puede seguir siendo pública solo porque se la pida por
 // otra URL. Siguen sirviendo a visitantes anónimos —las fotos de un producto

@@ -202,6 +202,24 @@ function construirFiltrosListado(query, { esAdmin, ids }) {
   // caer en cualquier página.
   if (query.destacado !== undefined) where.destacado = true;
 
+  // Igualdad exacta, no `contains`: el select del admin ofrece valores que ya
+  // existen (GET /products/etiquetas), así que un match parcial solo podría
+  // mezclar etiquetas distintas. Compone con las guardas públicas como
+  // cualquier otro filtro.
+  if (typeof query.etiqueta === "string" && query.etiqueta.trim() !== "") {
+    where.etiqueta = query.etiqueta.trim();
+  }
+
+  // Solo en la vista admin: la rama pública ya escribe `where.stock` como
+  // GUARDA (`gt: 0`), y un query param público que la pise abriría los
+  // agotados a un anónimo — mismo criterio que `ids`, que compone y nunca
+  // reemplaza. Un valor desconocido no filtra, como el resto de los filtros
+  // de este endpoint público.
+  if (esAdmin) {
+    if (query.stock === "sin") where.stock = 0;
+    if (query.stock === "bajo") where.stock = { gt: 0, lt: STOCK_BAJO_UMBRAL };
+  }
+
   if (typeof query.search === "string" && query.search.trim() !== "") {
     // Se escapan los metacaracteres de LIKE (`%`, `_`, `[`) antes de armar el
     // `contains`: Prisma parametriza el valor pero NO los escapa, así que sin
@@ -339,6 +357,41 @@ export async function resumen(req, res, next) {
     ]);
 
     res.json({ total, visibles, publicados, destacados, destacadosPublicados });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Umbral del filtro "stock bajo" del listado del admin: `bajo` es `0 < stock
+ * < 3`. El 0 queda afuera porque ya tiene su propio filtro (`sin`) — sumarlo
+ * acá haría que las dos opciones se pisen y el conteo de "bajo" mienta.
+ */
+export const STOCK_BAJO_UMBRAL = 3;
+
+/**
+ * GET /products/etiquetas — las etiquetas EN USO, para el filtro del listado
+ * del admin.
+ *
+ * `Product.etiqueta` es texto libre: las "sugeridas" del formulario no son una
+ * lista cerrada, así que un select armado con constantes no podría ofrecer una
+ * etiqueta que existe en la base pero nadie sugirió — un filtro que miente por
+ * omisión. La consulta es un `distinct` sobre la columna, nunca traerse el
+ * catálogo para deduplicar en memoria.
+ *
+ * Requiere auth: enumera datos del panel (incluye etiquetas de productos
+ * ocultos), y el catálogo público no la necesita.
+ */
+export async function etiquetas(req, res, next) {
+  try {
+    const filas = await prisma.product.findMany({
+      where: { etiqueta: { not: null } },
+      select: { etiqueta: true },
+      distinct: ["etiqueta"],
+      orderBy: { etiqueta: "asc" },
+    });
+
+    res.json({ etiquetas: filas.map((fila) => fila.etiqueta) });
   } catch (err) {
     next(err);
   }
