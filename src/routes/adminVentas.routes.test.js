@@ -20,7 +20,7 @@ vi.mock("../lib/prisma.js", () => ({
 }));
 
 const { default: adminRouter } = await import("./admin.routes.js");
-const { MAX_ORDENES_HISTORICO } = await import("../controllers/admin.controller.js");
+const { MAX_ORDENES_HISTORICO, ESTADOS_FACTURABLES } = await import("../controllers/admin.controller.js");
 
 function buildApp() {
   const app = express();
@@ -71,7 +71,7 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [
           { productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 2 },
@@ -99,7 +99,7 @@ describe("GET /api/admin/ventas", () => {
     expect(res.body.productosPorOrden).toBe(1.5);
   });
 
-  it("cuenta CONFIRMADA, EN_PREPARACION y ENTREGADA como ingreso", async () => {
+  it("cuenta EN_PREPARACION y ENTREGADA como ingreso; CONFIRMADA ya no cuenta", async () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
@@ -123,15 +123,16 @@ describe("GET /api/admin/ventas", () => {
 
     const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
 
-    expect(res.body.ingresosTotales).toBe("300");
-    expect(res.body.cantidadOrdenes).toBe(3);
+    // Solo las dos últimas cuentan: CONFIRMADA quedó fuera de ESTADOS_FACTURABLES.
+    expect(res.body.ingresosTotales).toBe("200");
+    expect(res.body.cantidadOrdenes).toBe(2);
   });
 
   it("excluye PENDIENTE del ingreso y lo reporta aparte como pipeline", async () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
@@ -157,7 +158,7 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
@@ -193,7 +194,7 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [
           // Barato pero muchas unidades: 10 * 10 = 100
@@ -224,13 +225,13 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T09:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T20:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "50", cantidad: 1 }],
       }),
@@ -267,7 +268,7 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         // 22:30 del 15 en Buenos Aires ya es el 16 en UTC.
         createdAt: "2026-08-16T01:30:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "900", cantidad: 1 }],
@@ -313,19 +314,19 @@ describe("GET /api/admin/ventas", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1001", cantidad: 1 }],
       }),
       orden({
         id: 3,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "1000", cantidad: 1 }],
       }),
@@ -432,7 +433,7 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
       }),
@@ -452,7 +453,7 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
   it("descarta la fila extra y declara historico.recortado: true al superar el tope", async () => {
     const unaOrden = orden({
       id: 1,
-      estado: "CONFIRMADA",
+      estado: "EN_PREPARACION",
       createdAt: "2026-08-10T12:00:00Z",
       items: [{ productId: 1, nombreProducto: "Vela", precioUnitario: "100", cantidad: 1 }],
     });
@@ -467,5 +468,11 @@ describe("GET /api/admin/ventas — tope de filas del histórico", () => {
     expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
     // La fila de más no puede contaminar los números: se analiza el tope justo.
     expect(res.body.cantidadOrdenes).toBe(MAX_ORDENES_HISTORICO);
+  });
+});
+
+describe("ESTADOS_FACTURABLES", () => {
+  it("cuenta como venta desde EN_PREPARACION, sin CONFIRMADA", () => {
+    expect(ESTADOS_FACTURABLES).toEqual(["EN_PREPARACION", "ENTREGADA"]);
   });
 });

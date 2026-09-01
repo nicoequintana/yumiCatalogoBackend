@@ -110,7 +110,7 @@ describe("GET /api/admin/embudo", () => {
     expect(ordenCountMock).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          estado: { in: ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"] },
+          estado: { in: ["EN_PREPARACION", "ENTREGADA"] },
         }),
       }),
     );

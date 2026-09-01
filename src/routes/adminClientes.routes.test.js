@@ -79,7 +79,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -93,7 +93,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       }),
       orden({
         id: 3,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-11T12:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "50", cantidad: 1 }],
@@ -116,14 +116,14 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-01-05T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -144,7 +144,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -159,7 +159,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     // orden PENDIENTE o CANCELADA nunca llega al cálculo. Filtrar en memoria
     // traería filas de más desde la base para después tirarlas.
     const args = ordenFindManyMock.mock.calls[0][0];
-    expect(args.where.estado).toEqual({ in: ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"] });
+    expect(args.where.estado).toEqual({ in: ["EN_PREPARACION", "ENTREGADA"] });
     expect(args.where.estado.in).not.toContain("PENDIENTE");
     expect(args.where.estado.in).not.toContain("CANCELADA");
 
@@ -171,7 +171,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [
@@ -210,11 +210,11 @@ describe("GET /api/admin/clientes-resumen", () => {
       // 1000 + 1000 + 1000 = 3000 sobre 2 clientes distintos = 1500 exacto...
       // salvo que ANA aporta una orden más: 4000 / 3 clientes no existe.
       [
-        orden({ id: 1, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: ANA,
+        orden({ id: 1, estado: "EN_PREPARACION", createdAt: "2026-08-10T12:00:00Z", cliente: ANA,
           items: [{ precioUnitario: "1000", cantidad: 1 }] }),
-        orden({ id: 2, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: BETO,
+        orden({ id: 2, estado: "EN_PREPARACION", createdAt: "2026-08-10T12:00:00Z", cliente: BETO,
           items: [{ precioUnitario: "1000", cantidad: 1 }] }),
-        orden({ id: 3, estado: "CONFIRMADA", createdAt: "2026-08-10T12:00:00Z", cliente: CARLA,
+        orden({ id: 3, estado: "EN_PREPARACION", createdAt: "2026-08-10T12:00:00Z", cliente: CARLA,
           items: [{ precioUnitario: "1001", cantidad: 1 }] }),
       ],
     );
@@ -233,7 +233,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Beto: una sola orden grande.
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "5000", cantidad: 1 }],
@@ -241,7 +241,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Ana: dos órdenes que suman más que la de Beto.
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "4000", cantidad: 1 }],
@@ -256,7 +256,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Carla: la más chica.
       orden({
         id: 4,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-12T12:00:00Z",
         cliente: CARLA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -288,7 +288,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       Array.from({ length: 15 }, (_unused, indice) =>
         orden({
           id: indice + 1,
-          estado: "CONFIRMADA",
+          estado: "EN_PREPARACION",
           createdAt: "2026-08-10T12:00:00Z",
           cliente: { id: indice + 1, dni: `dni-${indice}`, nombre: `Cliente ${indice}` },
           items: [{ precioUnitario: `${(indice + 1) * 100}.00`, cantidad: 1 }],
@@ -310,28 +310,28 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-05T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-06T12:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 4,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-07T12:00:00Z",
         cliente: CARLA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -352,21 +352,21 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-05T12:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-07T12:00:00Z",
         cliente: CARLA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -387,21 +387,21 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Ana: 01 -> 11 -> 21, o sea dos intervalos de 10 días.
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-11T00:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 3,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-21T00:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -409,14 +409,14 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Beto: 01 -> 05, un intervalo de 4 días.
       orden({
         id: 4,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 5,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-05T00:00:00Z",
         cliente: BETO,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -424,7 +424,7 @@ describe("GET /api/admin/clientes-resumen", () => {
       // Carla no repitió: no aporta ningún intervalo.
       orden({
         id: 6,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-03T00:00:00Z",
         cliente: CARLA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -445,14 +445,14 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 2,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-21T00:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
       }),
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-01T00:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -514,7 +514,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     const args = ordenFindManyMock.mock.calls[0][0];
     expect(args.where?.createdAt).toBeUndefined();
     // Y solo trae los estados que cuentan como venta, filtrado en la base.
-    expect(args.where.estado).toEqual({ in: ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"] });
+    expect(args.where.estado).toEqual({ in: ["EN_PREPARACION", "ENTREGADA"] });
   });
 
   it("acota el histórico con un take y trae primero las órdenes más recientes", async () => {
@@ -536,7 +536,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     ordenFindManyMock.mockResolvedValue([
       orden({
         id: 1,
-        estado: "CONFIRMADA",
+        estado: "EN_PREPARACION",
         createdAt: "2026-08-10T12:00:00Z",
         cliente: ANA,
         items: [{ precioUnitario: "100", cantidad: 1 }],
@@ -559,7 +559,7 @@ describe("GET /api/admin/clientes-resumen", () => {
     // leerla y así el test no materializa 20.001 objetos distintos.
     const unaOrden = orden({
       id: 1,
-      estado: "CONFIRMADA",
+      estado: "EN_PREPARACION",
       createdAt: "2026-08-10T12:00:00Z",
       cliente: ANA,
       items: [{ precioUnitario: "100", cantidad: 1 }],

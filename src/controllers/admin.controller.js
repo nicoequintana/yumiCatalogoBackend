@@ -64,14 +64,18 @@ export async function listarAuditLogs(req, res, next) {
 /**
  * Estados que cuentan como venta concretada.
  *
- * El umbral es CONFIRMADA en adelante, y no es arbitrario: `ordenes.controller.js`
- * descuenta stock exactamente cuando una orden entra en CONFIRMADA — ese es el
- * momento en que el sistema ya da la mercadería por salida. Una métrica de
- * facturación con otro umbral contradiría la lógica de stock (se estaría
- * descontando mercadería que la métrica todavía no considera vendida, o al
- * revés). PENDIENTE y CANCELADA quedan afuera a propósito.
+ * El umbral es EN_PREPARACION en adelante, y no es arbitrario: son exactamente
+ * los estados en los que `ordenes.controller.js` toma el stock
+ * (`ESTADOS_CON_STOCK_TOMADO`), o sea el momento en que el sistema ya da la
+ * mercadería por salida. Una métrica de facturación con otro umbral
+ * contradiría la lógica de stock. PENDIENTE y CANCELADA quedan afuera a
+ * propósito.
+ *
+ * Coincide valor por valor con `ESTADOS_CON_STOCK_TOMADO` y se mantiene
+ * aparte: esta responde "¿cuento esto como plata?" y aquella "¿saqué esto del
+ * depósito?". Hoy la respuesta es la misma; podrían divergir.
  */
-export const ESTADOS_FACTURABLES = ["CONFIRMADA", "EN_PREPARACION", "ENTREGADA"];
+export const ESTADOS_FACTURABLES = ["EN_PREPARACION", "ENTREGADA"];
 
 /** Período por defecto cuando no llega `desde`/`hasta` en la query. */
 const DIAS_PERIODO_POR_DEFECTO = 30;

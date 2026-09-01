@@ -88,19 +88,18 @@ describe("GET /api/admin/operacion", () => {
 
   it("devuelve el conteo de órdenes por estado, con cero en los estados sin órdenes", async () => {
     ordenGroupByMock.mockResolvedValue([
-      { estado: "CONFIRMADA", _count: { _all: 2 } },
+      { estado: "EN_PREPARACION", _count: { _all: 2 } },
       { estado: "CANCELADA", _count: { _all: 1 } },
     ]);
 
     const res = await pedirOperacion();
 
     expect(res.status).toBe(200);
-    // Los 5 estados siempre presentes: un estado sin órdenes vale 0, no falta
+    // Los 4 estados siempre presentes: un estado sin órdenes vale 0, no falta
     // de la respuesta (la UI no tiene que adivinar si es cero o si no vino).
     expect(res.body.ordenesPorEstado).toEqual({
       PENDIENTE: 0,
-      CONFIRMADA: 2,
-      EN_PREPARACION: 0,
+      EN_PREPARACION: 2,
       ENTREGADA: 0,
       CANCELADA: 1,
     });
@@ -114,7 +113,7 @@ describe("GET /api/admin/operacion", () => {
     // orden terminal no está "frenada", está terminada.
     const argsEstancadas = ordenFindManyMock.mock.calls.map(([args]) => args);
     const conEstados = argsEstancadas.find((args) => args?.where?.estado?.in);
-    expect(conEstados.where.estado.in).toEqual(["PENDIENTE", "CONFIRMADA", "EN_PREPARACION"]);
+    expect(conEstados.where.estado.in).toEqual(["PENDIENTE", "EN_PREPARACION"]);
     expect(conEstados.where.estado.in).not.toContain("ENTREGADA");
     expect(conEstados.where.estado.in).not.toContain("CANCELADA");
   });
@@ -148,7 +147,7 @@ describe("GET /api/admin/operacion", () => {
         },
         {
           id: 4,
-          estado: "CONFIRMADA",
+          estado: "EN_PREPARACION",
           updatedAt: haceDias(5),
           cliente: { nombre: "Luis Paz" },
           items: [{ precioUnitario: "50", cantidad: 1 }],
@@ -185,7 +184,7 @@ describe("GET /api/admin/operacion", () => {
         return [
           { id: 1, estado: "PENDIENTE", updatedAt: haceDias(2) },
           { id: 2, estado: "PENDIENTE", updatedAt: haceDias(4) },
-          { id: 3, estado: "CONFIRMADA", updatedAt: haceDias(10) },
+          { id: 3, estado: "EN_PREPARACION", updatedAt: haceDias(10) },
         ];
       }
       return [];
@@ -196,8 +195,7 @@ describe("GET /api/admin/operacion", () => {
     expect(res.status).toBe(200);
     expect(res.body.antiguedadPromedio).toEqual({
       PENDIENTE: 3,
-      CONFIRMADA: 10,
-      EN_PREPARACION: 0,
+      EN_PREPARACION: 10,
     });
   });
 
@@ -277,7 +275,6 @@ describe("GET /api/admin/operacion", () => {
     expect(res.status).toBe(200);
     expect(res.body.ordenesPorEstado).toEqual({
       PENDIENTE: 0,
-      CONFIRMADA: 0,
       EN_PREPARACION: 0,
       ENTREGADA: 0,
       CANCELADA: 0,
@@ -285,7 +282,6 @@ describe("GET /api/admin/operacion", () => {
     expect(res.body.ordenesEstancadas).toEqual({ total: 0, lista: [] });
     expect(res.body.antiguedadPromedio).toEqual({
       PENDIENTE: 0,
-      CONFIRMADA: 0,
       EN_PREPARACION: 0,
     });
     expect(res.body.quiebresConDemanda).toEqual([]);
