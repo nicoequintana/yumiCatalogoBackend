@@ -22,6 +22,7 @@ import configRouter from "./routes/config.routes.js";
 import eventosRouter from "./routes/eventos.routes.js";
 import ordenesRouter from "./routes/ordenes.routes.js";
 import clientesRouter from "./routes/clientes.routes.js";
+import healthRouter from "./routes/health.routes.js";
 import { manejadorDeErrores } from "./middlewares/errorHandler.js";
 import { prisma } from "./lib/prisma.js";
 import { registrarApagadoElegante } from "./lib/apagadoElegante.js";
@@ -78,9 +79,11 @@ app.use(cors({ origin: CORS_ORIGIN }));
 // items pesa unos pocos KB, y `POST /eventos` y el login son cuerpos mínimos.
 app.use(express.json({ limit: "100kb" }));
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
+// El health check vive en su propio router y CONSULTA LA BASE (ver
+// `controllers/health.controller.js`). Era un `{ ok: true }` inline que no
+// tocaba nada, y por eso un contenedor sin conexión a SQL Server pasaba el
+// chequeo de EasyPanel y seguía en rotación sirviendo 500.
+app.use("/health", healthRouter);
 
 app.use("/api/auth", authRouter);
 app.use("/api/usuarios", usuariosRouter);
