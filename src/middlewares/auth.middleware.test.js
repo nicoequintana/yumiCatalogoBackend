@@ -23,7 +23,7 @@ beforeEach(() => {
   // que backfillea la migración): es el caso normal, y así los tests que no
   // hablan de revocación no tienen que setearlo uno por uno. Los tokens de esos
   // tests se firman con `tokenVersion: 0` para coincidir.
-  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
 });
 
 function buildApp() {
@@ -77,7 +77,7 @@ describe("requireAuth", () => {
     expect(res.status).toBe(200);
     // `req.usuario` es solo la identidad — `tokenVersion` no se filtra a los
     // controllers ni a la auditoría.
-    expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test" });
+    expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test", puedeEliminar: true });
   });
 
   it("tolera tokens sin email en el payload (email queda null, no rompe)", async () => {
@@ -90,7 +90,7 @@ describe("requireAuth", () => {
       .get("/quien-soy")
       .set("Authorization", `Bearer ${tokenSinEmail}`);
     expect(res.status).toBe(200);
-    expect(res.body.usuario).toEqual({ id: 3, email: null });
+    expect(res.body.usuario).toEqual({ id: 3, email: null, puedeEliminar: true });
   });
 
   it("normaliza un sub no numérico a null en vez de propagar NaN", async () => {
@@ -101,7 +101,9 @@ describe("requireAuth", () => {
       .get("/quien-soy")
       .set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.usuario).toEqual({ id: null, email: "admin@yima.test" });
+    // `sub` no numérico: no hay fila que consultar, así que el permiso queda
+    // fail-closed en `false` — la sesión sigue valiendo, el borrado no.
+    expect(res.body.usuario).toEqual({ id: null, email: "admin@yima.test", puedeEliminar: false });
   });
 });
 
@@ -118,7 +120,7 @@ describe("authOpcional", () => {
     });
     const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test" });
+    expect(res.body.usuario).toEqual({ id: 7, email: "admin@yima.test", puedeEliminar: true });
   });
 
   it("degrada a anónimo (200, sin req.usuario) si el token es basura", async () => {
@@ -156,7 +158,7 @@ describe("authOpcional", () => {
     const token = jwt.sign({ sub: "no-numerico" }, "test-secret", { expiresIn: "7d" });
     const res = await request(buildApp()).get("/publico").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.usuario).toEqual({ id: null, email: null });
+    expect(res.body.usuario).toEqual({ id: null, email: null, puedeEliminar: false });
   });
 });
 
@@ -177,12 +179,12 @@ describe("revocación de sesión: el usuario del token tiene que seguir existien
     expect(res.body).toEqual({ error: "No autorizado." });
   });
 
-  it("requireAuth consulta solo { id, tokenVersion } (no trae passwordHash ni nada más)", async () => {
+  it("requireAuth consulta solo { id, tokenVersion, puedeEliminar } (no trae passwordHash ni nada más)", async () => {
     await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
 
     expect(usuarioFindUniqueMock).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { id: true, tokenVersion: true },
+      select: { id: true, tokenVersion: true, puedeEliminar: true },
     });
   });
 
@@ -244,7 +246,7 @@ describe("revocación de sesión por versión de token (tokenVersion)", () => {
     expect(res.body).toEqual({ ok: true });
   });
 
-  it("requireAuth trae { id, tokenVersion } en UNA sola consulta", async () => {
+  it("requireAuth trae { id, tokenVersion, puedeEliminar } en UNA sola consulta", async () => {
     const token = jwt.sign({ sub: 7, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
       expiresIn: "24h",
     });
@@ -254,7 +256,7 @@ describe("revocación de sesión por versión de token (tokenVersion)", () => {
     expect(usuarioFindUniqueMock).toHaveBeenCalledTimes(1);
     expect(usuarioFindUniqueMock).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { id: true, tokenVersion: true },
+      select: { id: true, tokenVersion: true, puedeEliminar: true },
     });
   });
 
@@ -319,5 +321,53 @@ describe("revocación de sesión por versión de token (tokenVersion)", () => {
     const res = await request(buildApp()).get("/protegido").set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe("requireAuth - permiso de borrado", () => {
+  const tokenDe7 = jwt.sign({ sub: 7, email: "a@b.c", tokenVersion: 0 }, process.env.JWT_SECRET);
+
+  // Sale de la BASE, no del JWT: quitarle el permiso a alguien tiene que surtir
+  // efecto en la request siguiente, no cuando expire su token 24 horas después.
+  // Y viaja en la MISMA consulta que ya verificaba la revocación de sesión, así
+  // que no cuesta un round-trip extra.
+  it("expone puedeEliminar en req.usuario leyéndolo de la base", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0, puedeEliminar: false });
+
+    const res = await request(buildApp()).get("/quien-soy").set("Authorization", `Bearer ${tokenDe7}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.usuario.puedeEliminar).toBe(false);
+  });
+
+  it("expone puedeEliminar en true cuando el usuario lo tiene", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0, puedeEliminar: true });
+
+    const res = await request(buildApp()).get("/quien-soy").set("Authorization", `Bearer ${tokenDe7}`);
+
+    expect(res.body.usuario.puedeEliminar).toBe(true);
+  });
+
+  // FAIL-CLOSED ante el fail-open de la consulta. `sesionRevocada` deja pasar
+  // si la base no contesta (decisión de disponibilidad, ver su docstring), pero
+  // en ese caso NO se puede afirmar que el usuario tenga permiso de borrar. Las
+  // dos cosas conviven: la sesión sigue viva, el borrado no.
+  it("niega el permiso cuando la consulta a la base falla", async () => {
+    usuarioFindUniqueMock.mockRejectedValue(new Error("base caída"));
+
+    const res = await request(buildApp()).get("/quien-soy").set("Authorization", `Bearer ${tokenDe7}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.usuario.puedeEliminar).toBe(false);
+  });
+
+  // Una fila vieja sin la columna (o un mock incompleto) no puede otorgar
+  // permiso por omisión.
+  it("niega el permiso si la fila no trae el campo", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 7, tokenVersion: 0 });
+
+    const res = await request(buildApp()).get("/quien-soy").set("Authorization", `Bearer ${tokenDe7}`);
+
+    expect(res.body.usuario.puedeEliminar).toBe(false);
   });
 });

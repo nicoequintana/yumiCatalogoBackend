@@ -27,14 +27,22 @@ function validarPassword(password) {
 }
 
 function mapUsuario(usuario) {
-  return { id: usuario.id, email: usuario.email, createdAt: usuario.createdAt };
+  return {
+    id: usuario.id,
+    email: usuario.email,
+    createdAt: usuario.createdAt,
+    // Solo se emite si la fila lo trae: `create` y `update` devuelven el
+    // registro completo, pero un mock o un `select` acotado podrían no hacerlo,
+    // y publicar `undefined` como si fuera un dato sería peor que omitirlo.
+    ...(usuario.puedeEliminar === undefined ? {} : { puedeEliminar: usuario.puedeEliminar }),
+  };
 }
 
 export async function listar(_req, res, next) {
   try {
     const usuarios = await prisma.usuario.findMany({
       orderBy: { email: "asc" },
-      select: { id: true, email: true, createdAt: true },
+      select: { id: true, email: true, createdAt: true, puedeEliminar: true },
     });
     res.json(usuarios.map(mapUsuario));
   } catch (err) {
@@ -56,7 +64,11 @@ export async function crear(req, res, next) {
     if (existente) throw httpError(400, "Ya existe un usuario con ese email.");
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const usuario = await prisma.usuario.create({ data: { email, passwordHash } });
+    // El default es `true`, igual que el de la columna: un alta hecha desde un
+    // cliente que no conoce el campo no puede quedar sin permiso por accidente.
+    // Restringir es siempre una decisión explícita.
+    const puedeEliminar = req.body?.puedeEliminar !== false;
+    const usuario = await prisma.usuario.create({ data: { email, passwordHash, puedeEliminar } });
 
     // Se audita SOLO el email/id. Nunca el passwordHash ni la contraseña en
     // claro — la traza de auditoría es consultable desde el panel admin y no
@@ -65,7 +77,7 @@ export async function crear(req, res, next) {
       accion: "CREAR",
       entidad: "Usuario",
       entidadId: usuario.id,
-      detalle: { email: usuario.email },
+      detalle: { email: usuario.email, puedeEliminar },
     });
 
     res.status(201).json(mapUsuario(usuario));
@@ -96,6 +108,20 @@ export async function actualizar(req, res, next) {
       data.email = email;
     }
 
+    // Omitir el campo es "no lo toques", NUNCA "ponelo en true": este PUT se usa
+    // sobre todo para cambiar el email o la contraseña, y no puede devolverle el
+    // permiso a alguien de rebote.
+    if (req.body?.puedeEliminar !== undefined) {
+      const puedeEliminar = req.body.puedeEliminar === true;
+      // Quitarse el permiso a uno mismo deja la cuenta sin forma de revertirlo
+      // desde su propia sesión. Es el equivalente a borrarse la propia cuenta,
+      // que `eliminar` ya impide por el mismo motivo.
+      if (!puedeEliminar && req.usuario?.id === id) {
+        throw httpError(400, "No podés quitarte a vos mismo el permiso de eliminar.");
+      }
+      data.puedeEliminar = puedeEliminar;
+    }
+
     if (password) {
       validarPassword(password);
       data.passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
@@ -118,6 +144,7 @@ export async function actualizar(req, res, next) {
         emailAnterior: actual.email,
         emailNuevo: usuario.email,
         passwordCambiada: Boolean(password),
+        puedeEliminar: data.puedeEliminar,
       },
     });
 

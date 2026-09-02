@@ -34,7 +34,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {

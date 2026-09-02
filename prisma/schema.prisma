@@ -191,6 +191,25 @@ model Usuario {
   /// no trae el claim y por eso NO coincide con este 0 — queda revocado, que es
   /// el comportamiento fail-closed buscado.
   tokenVersion Int      @default(0)
+  /// ¿Este admin puede ejecutar acciones destructivas (borrar productos,
+  /// categorías, anuncios y otros usuarios)?
+  ///
+  /// El sistema NO tiene roles, y sigue sin tenerlos: esto es un único flag
+  /// sobre la clase de acción que no tiene vuelta atrás, no el primer paso de
+  /// un RBAC. Lo verifica `middlewares/permisoBorrado.middleware.js`, después
+  /// de `requireAuth`.
+  ///
+  /// `@default(true)` NO es descuido, es lo único correcto: con `false` el
+  /// primer deploy dejaría a TODOS los admin sin poder borrar nada, y la
+  /// operación se frenaría hasta que alguien editara la base a mano. Los
+  /// usuarios existentes conservan lo que ya podían hacer; restringir es una
+  /// decisión explícita que se toma después, usuario por usuario, desde
+  /// /catalogo/admin/usuarios.
+  ///
+  /// Se lee de la BASE en cada request (misma consulta que ya verifica
+  /// `tokenVersion`), nunca del JWT: quitarle el permiso a alguien surte efecto
+  /// en la request siguiente, no cuando expire su token 24 horas después.
+  puedeEliminar Boolean @default(true)
   createdAt    DateTime @default(now())
 }
 

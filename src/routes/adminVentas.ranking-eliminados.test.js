@@ -42,7 +42,7 @@ function buildApp() {
   return app;
 }
 
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 function item(productId, nombreProducto, precio, cantidad) {
   return { productId, nombreProducto, precioUnitario: new Decimal(precio), cantidad };

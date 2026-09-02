@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as anunciosController from "../controllers/anuncios.controller.js";
 import { requireAuth, authOpcional } from "../middlewares/auth.middleware.js";
+import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 
 const router = Router();
@@ -30,6 +31,6 @@ router.put("/orden", requireAuth, anunciosController.reordenar);
 
 router.post("/", requireAuth, anunciosController.crear);
 router.put("/:id", requireAuth, anunciosController.actualizar);
-router.delete("/:id", requireAuth, anunciosController.eliminar);
+router.delete("/:id", requireAuth, requierePermisoDeBorrado, anunciosController.eliminar);
 
 export default router;

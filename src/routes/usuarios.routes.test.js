@@ -16,15 +16,20 @@ const countMock = vi.fn();
 const auditCreateMock = vi.fn();
 
 // `requireAuth` verifica la sesión del token con un `findUnique` de forma fija
-// (`select: { id: true, tokenVersion: true }`). Se rutea a un mock propio para
-// que los `mockResolvedValueOnce` de los tests del controller no se los consuma
-// el middleware.
+// (`select: { id, tokenVersion, puedeEliminar }`). Se rutea a un mock propio
+// para que los `mockResolvedValueOnce` de los tests del controller no se los
+// consuma el middleware.
+//
+// El reconocimiento va por la FORMA EXACTA del select, así que al agregarle un
+// campo a esa consulta hay que actualizar esto también — si no, el chequeo de
+// auth cae en el mock del controller y toda la suite responde 401. Pasó al
+// sumar `puedeEliminar`: el detector exigía exactamente 2 claves.
+const SELECT_DE_AUTH = ["id", "tokenVersion", "puedeEliminar"];
+
 function rutearFindUnique(args) {
+  const claves = args?.select ? Object.keys(args.select) : [];
   const esChequeoDeAuth =
-    args?.select &&
-    args.select.id === true &&
-    args.select.tokenVersion === true &&
-    Object.keys(args.select).length === 2;
+    claves.length === SELECT_DE_AUTH.length && SELECT_DE_AUTH.every((c) => args.select[c] === true);
   return esChequeoDeAuth ? authFindUniqueMock(args) : findUniqueMock(args);
 }
 
@@ -76,7 +81,7 @@ beforeEach(() => {
   auditCreateMock.mockResolvedValue({ id: 1 });
   // El admin del token existe y su versión de sesión coincide con la del token
   // (0): es el caso normal de toda la suite.
-  authFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
+  authFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
 });
 
 describe("GET /api/usuarios", () => {
@@ -298,7 +303,7 @@ describe("auditoría de usuarios", () => {
         accion: "CREAR",
         entidad: "Usuario",
         entidadId: 9,
-        detalle: JSON.stringify({ email: "nuevo@test.com" }),
+        detalle: JSON.stringify({ email: "nuevo@test.com", puedeEliminar: true }),
       }),
     });
 
@@ -363,5 +368,92 @@ describe("auditoría de usuarios", () => {
     await request(buildApp()).get("/api/usuarios").set("Authorization", authHeader);
 
     expect(auditCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("permiso de borrado en el CRUD de usuarios", () => {
+  it("GET /api/usuarios expone puedeEliminar de cada usuario", async () => {
+    findManyMock.mockResolvedValue([
+      { id: 1, email: "a@b.c", createdAt: new Date(), puedeEliminar: true },
+      { id: 2, email: "d@e.f", createdAt: new Date(), puedeEliminar: false },
+    ]);
+
+    const res = await request(buildApp()).get("/api/usuarios").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].puedeEliminar).toBe(true);
+    expect(res.body[1].puedeEliminar).toBe(false);
+  });
+
+  it("POST /api/usuarios acepta puedeEliminar", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({ id: 5, email: "n@u.evo", createdAt: new Date(), puedeEliminar: false });
+
+    const res = await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "n@u.evo", password: "unaclavelarga", puedeEliminar: false });
+
+    expect(res.status).toBe(201);
+    expect(createMock.mock.calls[0][0].data.puedeEliminar).toBe(false);
+  });
+
+  // Sin el campo, un alta hecha por un cliente viejo no puede quedar sin
+  // permiso por accidente: el default de la columna es "puede", y esta capa
+  // tiene que coincidir con la base.
+  it("POST /api/usuarios deja puedeEliminar en true si no viene", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({ id: 5, email: "n@u.evo", createdAt: new Date(), puedeEliminar: true });
+
+    await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "n@u.evo", password: "unaclavelarga" });
+
+    expect(createMock.mock.calls[0][0].data.puedeEliminar).toBe(true);
+  });
+
+  it("PUT /api/usuarios/:id cambia puedeEliminar", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "d@e.f" });
+    updateMock.mockResolvedValue({ id: 2, email: "d@e.f", createdAt: new Date(), puedeEliminar: false });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ email: "d@e.f", puedeEliminar: false });
+
+    expect(res.status).toBe(200);
+    expect(updateMock.mock.calls[0][0].data.puedeEliminar).toBe(false);
+  });
+
+  // Omitir el campo en un PUT es "no lo toques", no "ponelo en true": el PUT de
+  // esta pantalla se usa para cambiar el email o la contraseña, y no puede
+  // devolverle el permiso a alguien de rebote.
+  it("PUT /api/usuarios/:id NO toca puedeEliminar si no viene en el body", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "d@e.f" });
+    findUniqueMock.mockResolvedValueOnce(null); // el email nuevo no está tomado
+    updateMock.mockResolvedValue({ id: 2, email: "nuevo@e.f", createdAt: new Date(), puedeEliminar: false });
+
+    await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@e.f" });
+
+    expect(updateMock.mock.calls[0][0].data).not.toHaveProperty("puedeEliminar");
+  });
+
+  // Sacarse el permiso a uno mismo deja la cuenta sin poder revertirlo desde la
+  // propia sesión — es el equivalente a borrarse la propia cuenta, que esta
+  // pantalla ya impide.
+  it("PUT /api/usuarios/:id rechaza que un admin se quite el permiso a sí mismo", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 1, email: "admin@yima.test" });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/1")
+      .set("Authorization", authHeader)
+      .send({ email: "admin@yima.test", puedeEliminar: false });
+
+    expect(res.status).toBe(400);
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });

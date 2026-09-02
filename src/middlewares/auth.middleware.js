@@ -38,7 +38,11 @@ function identidadDesdeToken(req) {
 }
 
 /**
- * ¿La sesión del token está revocada?
+ * Estado de la sesión del token: `{ revocada, puedeEliminar }`.
+ *
+ * Devuelve las DOS cosas en una sola consulta porque las dos salen de la misma
+ * fila y la alternativa sería un segundo round-trip por request para leer un
+ * booleano. Antes se llamaba `sesionRevocada` y devolvía solo el primer dato.
  *
  * Dos motivos de revocación, ambos resueltos con UNA sola consulta que trae
  * `{ id, tokenVersion }` del usuario del token:
@@ -73,17 +77,33 @@ function identidadDesdeToken(req) {
  * con `sub` raro) tampoco revoca: no hay fila que buscar y el login real
  * siempre firma `sub` con el id numérico.
  */
-async function sesionRevocada(usuario) {
-  if (!Number.isInteger(usuario.id)) return false;
+async function estadoDeSesion(usuario) {
+  // Sin id numérico no hay fila que buscar. La sesión no se revoca (el login
+  // real siempre firma `sub` con el id), pero tampoco se puede afirmar que
+  // tenga permiso de borrado: fail-closed en esa mitad.
+  if (!Number.isInteger(usuario.id)) return { revocada: false, puedeEliminar: false };
+
   try {
     const fila = await prisma.usuario.findUnique({
       where: { id: usuario.id },
-      select: { id: true, tokenVersion: true },
+      // `puedeEliminar` viaja en ESTA consulta, no en una segunda ni en el JWT.
+      // En el JWT no, porque entonces quitarle el permiso a alguien recién
+      // surtiría efecto cuando expirara su token, hasta 24 horas después.
+      select: { id: true, tokenVersion: true, puedeEliminar: true },
     });
-    if (fila === null) return true;
-    return usuario.tokenVersion !== fila.tokenVersion;
+    if (fila === null) return { revocada: true, puedeEliminar: false };
+    return {
+      revocada: usuario.tokenVersion !== fila.tokenVersion,
+      // `=== true` explícito: una fila sin el campo no puede otorgar permiso
+      // por omisión.
+      puedeEliminar: fila.puedeEliminar === true,
+    };
   } catch {
-    return false;
+    // FAIL-OPEN para la sesión, FAIL-CLOSED para el borrado. Las dos cosas
+    // conviven a propósito: un hipo de la base no puede desloguear a todo el
+    // panel (ver el docstring de arriba), pero tampoco puede hacernos AFIRMAR
+    // un permiso que no pudimos leer. La sesión sigue viva, el borrado no.
+    return { revocada: false, puedeEliminar: false };
   }
 }
 
@@ -117,12 +137,20 @@ async function sesionRevocada(usuario) {
  */
 export async function requireAuth(req, res, next) {
   const usuario = identidadDesdeToken(req);
-
-  if (!usuario || (await sesionRevocada(usuario))) {
+  if (!usuario) {
     return res.status(401).json({ error: "No autorizado." });
   }
 
-  req.usuario = { id: usuario.id, email: usuario.email };
+  const estado = await estadoDeSesion(usuario);
+  if (estado.revocada) {
+    return res.status(401).json({ error: "No autorizado." });
+  }
+
+  // `puedeEliminar` se suma a la identidad porque gobierna una decisión de
+  // acceso, igual que el id: lo consume `middlewares/permisoBorrado.middleware.js`
+  // en las rutas destructivas. `tokenVersion` sigue afuera — es un detalle del
+  // mecanismo de sesión, no parte de quién es esta persona.
+  req.usuario = { id: usuario.id, email: usuario.email, puedeEliminar: estado.puedeEliminar };
   next();
 }
 
@@ -162,8 +190,11 @@ export async function authOpcional(req, _res, next) {
   // expirar. Pero el resultado nunca corta la request: "tu sesión ya no vale"
   // degrada a anónimo, igual que un token vencido — este es el catálogo
   // público. `req.usuario` se acota a `{ id, email }` igual que en `requireAuth`.
-  if (usuario && !(await sesionRevocada(usuario))) {
-    req.usuario = { id: usuario.id, email: usuario.email };
+  if (usuario) {
+    const estado = await estadoDeSesion(usuario);
+    if (!estado.revocada) {
+      req.usuario = { id: usuario.id, email: usuario.email, puedeEliminar: estado.puedeEliminar };
+    }
   }
   next();
 }

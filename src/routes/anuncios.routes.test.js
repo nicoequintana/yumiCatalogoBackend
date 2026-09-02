@@ -57,7 +57,7 @@ const FILA = { id: 1, texto: "Envíos a todo el país", activo: true, orden: 0 }
 beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
-  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0 });
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
   anuncioMock.findMany.mockResolvedValue([FILA]);
   anuncioMock.count.mockResolvedValue(0);
   anuncioMock.aggregate.mockResolvedValue({ _max: { orden: null } });

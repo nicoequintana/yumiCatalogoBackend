@@ -27,6 +27,10 @@ vi.mock("../services/cloudinary.service.js", () => ({
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
+    // `requireAuth` lee la fila del usuario para verificar la revocación de
+    // sesión Y el permiso de borrado (`puedeEliminar`). Sin este mock la
+    // consulta lanza y el middleware de borrado niega por fail-closed.
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
     categoria: {
       findMany: (...args) => categoriaMock.findMany(...args),
       findUnique: (...args) => categoriaMock.findUnique(...args),
@@ -53,7 +57,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {

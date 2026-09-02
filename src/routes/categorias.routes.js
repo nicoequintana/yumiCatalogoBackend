@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import * as categoriasController from "../controllers/categorias.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
+import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTO_BYTES, ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 
@@ -57,6 +58,6 @@ router.put(
   categoriasController.guardarImagen,
 );
 router.delete("/:id/imagen", requireAuth, categoriasController.quitarImagen);
-router.delete("/:id", requireAuth, categoriasController.eliminar);
+router.delete("/:id", requireAuth, requierePermisoDeBorrado, categoriasController.eliminar);
 
 export default router;
