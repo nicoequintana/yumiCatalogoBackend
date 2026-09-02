@@ -128,6 +128,22 @@ const ORDENES_LISTADO = {
     { stock: "desc" },
     { id: "desc" },
   ],
+  // Los criterios de los encabezados clickeables del listado del admin, uno
+  // por columna ordenable. `etiqueta` y `categoria` son NULLABLES: los vacíos
+  // se agrupan en un extremo (mismo comportamiento documentado que
+  // costo/coeficiente). `categoria` ordena por el nombre de la relación — el
+  // connector mssql lo resuelve con un join, mismo precedente que
+  // `fotos._count`.
+  "sku-asc": [{ sku: "asc" }, { id: "asc" }],
+  "sku-desc": [{ sku: "desc" }, { id: "asc" }],
+  "etiqueta-asc": [{ etiqueta: "asc" }, { id: "asc" }],
+  "etiqueta-desc": [{ etiqueta: "desc" }, { id: "asc" }],
+  "categoria-asc": [{ categoria: { nombre: "asc" } }, { id: "asc" }],
+  "categoria-desc": [{ categoria: { nombre: "desc" } }, { id: "asc" }],
+  "visible-asc": [{ visibleEnCatalogo: "asc" }, { id: "asc" }],
+  "visible-desc": [{ visibleEnCatalogo: "desc" }, { id: "asc" }],
+  "destacado-asc": [{ destacado: "asc" }, { id: "asc" }],
+  "destacado-desc": [{ destacado: "desc" }, { id: "asc" }],
   // Los dos criterios de la pantalla de Costos y precios, donde la pregunta no
   // es por el precio publicado sino por lo que lo genera.
   //

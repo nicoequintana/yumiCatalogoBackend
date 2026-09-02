@@ -153,6 +153,29 @@ describe("GET /api/products - ?orden=", () => {
     ]);
   });
 
+  it.each([
+    ["sku-asc", [{ sku: "asc" }, { id: "asc" }]],
+    ["sku-desc", [{ sku: "desc" }, { id: "asc" }]],
+    ["etiqueta-asc", [{ etiqueta: "asc" }, { id: "asc" }]],
+    ["etiqueta-desc", [{ etiqueta: "desc" }, { id: "asc" }]],
+    ["categoria-asc", [{ categoria: { nombre: "asc" } }, { id: "asc" }]],
+    ["categoria-desc", [{ categoria: { nombre: "desc" } }, { id: "asc" }]],
+    ["visible-asc", [{ visibleEnCatalogo: "asc" }, { id: "asc" }]],
+    ["visible-desc", [{ visibleEnCatalogo: "desc" }, { id: "asc" }]],
+    ["destacado-asc", [{ destacado: "asc" }, { id: "asc" }]],
+    ["destacado-desc", [{ destacado: "desc" }, { id: "asc" }]],
+  ])(
+    "el criterio de columna %s ordena en la base con desempate por id",
+    async (criterio, esperado) => {
+      // Los criterios de los encabezados clickeables del listado del admin.
+      // `etiqueta` y `categoria` son nullables: los vacíos se agrupan en un
+      // extremo, mismo comportamiento documentado que costo/coeficiente.
+      await request(buildApp()).get(`/api/products?orden=${criterio}`);
+
+      expect(orderByDeLaConsulta()).toEqual(esperado);
+    },
+  );
+
   it("catalogo no toca el default del backend: sin ?orden= sigue recientes", async () => {
     await request(buildApp()).get("/api/products");
 
