@@ -36,13 +36,10 @@ vi.mock("../lib/prisma.js", () => ({
       count: vi.fn().mockResolvedValue(0),
     },
     auditLog: { create: (...args) => auditCreateMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
     $transaction: async (fn) => fn({ product: { update: (...args) => updateMock(...args) } }),
   },
-}));
-vi.mock("../services/googleDrive.service.js", () => ({
-  eliminarArchivo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/cloudinary.service.js", () => ({
   eliminarCarpeta: vi.fn().mockResolvedValue(undefined),

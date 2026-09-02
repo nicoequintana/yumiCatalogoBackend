@@ -37,11 +37,6 @@ vi.mock("../lib/prisma.js", () => ({
     foto: { findFirst: (...args) => fotoFindFirstMock(...args) },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({
-  obtenerStreamVideo: vi.fn(),
-  obtenerStreamArchivo: vi.fn(),
-  eliminarArchivo: vi.fn(),
-}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 vi.mock("../services/n8n.service.js", () => ({
   enviarPedidoDeImagenes: vi.fn(),
@@ -83,17 +78,7 @@ describe("rate limit de las lecturas públicas de producto (600/5min)", () => {
     expect(res.headers["ratelimit-limit"]).toBe("600");
   });
 
-  it("expone RateLimit-Limit=600 en GET /products/:id/video", async () => {
-    const res = await request(buildApp()).get("/api/products/999/video");
 
-    expect(res.headers["ratelimit-limit"]).toBe("600");
-  });
-
-  it("expone RateLimit-Limit=600 en GET /products/:id/fotos/:fotoId", async () => {
-    const res = await request(buildApp()).get("/api/products/999/fotos/1");
-
-    expect(res.headers["ratelimit-limit"]).toBe("600");
-  });
 });
 
 describe("rate limit de la generación de imágenes (20/60min)", () => {

@@ -8,7 +8,7 @@ process.env.JWT_SECRET = "test-secret";
 
 // La vista admin de estos endpoints públicos la habilita el JWT verificado, no
 // `?admin=1` (ver products.routes.autorizacion.test.js).
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 const findManyMock = vi.fn();
 const countMock = vi.fn().mockResolvedValue(0);
@@ -25,7 +25,6 @@ vi.mock("../lib/prisma.js", () => ({
     },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");

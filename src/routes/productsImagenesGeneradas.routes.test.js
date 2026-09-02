@@ -37,7 +37,6 @@ vi.mock("../services/cloudinary.service.js", () => ({
   eliminarCarpeta: (...args) => eliminarCarpetaMock(...args),
   subirArchivo: vi.fn(),
 }));
-vi.mock("../services/googleDrive.service.js", () => ({ eliminarArchivo: vi.fn() }));
 vi.mock("../services/n8n.service.js", () => ({
   enviarPedidoDeImagenes: vi.fn(),
   estaConfigurado: () => true,
@@ -55,7 +54,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ id: 1, email: "admin@yima.local" }, process.env.JWT_SECRET);
+const token = jwt.sign({ id: 1, email: "admin@yima.local", tokenVersion: 0 }, process.env.JWT_SECRET);
 const BASE = "/api/products/7/imagenes-generadas";
 
 /** Producto con dos fotos, una de ellas adoptada de la carpeta generada. */

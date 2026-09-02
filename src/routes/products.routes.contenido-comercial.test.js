@@ -42,7 +42,6 @@ vi.mock("../lib/prisma.js", () => ({
       }),
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");
@@ -55,7 +54,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 const productoBase = {

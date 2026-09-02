@@ -377,3 +377,42 @@ export function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
     throw httpError(400, "El contenido del video no coincide con un archivo MP4 o WEBM válido.");
   }
 }
+
+
+/**
+ * Tope de ids que puede nombrar una sola petición: el `?ids=` del listado y las
+ * acciones masivas del panel. Es el mismo techo a propósito — "cuántas cosas
+ * puede nombrar un cliente en un pedido" — y tenerlo dos veces sería tenerlo
+ * distinto en cuanto alguien mueva uno.
+ */
+export const MAX_IDS_LISTADO = 100;
+
+/**
+ * Valida la lista de ids de una acción masiva del admin.
+ *
+ * Comparte `MAX_IDS_LISTADO` con `?ids=` del listado a propósito: es el mismo
+ * techo de "cuántas cosas puede nombrar un cliente en un pedido", y tenerlo
+ * dos veces sería tenerlo distinto en cuanto alguien mueva uno.
+ *
+ * Una lista vacía es un 400, no un no-op silencioso: si la pantalla mandó un
+ * lote vacío hay un bug en la selección, y devolver `{ actualizados: 0 }`
+ * lo escondería detrás de un cartel de éxito.
+ */
+export function parsearIdsMasivos(valor) {
+  if (!Array.isArray(valor)) {
+    throw httpError(400, "Se espera una lista de ids de producto.");
+  }
+  if (valor.length === 0) {
+    throw httpError(400, "No se seleccionó ningún producto.");
+  }
+  if (valor.length > MAX_IDS_LISTADO) {
+    throw httpError(400, `No se pueden procesar más de ${MAX_IDS_LISTADO} productos a la vez.`);
+  }
+
+  const ids = valor.map(Number);
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    throw httpError(400, "La lista contiene ids de producto inválidos.");
+  }
+
+  return [...new Set(ids)];
+}

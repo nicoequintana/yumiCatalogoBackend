@@ -1,13 +1,11 @@
 /**
  * Subida y limpieza de la media de un producto contra el storage remoto.
  *
- * Concentra el trato con Cloudinary (storage principal) y con Google Drive
- * (legado de solo lectura/limpieza), incluido el contrato anti-huérfanos que
+ * Concentra el trato con Cloudinary, incluido el contrato anti-huérfanos que
  * describe `subirArchivosNuevos`. Los controllers de producto solo orquestan:
  * ninguna de estas funciones sabe de rutas, de `res` ni del modelo de Prisma.
  */
 
-import * as googleDrive from "./googleDrive.service.js";
 import * as cloudinary from "./cloudinary.service.js";
 import { logError } from "../lib/logError.js";
 /**
@@ -154,17 +152,12 @@ export async function limpiarArchivosSubidos({ fotos = [], video = null }, req) 
  * promesa (en vez de esperarla adentro) es lo que deja a los llamadores
  * juntar varias limpiezas en un solo `Promise.allSettled`.
  *
- * @param {{driveFileId?: string|null, cloudinaryPublicId?: string|null, cloudinaryResourceType?: string|null}|null} media
+ * @param {{cloudinaryPublicId?: string|null, cloudinaryResourceType?: string|null}|null} media
  * @param {string} que - sujeto del mensaje de error, ej. "la foto".
  * @param {import("express").Request} [req]
  * @returns {Promise<void>}
  */
 export function limpiarMediaRemota(media, que, req) {
-  if (media?.driveFileId) {
-    return googleDrive
-      .eliminarArchivo(media.driveFileId)
-      .catch((err) => logFallaDeLimpieza(`No se pudo eliminar ${que} en Drive`, err, req));
-  }
   if (media?.cloudinaryPublicId) {
     return cloudinary
       .eliminarArchivo(media.cloudinaryPublicId, media.cloudinaryResourceType)

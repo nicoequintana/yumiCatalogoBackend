@@ -35,9 +35,8 @@ export const PRODUCT_INCLUDE = {
  *
  * `fotos` va con `take: 1` porque la única foto que la grilla muestra es la
  * portada (`fotos[0]`, ver CLAUDE.md "las dos primeras fotos no son
- * intercambiables"). `cloudinaryPublicId`/`driveFileId` se seleccionan porque
- * `urlDeFoto` los necesita para resolver la URL; no se exponen en la
- * respuesta.
+ * intercambiables"). `cloudinaryPublicId` se selecciona porque `urlDeFoto` lo
+ * necesita para resolver la URL; no se expone en la respuesta.
  *
  * `_count.fotos` conserva el "N/10" de la tabla del admin, que es lo único
  * que se perdía al recortar `fotos` a una sola fila.
@@ -61,7 +60,7 @@ export const LIST_SELECT = {
   compartidos: true,
   categoria: { select: { id: true, nombre: true } },
   fotos: {
-    select: { id: true, url: true, orden: true, cloudinaryPublicId: true, driveFileId: true },
+    select: { id: true, url: true, orden: true, cloudinaryPublicId: true },
     orderBy: { orden: "asc" },
     take: 1,
   },
@@ -69,33 +68,28 @@ export const LIST_SELECT = {
 };
 
 /**
- * Maps a Prisma Product row (with relations) to the API response shape.
+ * Resuelve la URL pública de una foto.
  *
- * Photo URLs (post-archive bugfix, see topic
- * "sdd/backend-drive-sqlserver/photo-proxy-postfix"): a raw
- * `drive.google.com/uc?export=view` URL triggers `net::ERR_BLOCKED_BY_ORB`
- * in real Chromium — Drive's redirect chain has an ambiguous Content-Type
- * on the initial 303 hop, which browsers now block for `<img>` requests.
- * `curl`/Node HTTP checks don't reproduce this because ORB is a browser-only
- * mitigation. Real uploaded photos (driveFileId set) are therefore routed
- * through the backend proxy (`streamFoto`, mirrors the existing video
- * proxy). Seed/placeholder photos (driveFileId null) keep their original
- * `placehold.co` URL untouched — there is nothing to proxy and no ORB risk
- * for that host.
- */
-/**
- * Resuelve la URL pública de una foto según su storage: Cloudinary sirve
- * directo, Drive (legado) pasa por el proxy propio del backend, y una fila
- * sin ninguno de los dos (seed/placeholder) conserva su URL original.
+ * `foto.url` ya contiene la URL directa del CDN de Cloudinary para todo lo
+ * subido por el catálogo. Las filas de seed/placeholder tampoco tienen
+ * `cloudinaryPublicId` y conservan su URL original, así que el mismo `return`
+ * las cubre.
  *
- * Compartida por `mapProducto` y `mapProductoListado` para que la portada de
- * la grilla y la galería del detalle no puedan divergir.
+ * Antes había una rama intermedia que ruteaba las fotos legadas de Google Drive
+ * por un proxy propio del backend (una URL cruda de Drive dispara
+ * `net::ERR_BLOCKED_BY_ORB` en Chromium por el Content-Type ambiguo de su
+ * redirect). Ese storage se retiró del proyecto: no quedaba ninguna foto
+ * apoyada en él —327 de 327 en producción salen de Cloudinary— y sostenerlo
+ * costaba 208 MB de dependencia en la imagen del contenedor.
+ *
+ * Sigue compartida por `mapProducto` y `mapProductoListado` —aunque hoy sea un
+ * solo `return`— para que la portada de la grilla y la galería del detalle no
+ * puedan divergir si vuelve a aparecer un segundo storage.
  */
-function urlDeFoto(productoId, foto) {
-  if (foto.cloudinaryPublicId) return foto.url;
-  if (foto.driveFileId) return `/api/products/${productoId}/fotos/${foto.id}`;
+function urlDeFoto(foto) {
   return foto.url;
 }
+
 
 /**
  * Los cuatro campos de costeo, o nada.
@@ -158,7 +152,7 @@ export function mapProductoListado(producto, { esAdmin = false } = {}) {
     cantidadFotos: producto._count?.fotos ?? producto.fotos.length,
     fotos: producto.fotos.map((f) => ({
       id: f.id,
-      url: urlDeFoto(producto.id, f),
+      url: urlDeFoto(f),
       orden: f.orden,
     })),
   };
@@ -207,9 +201,8 @@ export function mapProducto(producto, { esAdmin = false } = {}) {
     idealPara: listasPorTipo.IDEAL_PARA,
     incluye: listasPorTipo.INCLUYE,
     especificaciones: (producto.especificaciones ?? []).map((e) => ({ id: e.id, nombre: e.nombre, valor: e.valor })),
-    // `driveFileId` NO se expone: la URL de arriba ya resuelve el storage del
-    // lado del servidor (Cloudinary directo, o el proxy propio para las filas
-    // legado de Drive), así que mandarlo solo filtraría un identificador
+    // `cloudinaryPublicId` NO se expone: la URL de arriba ya viene resuelta del
+    // lado del servidor, así que mandarlo solo filtraría un identificador
     // interno de storage en un endpoint público. Ningún cliente lo lee.
     // Mismo campo que emite `mapProductoListado`. Existe también acá para que
     // la tabla del admin pueda leer siempre `cantidadFotos`, incluso cuando la
@@ -218,7 +211,7 @@ export function mapProducto(producto, { esAdmin = false } = {}) {
     cantidadFotos: producto.fotos.length,
     fotos: producto.fotos.map((f) => ({
       id: f.id,
-      url: urlDeFoto(producto.id, f),
+      url: urlDeFoto(f),
       orden: f.orden,
     })),
     video: producto.video

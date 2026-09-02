@@ -35,14 +35,11 @@ vi.mock("../lib/prisma.js", () => ({
       delete: vi.fn(),
     },
     auditLog: { create: vi.fn().mockResolvedValue({ id: 1 }) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
   },
 }));
 
-vi.mock("../services/googleDrive.service.js", () => ({
-  eliminarArchivo: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock("../services/cloudinary.service.js", () => ({
   eliminarCarpeta: vi.fn().mockResolvedValue(undefined),
 }));

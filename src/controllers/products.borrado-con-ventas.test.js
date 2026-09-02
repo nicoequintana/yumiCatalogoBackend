@@ -34,9 +34,6 @@ vi.mock("../lib/prisma.js", () => ({
     auditLog: { create: (...args) => auditCreateMock(...args) },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({
-  eliminarArchivo: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock("../services/cloudinary.service.js", () => ({
   eliminarCarpeta: vi.fn().mockResolvedValue(undefined),
 }));

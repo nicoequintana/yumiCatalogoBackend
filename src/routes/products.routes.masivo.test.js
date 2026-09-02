@@ -44,16 +44,13 @@ vi.mock("../lib/prisma.js", () => ({
     },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
   },
 }));
 const eliminarCarpetaMock = vi.fn().mockResolvedValue(undefined);
 const limpiarMediaRemotaMock = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("../services/googleDrive.service.js", () => ({
-  eliminarArchivo: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock("../services/cloudinary.service.js", () => ({
   eliminarCarpeta: (...args) => eliminarCarpetaMock(...args),
 }));

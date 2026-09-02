@@ -32,7 +32,6 @@ vi.mock("../lib/prisma.js", () => ({
     },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");
@@ -46,7 +45,7 @@ function buildApp() {
 }
 
 function tokenValido() {
-  return jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+  return jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 }
 
 const productoBase = {
@@ -127,7 +126,7 @@ describe("GET /api/products — el modo admin depende del token, no de ?admin=1"
 
   it("un token expirado degrada a anónimo igual que uno basura", async () => {
     findManyMock.mockResolvedValue([]);
-    const expirado = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: -10 });
+    const expirado = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: -10 });
 
     const res = await request(buildApp())
       .get("/api/products?admin=1")
@@ -140,7 +139,7 @@ describe("GET /api/products — el modo admin depende del token, no de ?admin=1"
 
   it("un token firmado con otro secreto no otorga nada", async () => {
     findManyMock.mockResolvedValue([]);
-    const ajeno = jwt.sign({ sub: 1 }, "otro-secreto", { expiresIn: "7d" });
+    const ajeno = jwt.sign({ sub: 1, tokenVersion: 0 }, "otro-secreto", { expiresIn: "7d" });
 
     await request(buildApp()).get("/api/products?admin=1").set("Authorization", `Bearer ${ajeno}`);
 

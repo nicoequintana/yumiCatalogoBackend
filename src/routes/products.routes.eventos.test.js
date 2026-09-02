@@ -8,7 +8,7 @@ process.env.JWT_SECRET = "test-secret";
 
 // El camino admin (sin contar la vista ni emitir el evento) lo habilita el JWT
 // verificado, no `?admin=1` (ver products.routes.autorizacion.test.js).
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 const findUniqueMock = vi.fn();
 const updateMock = vi.fn();
@@ -24,9 +24,6 @@ vi.mock("../lib/prisma.js", () => ({
     },
     eventoTrafico: { create: (...args) => eventoCreateMock(...args) },
   },
-}));
-vi.mock("../services/googleDrive.service.js", () => ({
-  eliminarArchivo: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/cloudinary.service.js", () => ({
   eliminarArchivo: vi.fn().mockResolvedValue(undefined),

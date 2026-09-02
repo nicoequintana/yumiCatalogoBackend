@@ -36,18 +36,10 @@ describe("resolverImagenOg", () => {
     expect(resolverImagenOg(producto, urls)).toBe("https://res.cloudinary.com/demo/image/upload/v1/foto.jpg");
   });
 
-  it("arma la URL del proxy del backend cuando fotos[0] es legacy Drive", () => {
-    const producto = {
-      id: 5,
-      fotos: [{ id: 7, orden: 0, url: "irrelevante", cloudinaryPublicId: null, driveFileId: "abc123" }],
-    };
-    expect(resolverImagenOg(producto, urls)).toBe("https://api.aura.example.com/api/products/5/fotos/7");
-  });
-
   it("usa la URL de placehold.co tal cual cuando fotos[0] es un placeholder seed", () => {
     const producto = {
       id: 5,
-      fotos: [{ id: 9, orden: 0, url: "https://placehold.co/600x400", cloudinaryPublicId: null, driveFileId: null }],
+      fotos: [{ id: 9, orden: 0, url: "https://placehold.co/600x400", cloudinaryPublicId: null }],
     };
     expect(resolverImagenOg(producto, urls)).toBe("https://placehold.co/600x400");
   });

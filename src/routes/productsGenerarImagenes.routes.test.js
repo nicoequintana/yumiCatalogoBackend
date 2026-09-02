@@ -30,7 +30,6 @@ vi.mock("../services/n8n.service.js", () => ({
   MAX_REFERENCIAS: 4,
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));
-vi.mock("../services/googleDrive.service.js", () => ({ eliminarArchivo: vi.fn() }));
 vi.mock("../lib/logAudit.js", () => ({ logAudit: (...args) => logAuditMock(...args) }));
 
 const { default: productsRouter } = await import("./products.routes.js");
@@ -43,7 +42,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ id: 1, email: "bot@yima.local" }, process.env.JWT_SECRET);
+const token = jwt.sign({ id: 1, email: "bot@yima.local", tokenVersion: 0 }, process.env.JWT_SECRET);
 const imagen = Buffer.from("bytes-de-imagen");
 
 const PRODUCTO = {

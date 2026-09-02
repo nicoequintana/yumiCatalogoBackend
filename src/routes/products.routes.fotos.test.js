@@ -44,7 +44,6 @@ vi.mock("../lib/prisma.js", () => ({
       }),
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({
   subirArchivo: vi.fn(async (_buffer, _nombre, _carpeta) => ({
     url: "https://cdn.test/nueva.jpg",
@@ -67,7 +66,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 /** Producto con tres fotos ya persistidas, en orden 0,1,2. */

@@ -1,10 +1,13 @@
 import { Router } from "express";
 import multer from "multer";
 import * as productsController from "../controllers/products.controller.js";
-import * as productsMediaController from "../controllers/productsMedia.controller.js";
+// Costeo y precios viven en su propio controller desde que se empezó a
+// desarmar `products.controller.js`. Las rutas y sus nombres no cambiaron.
+import * as productsPreciosController from "../controllers/products.precios.controller.js";
 import * as productsImportController from "../controllers/productsImport.controller.js";
 import * as imagenesGeneradasController from "../controllers/productsImagenesGeneradas.controller.js";
 import { authOpcional, requireAuth } from "../middlewares/auth.middleware.js";
+import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { MAX_FOTOS, MAX_VIDEOS, MAX_FOTO_BYTES, ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { MAX_REFERENCIAS } from "../services/n8n.service.js";
@@ -169,26 +172,24 @@ router.get("/salud", requireAuth, productsController.salud);
 // Declarada ANTES de las rutas `/:id`, mismo pisotón que evitan `/resumen` y
 // `/salud`: si no, Express matchea "etiquetas" como un id.
 router.get("/etiquetas", requireAuth, productsController.etiquetas);
-// Los dos proxies de media también llevan `authOpcional`: la media de un
-// producto oculto no puede seguir siendo pública solo porque se la pida por
-// otra URL. Siguen sirviendo a visitantes anónimos —las fotos de un producto
-// publicado nunca fueron secretas—, pero un producto con
-// `visibleEnCatalogo: false` responde 404 salvo que el llamador presente un
-// JWT válido.
-router.get("/:id/video", limitadorLecturaPublica, authOpcional, productsMediaController.streamVideo);
-router.get("/:id/fotos/:fotoId", limitadorLecturaPublica, authOpcional, productsMediaController.streamFoto);
+// NOTA — acá vivían `GET /:id/video` y `GET /:id/fotos/:fotoId`, dos proxies de
+// streaming que servían la media legada de Google Drive. Ese storage se retiró
+// del proyecto (no quedaba una sola foto apoyada en él: 327 de 327 en
+// producción salen de Cloudinary, que se sirve por su propia URL de CDN). El
+// `DELETE /:id/fotos/:fotoId` de más abajo NO es esa ruta y sigue en uso: borra
+// una foto, no la sirve.
 router.get("/:id", limitadorLecturaPublica, authOpcional, productsController.obtenerPorId);
 router.post("/import", requireAuth, uploadXlsx, productsImportController.importar);
 // Acciones masivas del listado del admin. Van ANTES de cualquier ruta `/:id`
 // del mismo método: si se declararan después, Express matchearía
 // "eliminar-masivo" como un id y el handler correcto nunca correría. Mismo
 // pisotón que ya evita `/import` unas líneas más arriba.
-router.post("/eliminar-masivo", requireAuth, productsController.eliminarMasivo);
+router.post("/eliminar-masivo", requireAuth, requierePermisoDeBorrado, productsController.eliminarMasivo);
 router.patch("/visibilidad-masiva", requireAuth, productsController.actualizarVisibilidadMasiva);
 // Aplica el precio calculado (`costo × coeficiente`) a los productos
 // seleccionados en `/catalogo/admin/productos/precios`. Mismo pisotón que las
 // otras masivas: va ANTES de cualquier `POST /:id/...`.
-router.post("/precios-masivo", requireAuth, productsController.aplicarPreciosMasivo);
+router.post("/precios-masivo", requireAuth, productsPreciosController.aplicarPreciosMasivo);
 // Actualización masiva por planilla (matcheo por SKU, nunca crea). Mismo
 // multer `uploadXlsx` que `/import`.
 router.post("/actualizar-masivo", requireAuth, uploadXlsx, productsImportController.actualizarMasivo);
@@ -213,8 +214,16 @@ router.patch("/:id/visibilidad", requireAuth, productsController.actualizarVisib
 router.patch("/:id/merchandising", requireAuth, productsController.actualizarMerchandising);
 // Costo y coeficiente desde la tabla de precios, guardado al instante. NO toca
 // `precio`: publicarlo es un paso aparte y explícito (`/precios-masivo`).
-router.patch("/:id/costeo", requireAuth, productsController.actualizarCosteo);
-router.delete("/:id", requireAuth, productsController.eliminar);
+router.patch("/:id/costeo", requireAuth, productsPreciosController.actualizarCosteo);
+// Las rutas que BORRAN UNA ENTIDAD llevan `requierePermisoDeBorrado` además de
+// `requireAuth`: son las que no tienen vuelta atrás. Ver
+// `middlewares/permisoBorrado.middleware.js`.
+//
+// Quitar una FOTO no entra en esa categoría y queda a propósito con `requireAuth`
+// solo: es edición de contenido y se deshace volviendo a subirla. Si el flag
+// cubriera cada foto, un usuario sin permiso de eliminar no podría ni editar un
+// producto, y el permiso se volvería inusable.
+router.delete("/:id", requireAuth, requierePermisoDeBorrado, productsController.eliminar);
 router.delete("/:id/fotos/:fotoId", requireAuth, productsController.eliminarFoto);
 
 export default router;

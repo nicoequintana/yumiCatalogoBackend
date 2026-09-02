@@ -18,14 +18,20 @@ export function truncarDescripcion(texto, maxLength) {
 }
 
 /**
- * Resuelve la URL absoluta a usar como og:image para un producto,
- * según el storage backend de su primera foto (por `orden` asc).
+ * Resuelve la URL absoluta a usar como og:image para un producto: la primera
+ * foto por `orden`, o la imagen de marca si el producto no tiene ninguna.
  *
- * @param {{ id: number, fotos: Array<{ orden: number, url: string, cloudinaryPublicId: string | null, driveFileId: string | null }> }} producto
- * @param {{ frontendUrl: string, backendUrl: string }} urls
+ * Las fotos se sirven SIEMPRE por la URL directa del CDN de Cloudinary, que es
+ * lo que `foto.url` ya contiene. Antes había una tercera rama que ruteaba las
+ * fotos legadas de Google Drive por un proxy propio del backend; ese storage se
+ * retiró del proyecto, y con él la rama y el parámetro `backendUrl` que solo
+ * ella usaba.
+ *
+ * @param {{ id: number, fotos: Array<{ orden: number, url: string }> }} producto
+ * @param {{ frontendUrl: string }} urls
  * @returns {string}
  */
-export function resolverImagenOg(producto, { frontendUrl, backendUrl }) {
+export function resolverImagenOg(producto, { frontendUrl }) {
   const fotos = [...(producto.fotos ?? [])].sort((a, b) => a.orden - b.orden);
   const primera = fotos[0];
 
@@ -35,7 +41,5 @@ export function resolverImagenOg(producto, { frontendUrl, backendUrl }) {
   // Es el mismo archivo que usa el Open Graph del sitio en `frontend/index.html`
   // — un producto sin foto y la home tienen la misma necesidad: mostrar la marca.
   if (!primera) return `${frontendUrl}/og-default.png`;
-  if (primera.cloudinaryPublicId) return primera.url;
-  if (primera.driveFileId) return `${backendUrl}/api/products/${producto.id}/fotos/${primera.id}`;
   return primera.url;
 }

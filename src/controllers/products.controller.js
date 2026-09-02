@@ -1,12 +1,20 @@
 import { prisma } from "../lib/prisma.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
-import * as googleDrive from "../services/googleDrive.service.js";
 import * as cloudinary from "../services/cloudinary.service.js";
 import { generarSku } from "../lib/sku.js";
 import { logAudit } from "../lib/logAudit.js";
 import { calcularPrecio } from "../lib/precios.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
+import { jsonLdProducto, jsonLdBreadcrumb } from "../lib/jsonLd.js";
+import { resolverImagenOg } from "../lib/ogMeta.js";
+import { urlFrontend } from "../lib/urlsPublicas.js";
 import { httpError } from "../lib/httpError.js";
+import { MAX_IDS_LISTADO, parsearIdsMasivos } from "./products.input.js";
+
+// Se reexporta porque varios tests y `products.routes.js` lo importaban desde
+// acá antes de que se mudara: mantener el nombre disponible evita un cambio
+// de contrato que este refactor no necesita hacer.
+export { MAX_IDS_LISTADO };
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import {
@@ -169,7 +177,7 @@ function elegirOrden(valor) {
  * Coincide con `MAX_PAGE_SIZE` a propósito — es el mismo techo de "cuántas
  * filas de producto puede devolver una request", pedidas por página o por id.
  */
-export const MAX_IDS_LISTADO = 100;
+
 
 /**
  * Parsea `?ids=1,7,12` a una lista de enteros positivos.
@@ -625,7 +633,27 @@ export async function obtenerPorId(req, res, next) {
 
     const relacionados = await obtenerRelacionados(producto, { esAdmin });
 
-    res.json({ ...mapProducto(producto, { esAdmin }), relacionados });
+    // Los datos estructurados de la ficha viajan EN la respuesta: son LOS
+    // MISMOS bloques que `seo.controller.js` mete en el HTML de crawler,
+    // armados por las mismas funciones y con la misma `FRONTEND_URL`. Antes el
+    // frontend los construía con su propia copia de `lib/jsonLd.js` (espejo
+    // manual entre repos), y el mismo producto podía declarar datos
+    // estructurados distintos según quién ejecutara — la SPA o el crawler —
+    // sin que nada falle. La regla de cloaking exige que coincidan; emitirlos
+    // de un solo origen la vuelve imposible de romper.
+    const frontendUrl = urlFrontend();
+    const imagenes = producto.fotos.map((foto) =>
+      resolverImagenOg({ id: producto.id, fotos: [foto] }, { frontendUrl }),
+    );
+
+    res.json({
+      ...mapProducto(producto, { esAdmin }),
+      relacionados,
+      jsonLd: [
+        jsonLdProducto(producto, { frontendUrl, imagenes }),
+        jsonLdBreadcrumb(producto, { frontendUrl }),
+      ],
+    });
   } catch (err) {
     next(err);
   }
@@ -1214,72 +1242,27 @@ async function borrarFilaYLimpiarMedia(producto, req) {
 
   {
     // Always sweep individual files first — a product may have a
-    // driveFolderId AND still have some fotos/video whose driveFileId
-    // predates that folder (e.g. a legacy product that was edited once
-    // after this feature shipped: the new upload went into a fresh
-    // subfolder, but its original photos are still in the flat root
-    // folder). Deleting the folder alone would leave those orphaned.
-    //
-    // Los archivos se barren en paralelo (hasta 10 fotos + 1 video), pero el
-    // borrado de las carpetas SIGUE SIENDO POSTERIOR y no se puede meter en
-    // la misma tanda: `delete_folder` de la Admin API de Cloudinary solo
-    // funciona sobre una carpeta vacía, así que adelantarlo la dejaría viva
-    // para siempre.
     await Promise.allSettled([
       ...producto.fotos.map((foto) => limpiarMediaRemota(foto, "la foto", req)),
       ...(producto.video ? [limpiarMediaRemota(producto.video, "el video", req)] : []),
     ]);
 
-    // Then remove the (now-empty, or never-used) per-product folders. The
-    // Drive one only ever exists for legacy Drive-era products — Cloudinary
-    // uploads never create one. La carpeta de Cloudinary usa la misma
-    // fórmula de nombre que crear/actualizar, así coincide sin importar
-    // cuándo se subió por última vez la media del producto.
+    // Y después la carpeta del producto, ya vacía: `delete_folder` de Cloudinary
+    // solo funciona sobre una carpeta sin archivos adentro, así que el orden
+    // (archivos primero, carpeta después) no es estilo. Usa la misma fórmula de
+    // nombre que crear y actualizar, así coincide sin importar cuándo se subió
+    // por última vez la media del producto.
     const carpetaCloudinary = `productos/${producto.id}-${sanitizarNombreParaCarpeta(producto.nombre.trim())}`;
-    await Promise.allSettled([
-      ...(producto.driveFolderId
-        ? [
-            googleDrive
-              .eliminarArchivo(producto.driveFolderId)
-              .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Drive", err, req)),
-          ]
-        : []),
-      cloudinary
-        .eliminarCarpeta(carpetaCloudinary)
-        .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req)),
-    ]);
+    await cloudinary
+      .eliminarCarpeta(carpetaCloudinary)
+      .catch((err) => logFallaDeLimpieza("No se pudo eliminar la carpeta del producto en Cloudinary", err, req));
   }
 }
 
-/**
- * Valida la lista de ids de una acción masiva del admin.
- *
- * Comparte `MAX_IDS_LISTADO` con `?ids=` del listado a propósito: es el mismo
- * techo de "cuántas cosas puede nombrar un cliente en un pedido", y tenerlo
- * dos veces sería tenerlo distinto en cuanto alguien mueva uno.
- *
- * Una lista vacía es un 400, no un no-op silencioso: si la pantalla mandó un
- * lote vacío hay un bug en la selección, y devolver `{ actualizados: 0 }`
- * lo escondería detrás de un cartel de éxito.
- */
-function parsearIdsMasivos(valor) {
-  if (!Array.isArray(valor)) {
-    throw httpError(400, "Se espera una lista de ids de producto.");
-  }
-  if (valor.length === 0) {
-    throw httpError(400, "No se seleccionó ningún producto.");
-  }
-  if (valor.length > MAX_IDS_LISTADO) {
-    throw httpError(400, `No se pueden procesar más de ${MAX_IDS_LISTADO} productos a la vez.`);
-  }
-
-  const ids = valor.map(Number);
-  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
-    throw httpError(400, "La lista contiene ids de producto inválidos.");
-  }
-
-  return [...new Set(ids)];
-}
+// `parsearIdsMasivos` y `MAX_IDS_LISTADO` viven en `products.input.js`: los
+// comparten las acciones masivas de ESTE controller y las de
+// `products.precios.controller.js`, así que un helper privado acá obligaba
+// a un import cruzado entre controllers.
 
 /**
  * Oculta o muestra varios productos de una sola vez, desde los checkbox del
@@ -1375,187 +1358,11 @@ export async function eliminarMasivo(req, res, next) {
   }
 }
 
-/**
- * Guarda el costo y el coeficiente de un producto desde la pantalla de precios,
- * al instante y sin pasar por el formulario completo.
- *
- * Es el tercer hermano de `actualizarVisibilidad` y `actualizarMerchandising`, y
- * existe por el mismo motivo: son campos que se editan desde una TABLA, donde
- * mandar un `PUT` multipart con el producto entero por dos números sería
- * absurdo y además pisaría lo que otra pestaña haya cambiado mientras tanto.
- *
- * **NO toca `precio`.** Guardar un costo nunca mueve el precio publicado: eso
- * lo hace `aplicarPreciosMasivo`, a pedido explícito. Es la invariante central
- * de la feature y el motivo de que estos dos endpoints estén separados.
- *
- * Acepta JSON. `null`/`""` borran la columna — ver `validarCostoYCoeficiente`.
- */
-export async function actualizarCosteo(req, res, next) {
-  try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
-
-    const { costo, coeficiente } = req.body ?? {};
-    if (costo === undefined && coeficiente === undefined) {
-      throw httpError(400, "Debe enviar costo o coeficiente.");
-    }
-    // Mismo modo que el PUT: se puede mandar solo uno de los dos (la tabla de
-    // precios guarda campo por campo, al salir de cada celda), pero ninguno se
-    // puede vaciar. Antes un `""` borraba la columna, y desde que el precio se
-    // deriva eso deja al producto sin forma de recalcularlo.
-    const costeo = validarCostoYCoeficiente({ costo, coeficiente }, { modo: "edicion" });
-
-    const existente = await prisma.product.findUnique({ where: { id } });
-    if (!existente) throw httpError(404, "Producto no encontrado.");
-
-    const producto = await prisma.product.update({
-      where: { id },
-      data: { costo: costeo.costo, coeficiente: costeo.coeficiente },
-      include: PRODUCT_INCLUDE,
-    });
-
-    logAudit(req, {
-      accion: "ACTUALIZAR_COSTEO",
-      entidad: "Producto",
-      entidadId: id,
-      detalle: {
-        costoAnterior: existente.costo?.toString() ?? null,
-        costoNuevo: producto.costo?.toString() ?? null,
-        coeficienteAnterior: existente.coeficiente?.toString() ?? null,
-        coeficienteNuevo: producto.coeficiente?.toString() ?? null,
-      },
-    });
-
-    res.json(mapProducto(producto, { esAdmin: true }));
-  } catch (err) {
-    next(err);
-  }
-}
-
-/**
- * Aplica el precio calculado (`costo × coeficiente`, redondeado al peso) a los
- * productos seleccionados en la pantalla de precios.
- *
- * **Este endpoint es el único que escribe un precio derivado del costo, y esa
- * es toda la feature.** `precio` sigue siendo una columna propia: cambiar el
- * costo de un producto NO mueve su precio publicado hasta que alguien pase por
- * acá. Es lo que hace que el precio que ve el cliente sea siempre un número que
- * una persona aprobó, y lo que permite que el redondeo se muestre en pantalla
- * antes de escribirse en vez de ocurrir en silencio.
- *
- * `coeficiente` en el body es OPCIONAL y pisa el de cada producto — es el campo
- * "aplicar este coeficiente a los N seleccionados". Se guarda junto con el
- * precio: si solo se usara para la cuenta, el producto quedaría con un precio
- * que su propio coeficiente no explica, y la pantalla lo marcaría DIFIERE al
- * instante siguiente.
- *
- * **Validar primero, escribir después.** Los productos que no se pueden
- * precisar (sin costo, o inexistentes) se apartan ANTES de la transacción, con
- * su motivo. Así un producto sin costo no aborta el lote entero, y el informe
- * distingue "no se tocó" de "se tocó y no cambió" — un `{ ok: true }` después
- * de aplicar sobre 40 y haber escrito 31 sería una mentira.
- */
-export async function aplicarPreciosMasivo(req, res, next) {
-  try {
-    const ids = parsearIdsMasivos(req.body?.ids);
-
-    // El override se valida antes de leer la base: si viene mal, no tiene
-    // sentido haber consultado nada.
-    const { coeficiente: coeficienteOverride } = validarCostoYCoeficiente({
-      coeficiente: req.body?.coeficiente,
-    });
-
-    const productos = await prisma.product.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, nombre: true, precio: true, costo: true, coeficiente: true },
-    });
-    const porId = new Map(productos.map((p) => [p.id, p]));
-
-    const resultados = [];
-    const rechazados = [];
-    const aEscribir = [];
-
-    // Se itera sobre `ids` y no sobre `productos` para que un id inexistente
-    // aparezca en el informe con su motivo, mismo criterio que `eliminarMasivo`.
-    for (const id of ids) {
-      const producto = porId.get(id);
-      if (!producto) {
-        rechazados.push({ id, nombre: null, motivo: "El producto no existe." });
-        continue;
-      }
-
-      const coeficienteEfectivo = coeficienteOverride ?? producto.coeficiente;
-      const precioNuevo = calcularPrecio(producto.costo, coeficienteEfectivo);
-      if (precioNuevo === null) {
-        rechazados.push({
-          id,
-          nombre: producto.nombre,
-          motivo: "No tiene costo y coeficiente cargados.",
-        });
-        continue;
-      }
-
-      const precioAnterior = producto.precio.toString();
-      const cambiaPrecio = !producto.precio.equals(precioNuevo);
-      const cambiaCoeficiente =
-        coeficienteOverride !== undefined &&
-        coeficienteOverride !== null &&
-        !producto.coeficiente?.equals(coeficienteOverride);
-
-      resultados.push({
-        id,
-        nombre: producto.nombre,
-        precioAnterior,
-        precioNuevo: precioNuevo.toString(),
-        cambio: cambiaPrecio,
-      });
-
-      // Un producto ya al día no se reescribe: sin esto, cada aplicación
-      // masiva llenaría `AuditLog` de cambios que no cambiaron nada y
-      // esconderían los reales.
-      if (cambiaPrecio || cambiaCoeficiente) {
-        aEscribir.push({
-          id,
-          precioAnterior,
-          data: {
-            precio: precioNuevo.toString(),
-            ...(cambiaCoeficiente && { coeficiente: coeficienteOverride }),
-          },
-        });
-      }
-    }
-
-    // Todo o nada sobre lo que SÍ se puede escribir. Lo rechazado ya quedó
-    // afuera, así que la transacción no puede abortar por un dato faltante.
-    if (aEscribir.length > 0) {
-      await prisma.$transaction(async (tx) => {
-        for (const { id, data } of aEscribir) {
-          await tx.product.update({ where: { id }, data });
-        }
-      });
-    }
-
-    // Un renglón por producto, no uno por lote: mismo criterio que
-    // `actualizarVisibilidadMasiva`.
-    for (const { id, precioAnterior, data } of aEscribir) {
-      logAudit(req, {
-        accion: "APLICAR_PRECIO",
-        entidad: "Producto",
-        entidadId: id,
-        detalle: {
-          precioAnterior,
-          precioNuevo: data.precio,
-          ...(data.coeficiente !== undefined && { coeficiente: data.coeficiente }),
-          masivo: true,
-        },
-      });
-    }
-
-    res.json({ actualizados: aEscribir.length, resultados, rechazados });
-  } catch (err) {
-    next(err);
-  }
-}
+// NOTA — `actualizarCosteo` y `aplicarPreciosMasivo` viven ahora en
+// `products.precios.controller.js`. Se movieron para empezar a desarmar este
+// archivo, que había llegado a 1650 líneas con ocho responsabilidades: era la
+// pieza más joven, la mejor delimitada y la única con su propio módulo de
+// dominio (`lib/precios.js`). Las rutas no cambiaron.
 
 export async function eliminarFoto(req, res, next) {
   try {

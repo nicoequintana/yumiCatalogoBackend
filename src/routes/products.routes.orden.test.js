@@ -39,7 +39,6 @@ vi.mock("../lib/prisma.js", () => ({
     },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");

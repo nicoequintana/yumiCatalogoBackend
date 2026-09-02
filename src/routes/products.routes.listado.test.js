@@ -8,7 +8,7 @@ process.env.JWT_SECRET = "test-secret";
 
 // La vista admin la habilita el JWT verificado, no `?admin=1` (ver
 // products.routes.autorizacion.test.js).
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 const findManyMock = vi.fn();
 const findUniqueMock = vi.fn();
@@ -25,7 +25,6 @@ vi.mock("../lib/prisma.js", () => ({
     },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");
@@ -129,18 +128,32 @@ describe("GET /api/products - payload liviano de listado", () => {
     expect(producto.cantidadFotos).toBe(4);
   });
 
-  it("mantiene el proxy de fotos legado de Drive en el listado", async () => {
+  // La URL de la foto se emite TAL CUAL viene de la columna: `foto.url` ya es
+  // la URL directa del CDN de Cloudinary. Antes había una rama que la
+  // reescribía a un proxy propio del backend para la media legada de Drive;
+  // ese storage se retiró y con él la reescritura.
+  it("emite la URL de la foto tal cual, sin reescribirla a un proxy", async () => {
     findManyMock.mockResolvedValue([
       {
         ...filaListado,
-        fotos: [{ id: 901, url: "https://drive/x", orden: 0, cloudinaryPublicId: null, driveFileId: "drive-1" }],
+        fotos: [
+          {
+            id: 901,
+            url: "https://res.cloudinary.com/demo/image/upload/v1/productos/x.jpg",
+            orden: 0,
+            cloudinaryPublicId: "productos/x",
+          },
+        ],
       },
     ]);
 
     const res = await request(buildApp()).get("/api/products");
 
     const [producto] = res.body.data ?? res.body;
-    expect(producto.fotos[0].url).toBe("/api/products/42/fotos/901");
+    expect(producto.fotos[0].url).toBe(
+      "https://res.cloudinary.com/demo/image/upload/v1/productos/x.jpg",
+    );
+    expect(producto.fotos[0].url).not.toContain("/api/products/");
   });
 
   it("los relacionados del detalle usan el mismo select liviano", async () => {

@@ -16,7 +16,6 @@ process.env.JWT_SECRET = "test-secret";
  */
 
 vi.mock("../lib/prisma.js", () => ({ prisma: {} }));
-vi.mock("../services/googleDrive.service.js", () => ({}));
 vi.mock("../services/cloudinary.service.js", () => ({}));
 vi.mock("../lib/logError.js", () => ({ logError: vi.fn() }));
 
@@ -30,7 +29,7 @@ function buildApp() {
   return app;
 }
 
-const authHeader = `Bearer ${jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" })}`;
+const authHeader = `Bearer ${jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" })}`;
 
 describe("POST /api/products — tipos de archivo no permitidos", () => {
   it("una foto con MIME no permitido responde 400 con el mensaje útil, no 500", async () => {

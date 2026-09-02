@@ -31,12 +31,11 @@ const countMock = vi.fn();
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     product: { count: (...args) => countMock(...args) },
-    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0 }) },
+    usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
   },
 }));
-vi.mock("../services/googleDrive.service.js", () => ({ eliminarArchivo: vi.fn() }));
 vi.mock("../services/cloudinary.service.js", () => ({ eliminarCarpeta: vi.fn() }));
 vi.mock("../services/productoMedia.service.js", () => ({
   limpiarArchivosSubidos: vi.fn(),
