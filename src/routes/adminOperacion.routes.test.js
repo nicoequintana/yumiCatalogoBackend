@@ -41,7 +41,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
@@ -304,5 +304,52 @@ describe("GET /api/admin/operacion", () => {
     });
     // La UI necesita el umbral para rotular la tabla sin hardcodearlo.
     expect(res.body.umbralEstancamientoDias).toBe(3);
+  });
+});
+
+describe("GET /api/admin/operacion — lista de estados", () => {
+  // AdminOperacion itera los estados para pintar sus tarjetas. La lista viaja
+  // EN la respuesta —valor, etiqueta, terminal— para que la pantalla no tenga
+  // su propia copia del diccionario ni de qué estados "todavía requieren
+  // trabajo".
+  it("emite estados con etiqueta y bandera terminal, en orden de flujo", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/operacion")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.estados).toEqual([
+      { valor: "PENDIENTE", etiqueta: "Pendiente", terminal: false },
+      { valor: "EN_PREPARACION", etiqueta: "En preparación", terminal: false },
+      { valor: "ENTREGADA", etiqueta: "Entregada", terminal: true },
+      { valor: "CANCELADA", etiqueta: "Cancelada", terminal: true },
+    ]);
+  });
+});
+
+describe("GET /api/admin/operacion — etiqueta en las estancadas", () => {
+  it("cada orden estancada trae estadoEtiqueta, igual que mapOrden", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      {
+        id: 7,
+        estado: "EN_PREPARACION",
+        stockDescontado: true,
+        createdAt: new Date("2026-08-01T12:00:00.000Z"),
+        updatedAt: new Date("2026-08-01T12:00:00.000Z"),
+        cliente: { nombre: "Ana" },
+        items: [],
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/operacion")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    const estancada = res.body.ordenesEstancadas.lista.find((o) => o.id === 7);
+    expect(estancada).toBeDefined();
+    expect(estancada.estadoEtiqueta).toBe("En preparación");
   });
 });

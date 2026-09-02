@@ -4,7 +4,7 @@ import { aClaveDia, parsearPeriodo } from "./admin.controller.js";
 // Fuente única de los estados de `Orden` (ver lib/estadosOrden.js). Acá el
 // tablero de estancamiento se limita a los no terminales, y `ESTADOS_ORDEN`
 // fija las claves de la respuesta.
-import { ESTADOS_NO_TERMINALES, ESTADOS_ORDEN } from "../lib/estadosOrden.js";
+import { ESTADOS_NO_TERMINALES, ESTADOS_ORDEN, listaDeEstados, etiquetaDeEstado } from "../lib/estadosOrden.js";
 
 /**
  * Días sin cambios a partir de los cuales una orden se considera estancada.
@@ -170,6 +170,9 @@ export async function resumenOperacion(req, res, next) {
       .map((orden) => ({
         id: orden.id,
         estado: orden.estado,
+        // Mismo criterio que `mapOrden`: la etiqueta viaja con el dato para que
+        // el badge del frontend no necesite su propio diccionario.
+        estadoEtiqueta: etiquetaDeEstado(orden.estado),
         diasSinCambios: diasDesde(orden.updatedAt, ahora),
         clienteNombre: orden.cliente?.nombre ?? "Sin cliente",
         total: totalDeItems(orden.items).toFixed(0),
@@ -223,6 +226,11 @@ export async function resumenOperacion(req, res, next) {
     res.json({
       periodo: { desde: aClaveDia(desde), hasta: aClaveDia(hasta), recortado },
       umbralEstancamientoDias: UMBRAL_ESTANCAMIENTO_DIAS,
+      // La lista con etiquetas y bandera terminal viaja EN la respuesta: las
+      // tarjetas "Órdenes por estado" se pintan iterando esto, así la pantalla
+      // no necesita su propia copia del diccionario ni de qué estados
+      // "todavía requieren trabajo".
+      estados: listaDeEstados(),
       stockBajoMaximo: STOCK_BAJO_MAXIMO,
       ordenesPorEstado,
       ordenesEstancadas: {

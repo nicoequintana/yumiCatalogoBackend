@@ -36,6 +36,10 @@ router.get(
 );
 router.get("/productos-solicitados", requireAuth, ordenesController.listarProductosSolicitados);
 
+// Declarada ANTES de `/:id` — el pisotón de siempre: si no, Express matchea
+// "estados" como un id de orden. Mismo motivo que `/export` y
+// `/productos-solicitados` acá arriba.
+router.get("/estados", requireAuth, ordenesController.estados);
 router.get("/:id", requireAuth, ordenesController.obtenerPorId);
 router.patch("/:id/estado", requireAuth, ordenesController.actualizarEstado);
 

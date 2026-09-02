@@ -118,7 +118,7 @@ const ORDEN = {
   items: [{ id: 1, ordenId: 100, productId: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 1 }],
 };
 
-const token = jwt.sign({ sub: 1, email: "admin@yima.test" }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
@@ -481,7 +481,7 @@ describe("POST /api/ordenes — email obligatorio y notificaciones", () => {
   }
 
   it("rechaza con 400 si falta el email", async () => {
-    const { email, ...sinEmail } = BODY_VALIDO;
+    const { email: _email, ...sinEmail } = BODY_VALIDO;
 
     const res = await request(buildApp()).post("/api/ordenes").send(sinEmail);
 
@@ -615,5 +615,78 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
       .send({ estado: "EN_PREPARACION", notificarCliente: "si" });
 
     expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/ordenes/estados", () => {
+  it("devuelve los cuatro estados con etiqueta y bandera terminal", async () => {
+    const res = await request(buildApp())
+      .get("/api/ordenes/estados")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.estados).toEqual([
+      { valor: "PENDIENTE", etiqueta: "Pendiente", terminal: false },
+      { valor: "EN_PREPARACION", etiqueta: "En preparación", terminal: false },
+      { valor: "ENTREGADA", etiqueta: "Entregada", terminal: true },
+      { valor: "CANCELADA", etiqueta: "Cancelada", terminal: true },
+    ]);
+  });
+
+  it("requiere autenticación", async () => {
+    const res = await request(buildApp()).get("/api/ordenes/estados");
+    expect(res.status).toBe(401);
+  });
+
+  // El pisotón de siempre: sin declararla ANTES de `/:id`, Express matchea
+  // "estados" como un id de orden y esto respondería el 404 de una orden
+  // inexistente en vez de la lista.
+  it("no se confunde con GET /ordenes/:id", async () => {
+    const res = await request(buildApp())
+      .get("/api/ordenes/estados")
+      .set("Authorization", authHeader);
+
+    expect(res.body).not.toHaveProperty("error");
+  });
+});
+
+describe("estadoEtiqueta en TODOS los caminos que devuelven una orden", () => {
+  // El smoke test contra la API real atrapó lo que la suite no vio: `listar`,
+  // `obtenerPorId` y `actualizarEstado` devolvían la fila cruda de Prisma sin
+  // pasar por `mapOrden`, así que `estadoEtiqueta` salía undefined y el panel
+  // caía al respaldo (la clave cruda). Estos tests fijan que los tres caminos
+  // pasen por el mapper.
+  it("GET /ordenes (listado) emite estadoEtiqueta en cada fila", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      { ...ORDEN, items: undefined, _count: { items: 1 } },
+    ]);
+    ordenCountMock.mockResolvedValue(1);
+
+    const res = await request(buildApp()).get("/api/ordenes").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].estadoEtiqueta).toBe("Pendiente");
+  });
+
+  it("GET /ordenes/:id emite estadoEtiqueta", async () => {
+    ordenFindUniqueMock.mockResolvedValue(ORDEN);
+
+    const res = await request(buildApp()).get("/api/ordenes/100").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.estadoEtiqueta).toBe("Pendiente");
+  });
+
+  it("PATCH /ordenes/:id/estado responde con la etiqueta del estado NUEVO", async () => {
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN, items: [] });
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN, estado: "EN_PREPARACION", items: [] });
+
+    const res = await request(buildApp())
+      .patch("/api/ordenes/100/estado")
+      .set("Authorization", authHeader)
+      .send({ estado: "EN_PREPARACION" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.estadoEtiqueta).toBe("En preparación");
   });
 });

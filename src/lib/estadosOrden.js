@@ -54,14 +54,12 @@ export const ESTADOS_CON_STOCK_TOMADO = ["EN_PREPARACION", "ENTREGADA"];
 /**
  * Etiquetas legibles de cada estado, para el texto que ve una persona.
  *
- * ESPEJO MANUAL de `frontend/src/constants/ordenes.js`'s `ETIQUETA_ESTADO`.
- * Los dos repos se publican por separado (ver `docs/deploy/`), así que no hay
- * forma de compartir el módulo — mismo tipo de sincronización a mano que
- * `botDetector.js` ↔ `nginx.conf`. Al agregar un estado, tocar los dos.
- *
- * El backend sigue devolviendo SIEMPRE las claves crudas en sus respuestas
- * JSON; esto existe únicamente para el copy de los mails, que no pasa por el
- * frontend.
+ * Desde el 02/09/2026 este diccionario es LA ÚNICA copia: el frontend dejó de
+ * tener la suya (`constants/ordenes.js` conserva solo los estilos, que son
+ * presentación). Las etiquetas viajan en las respuestas — `estadoEtiqueta` en
+ * cada orden, `etiqueta` en el desglose de ventas, y la lista completa por
+ * `GET /ordenes/estados` (ver `listaDeEstados`). Los mails las consumen igual
+ * que siempre. Agregar un estado se toca en UN solo lugar: acá.
  */
 export const ETIQUETA_ESTADO = {
   PENDIENTE: "Pendiente",
@@ -69,3 +67,31 @@ export const ETIQUETA_ESTADO = {
   ENTREGADA: "Entregada",
   CANCELADA: "Cancelada",
 };
+
+/**
+ * Etiqueta legible de un estado, con la clave cruda como respaldo.
+ *
+ * El respaldo importa: un estado que este módulo no conozca (una migración a
+ * medio aplicar, un dato viejo) tiene que salir como su clave — feo pero
+ * legible — nunca como `undefined` en la pantalla del admin.
+ */
+export function etiquetaDeEstado(estado) {
+  return ETIQUETA_ESTADO[estado] ?? estado;
+}
+
+/**
+ * Los cuatro estados en orden de flujo, con su etiqueta y si son terminales:
+ * la forma que consumen el select de estados del panel y las tarjetas de
+ * AdminOperacion.
+ *
+ * Devuelve objetos NUEVOS en cada llamada: el resultado viaja a serialización
+ * y a pantallas que podrían mutarlo, y un llamador descuidado no puede
+ * envenenar la fuente para el resto del proceso.
+ */
+export function listaDeEstados() {
+  return ESTADOS_ORDEN.map((valor) => ({
+    valor,
+    etiqueta: etiquetaDeEstado(valor),
+    terminal: ESTADOS_TERMINALES.includes(valor),
+  }));
+}

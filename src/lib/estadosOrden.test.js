@@ -5,6 +5,7 @@ import {
   ESTADOS_TERMINALES,
   ESTADOS_CON_STOCK_TOMADO,
   ETIQUETA_ESTADO,
+  listaDeEstados,
 } from "./estadosOrden.js";
 
 describe("estadosOrden", () => {
@@ -47,5 +48,27 @@ describe("ETIQUETA_ESTADO", () => {
 
   it("escribe EN_PREPARACION con acento y en minúscula", () => {
     expect(ETIQUETA_ESTADO.EN_PREPARACION).toBe("En preparación");
+  });
+});
+
+describe("listaDeEstados", () => {
+  // La forma que consumen el select de estados del panel y las tarjetas de
+  // AdminOperacion: valor + etiqueta + si es terminal. Existe para que el
+  // frontend NO tenga su propia copia de las etiquetas — era un espejo manual
+  // que había que tocar en los dos repos al agregar un estado.
+  it("emite los cuatro estados en orden de flujo, con etiqueta y bandera terminal", () => {
+    expect(listaDeEstados()).toEqual([
+      { valor: "PENDIENTE", etiqueta: "Pendiente", terminal: false },
+      { valor: "EN_PREPARACION", etiqueta: "En preparación", terminal: false },
+      { valor: "ENTREGADA", etiqueta: "Entregada", terminal: true },
+      { valor: "CANCELADA", etiqueta: "Cancelada", terminal: true },
+    ]);
+  });
+
+  it("devuelve una copia: mutar el resultado no toca la fuente", () => {
+    const lista = listaDeEstados();
+    lista[0].etiqueta = "ROTO";
+
+    expect(listaDeEstados()[0].etiqueta).toBe("Pendiente");
   });
 });

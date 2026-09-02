@@ -6,7 +6,7 @@ import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitad
 import { MAX_ORDENES_HISTORICO } from "./admin.controller.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
-import { ESTADOS_ORDEN, ESTADOS_CON_STOCK_TOMADO } from "../lib/estadosOrden.js";
+import { ESTADOS_ORDEN, ESTADOS_CON_STOCK_TOMADO, listaDeEstados } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
@@ -318,7 +318,12 @@ export async function listar(req, res, next) {
       }),
     ]);
 
-    res.json({ data: ordenes, page, pageSize, total });
+    // Por `mapOrden` aunque el listado no traiga items: es lo que suma
+    // `estadoEtiqueta`, y saltearlo fue exactamente el bug que atrapó el smoke
+    // test — la fila cruda de Prisma salía sin etiqueta y el panel caía al
+    // respaldo con la clave cruda. `esAdmin: true` porque la ruta está detrás
+    // de `requireAuth`.
+    res.json({ data: ordenes.map((o) => mapOrden(o, { esAdmin: true })), page, pageSize, total });
   } catch (err) {
     next(err);
   }
@@ -492,7 +497,10 @@ export async function obtenerPorId(req, res, next) {
     });
     if (!orden) throw httpError(404, "Orden no encontrada.");
 
-    res.json(orden);
+    // `mapOrden` con `esAdmin: true`: la ruta exige auth, así que el admin ve
+    // `costoUnitario` igual que antes — lo que cambia es que la orden sale con
+    // su `estadoEtiqueta`.
+    res.json(mapOrden(orden, { esAdmin: true }));
   } catch (err) {
     next(err);
   }
@@ -758,11 +766,28 @@ export async function actualizarEstado(req, res, next) {
       req.body?.notificarCliente === true ? await notificarCambioEstado(orden) : undefined;
 
     res.json({
-      ...orden,
+      ...mapOrden(orden, { esAdmin: true }),
       ...(advertencias.length > 0 && { advertencias }),
       ...(notificacion !== undefined && { notificacion }),
     });
   } catch (err) {
     next(err);
   }
+}
+
+/**
+ * GET /api/ordenes/estados — los cuatro estados con su etiqueta y si son
+ * terminales.
+ *
+ * Existe para que el frontend NO tenga su propia copia del diccionario de
+ * estados: los selects del panel (filtrar órdenes, cambiar el estado de una)
+ * arman sus opciones con esto, y las etiquetas de cada fila viajan como
+ * `estadoEtiqueta` en la propia orden. Antes eran un espejo manual entre repos
+ * que había que tocar de a dos.
+ *
+ * Es una constante del proceso — no toca la base — pero va detrás de
+ * `requireAuth` igual que el resto del recurso: es información del panel.
+ */
+export function estados(_req, res) {
+  res.json({ estados: listaDeEstados() });
 }

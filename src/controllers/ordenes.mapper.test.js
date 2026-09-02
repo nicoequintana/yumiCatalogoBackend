@@ -61,3 +61,22 @@ describe("mapOrden", () => {
     expect(mapOrden(sinItems)).not.toHaveProperty("items");
   });
 });
+
+describe("mapOrden — estadoEtiqueta", () => {
+  // La etiqueta viaja CON la orden para que el frontend no necesite su propia
+  // copia del diccionario de estados. La clave cruda (`estado`) sigue viajando
+  // igual: es la que gobierna la lógica (estilos, transiciones); la etiqueta es
+  // solo el texto que ve una persona.
+  it("emite la etiqueta legible junto al estado crudo", () => {
+    const salida = mapOrden(ORDEN);
+
+    expect(salida.estado).toBe("PENDIENTE");
+    expect(salida.estadoEtiqueta).toBe("Pendiente");
+  });
+
+  it("un estado desconocido cae a la clave cruda, nunca a undefined", () => {
+    const salida = mapOrden({ ...ORDEN, estado: "ALGO_NUEVO" });
+
+    expect(salida.estadoEtiqueta).toBe("ALGO_NUEVO");
+  });
+});

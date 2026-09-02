@@ -1,3 +1,5 @@
+import { etiquetaDeEstado } from "../lib/estadosOrden.js";
+
 /**
  * Forma de respuesta de una orden.
  *
@@ -54,6 +56,11 @@ export function mapOrden(orden, { esAdmin = false } = {}) {
   if (!orden) return orden;
   return {
     ...orden,
+    // La etiqueta legible viaja CON la orden para que el frontend no necesite
+    // su propia copia del diccionario de estados (era un espejo manual entre
+    // repos). `estado` sigue viajando crudo: es la clave que gobierna la
+    // lógica — estilos, transiciones —; la etiqueta es solo texto para humanos.
+    ...(orden.estado !== undefined && { estadoEtiqueta: etiquetaDeEstado(orden.estado) }),
     ...(orden.items !== undefined && {
       items: orden.items.map((item) => mapItemOrden(item, { esAdmin })),
     }),

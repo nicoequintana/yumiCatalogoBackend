@@ -30,7 +30,7 @@ function buildApp() {
   return app;
 }
 
-const token = jwt.sign({ sub: 1 }, "test-secret", { expiresIn: "7d" });
+const token = jwt.sign({ sub: 1, tokenVersion: 0 }, "test-secret", { expiresIn: "7d" });
 const authHeader = `Bearer ${token}`;
 
 /**
@@ -313,10 +313,10 @@ describe("GET /api/admin/ventas", () => {
     // Los cuatro estados viajan igual, en cero: un cero es la respuesta ("no
     // tenés órdenes pendientes"), no la ausencia de respuesta.
     expect(res.body.porEstado).toEqual([
-      { estado: "PENDIENTE", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
-      { estado: "EN_PREPARACION", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
-      { estado: "ENTREGADA", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
-      { estado: "CANCELADA", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "PENDIENTE", etiqueta: "Pendiente", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "EN_PREPARACION", etiqueta: "En preparación", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "ENTREGADA", etiqueta: "Entregada", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
+      { estado: "CANCELADA", etiqueta: "Cancelada", cantidadOrdenes: 0, venta: "0", costo: "0", ventaConCosto: "0" },
     ]);
     expect(res.body.rankingProductos).toEqual([]);
     expect(Number.isNaN(res.body.tasaCancelacion)).toBe(false);
@@ -632,5 +632,100 @@ describe("GET /api/admin/ventas — porEstado", () => {
 describe("ESTADOS_FACTURABLES", () => {
   it("cuenta como venta desde EN_PREPARACION, sin CONFIRMADA", () => {
     expect(ESTADOS_FACTURABLES).toEqual(["EN_PREPARACION", "ENTREGADA"]);
+  });
+});
+
+describe("GET /api/admin/ventas?dias=N — el backend calcula el rango", () => {
+  // POR QUÉ EXISTE. Antes el frontend calculaba desde/hasta con su propia copia
+  // del calendario argentino (`utils/periodo.js`, espejo manual de
+  // `lib/horarioArgentino.js`): dos definiciones de "día" que podían divergir
+  // sin que nada falle. Con `?dias=N` el frontend manda la intención y el
+  // backend —la única fuente del calendario— resuelve las fechas.
+  it("con dias=7 arma un rango de 7 días que termina hoy (día argentino)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    // 02/09/2026 01:00 UTC = 01/09/2026 22:00 en Argentina: el "hoy" argentino
+    // es 01/09, no 02/09. Justo la franja nocturna donde las dos definiciones
+    // de día divergen — si este test pasa, el rango sale del calendario
+    // correcto.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-02T01:00:00.000Z"));
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=7")
+      .set("Authorization", authHeader);
+
+    vi.useRealTimers();
+
+    expect(res.status).toBe(200);
+    expect(res.body.periodo).toMatchObject({ desde: "2026-08-26", hasta: "2026-09-01" });
+    expect(res.body.periodo.recortado).toBe(false);
+  });
+
+  it("un dias inválido cae al período por defecto, sin 500", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=banana")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.periodo.desde).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("un dias negativo o cero cae al período por defecto, sin 500", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=-5")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.periodo.desde).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("un dias mayor al tope recorta e informa recortado", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=500")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.periodo.recortado).toBe(true);
+  });
+
+  // Compatibilidad: `desde`/`hasta` explícitos GANAN sobre `dias`. Nada de lo
+  // que funcionaba antes cambia de comportamiento — el parámetro nuevo solo
+  // actúa cuando viene solo, que es como lo manda la UI.
+  it("desde/hasta explícitos ganan sobre dias", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=7&desde=2026-08-01&hasta=2026-08-15")
+      .set("Authorization", authHeader);
+
+    expect(res.body.periodo).toMatchObject({ desde: "2026-08-01", hasta: "2026-08-15" });
+  });
+});
+
+describe("GET /api/admin/ventas — etiquetas en porEstado", () => {
+  // La etiqueta viaja EN el dato para que la pantalla no tenga su propia copia
+  // del diccionario de estados. El valor crudo sigue viajando: es la clave de
+  // los estilos.
+  it("cada entrada de porEstado trae su etiqueta legible", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    const etiquetas = Object.fromEntries(res.body.porEstado.map((e) => [e.estado, e.etiqueta]));
+    expect(etiquetas).toEqual({
+      PENDIENTE: "Pendiente",
+      EN_PREPARACION: "En preparación",
+      ENTREGADA: "Entregada",
+      CANCELADA: "Cancelada",
+    });
   });
 });

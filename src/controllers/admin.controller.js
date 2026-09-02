@@ -2,7 +2,7 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem, costoDeItem, sumarDecimales } from "../lib/dinero.js";
-import { ESTADOS_ORDEN } from "../lib/estadosOrden.js";
+import { ESTADOS_ORDEN, etiquetaDeEstado } from "../lib/estadosOrden.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 
 export async function listarErrorLogs(req, res, next) {
@@ -163,6 +163,25 @@ export function parsearPeriodo(query) {
 
   let desde = parsear(query.desde);
   let hasta = parsear(query.hasta);
+
+  // `?dias=N`: el frontend manda la INTENCIÓN ("últimos 30 días") y el rango lo
+  // resuelve este módulo, que es la única fuente del calendario argentino.
+  // Antes el frontend calculaba desde/hasta con su propia copia del calendario
+  // (`utils/periodo.js`, espejo manual de `lib/horarioArgentino.js`): dos
+  // definiciones de "día" que podían divergir sin que nada falle — y ya
+  // divergieron una vez, cuando el "hoy" del navegador entre las 21:00 y la
+  // medianoche corría la ventana entera un día.
+  //
+  // Solo actúa cuando `desde`/`hasta` NO vinieron: las fechas explícitas ganan,
+  // así nada de lo que funcionaba antes cambia de comportamiento. Un valor
+  // inválido se ignora y cae al período por defecto, igual que una fecha rota.
+  if (desde === null && hasta === null) {
+    const dias = Number(query.dias);
+    if (Number.isInteger(dias) && dias > 0) {
+      hasta = hoy;
+      desde = new Date(hoy.getTime() - (dias - 1) * MS_POR_DIA);
+    }
+  }
 
   if (hasta === null) hasta = hoy;
   if (desde === null) {
@@ -441,6 +460,10 @@ export async function resumenVentas(req, res, next) {
       // así que el array ya sale en orden de flujo sin ordenarlo aparte.
       porEstado: [...porEstado.entries()].map(([estado, datos]) => ({
         estado,
+        // La etiqueta legible viaja EN el dato: la pantalla no tiene su propia
+        // copia del diccionario de estados. El valor crudo sigue siendo la
+        // clave de los estilos.
+        etiqueta: etiquetaDeEstado(estado),
         cantidadOrdenes: datos.cantidadOrdenes,
         venta: datos.venta.toFixed(0),
         costo: datos.costo.toFixed(0),

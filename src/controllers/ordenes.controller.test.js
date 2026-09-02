@@ -607,7 +607,7 @@ describe("listar()", () => {
         include: { cliente: true, _count: { select: { items: true } } },
       }),
     );
-    expect(res.body.data).toEqual([ORDEN_LISTADO_MOCK]);
+    expect(res.body.data).toEqual([{ ...ORDEN_LISTADO_MOCK, estadoEtiqueta: "Pendiente" }]);
     expect(res.body.data[0].items).toBeUndefined();
     expect(res.body.total).toBe(1);
   });
@@ -764,7 +764,14 @@ describe("obtenerPorId()", () => {
       }),
     );
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual(ORDEN_CREADA_MOCK);
+    // La respuesta pasa ahora por `mapOrden(..., { esAdmin: true })`: además de
+    // `estadoEtiqueta`, cada item emite `costoUnitario` normalizado (null si el
+    // dato no existe) — es el contrato admin documentado del mapper.
+    expect(res.body).toEqual({
+      ...ORDEN_CREADA_MOCK,
+      estadoEtiqueta: "Pendiente",
+      items: ORDEN_CREADA_MOCK.items.map((item) => ({ costoUnitario: null, ...item })),
+    });
   });
 
   it("responde 404 si la orden no existe", async () => {
