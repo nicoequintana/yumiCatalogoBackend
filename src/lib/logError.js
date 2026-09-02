@@ -1,5 +1,6 @@
 import { prisma } from "./prisma.js";
 import { truncarTexto } from "./limitesTexto.js";
+import { alertarError } from "../services/alertaErrores.service.js";
 
 /**
  * Serializa una causa arbitraria a texto.
@@ -66,14 +67,36 @@ function stackConCausa(stack, causa) {
  * @returns {Promise<void>}
  */
 export async function logError({ mensaje, stack, causa, ruta, metodo, status }) {
+  const stackCompleto = stackConCausa(stack, causa);
+
   try {
     await prisma.errorLog.create({
       // `ruta` se recorta al largo de su columna (NVarChar(1000)): la URL la
       // arma el cliente, y una más larga hacía fallar justamente el insert del
       // log del error. `mensaje` y `stack` son NVarChar(Max), no lo necesitan.
-      data: { mensaje, stack: stackConCausa(stack, causa), ruta: truncarTexto(ruta), metodo, status },
+      data: { mensaje, stack: stackCompleto, ruta: truncarTexto(ruta), metodo, status },
     });
   } catch (err) {
     console.error("logError: no se pudo persistir el ErrorLog:", err);
+  }
+
+  // El aviso por mail va DESPUÉS del insert y FUERA de su try: el insert es la
+  // fuente de verdad, pero si falla el aviso importa MÁS, no menos — es el
+  // único rastro que queda de que algo pasó.
+  //
+  // Solo 5xx. Un 4xx es el cliente pidiendo algo inválido, no una falla del
+  // sistema: alertar por cada uno llenaría la casilla de ruido inaccionable, y
+  // bastaría con un bot pegándole a rutas inexistentes para inundarla. Un error
+  // SIN status es uno que nadie clasificó, así que se avisa por las dudas.
+  //
+  // `alertarError` nunca lanza (ver su docstring), pero el `catch` va igual:
+  // este módulo no puede depender del contrato de otro para no romper el
+  // manejo del error original.
+  if (status === undefined || status === null || status >= 500) {
+    try {
+      await alertarError({ mensaje, stack: stackCompleto, ruta, metodo, status });
+    } catch (err) {
+      console.error("logError: no se pudo enviar la alerta:", err);
+    }
   }
 }
