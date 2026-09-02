@@ -137,4 +137,25 @@ describe("GET /api/products - ?orden=", () => {
     expect(orderBy).toEqual([{ nombre: "asc" }, { id: "asc" }]);
     expect(where.OR).toBeDefined();
   });
+
+  it("catalogo agrupa por estado de publicación: visibles+destacados, catálogo, sin stock, ocultos", async () => {
+    await request(buildApp()).get("/api/products?orden=catalogo");
+
+    // Columnas puras, sin expresiones: es la aproximación paginable de los
+    // cuatro grupos. `stock: "desc"` es lo que manda los agotados al fondo de
+    // los visibles sin SQL crudo — a cambio, dentro de cada grupo se ordena
+    // por cantidad de stock, no por recientes.
+    expect(orderByDeLaConsulta()).toEqual([
+      { visibleEnCatalogo: "desc" },
+      { destacado: "desc" },
+      { stock: "desc" },
+      { id: "desc" },
+    ]);
+  });
+
+  it("catalogo no toca el default del backend: sin ?orden= sigue recientes", async () => {
+    await request(buildApp()).get("/api/products");
+
+    expect(orderByDeLaConsulta()).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
 });

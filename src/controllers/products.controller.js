@@ -110,6 +110,24 @@ const ORDENES_LISTADO = {
   // id más alto es el más nuevo. Con `asc` la fila más reciente de un lote
   // cargado de una sola vez quedaría última dentro de su propio grupo.
   recientes: [{ createdAt: "desc" }, { id: "desc" }],
+  // El default del LISTADO DEL ADMIN (la pantalla lo manda explícito; el
+  // default de este endpoint sigue siendo `recientes`): primero lo que el
+  // cliente ve, en el orden en que lo ve — destacados del catálogo, resto del
+  // catálogo, sin stock, y los ocultos al final.
+  //
+  // Son columnas puras porque Prisma no ordena por expresiones y el orden
+  // tiene que resolverse en la base (la tabla pagina). Dos consecuencias
+  // asumidas, decididas con el dueño (01/09/2026): un destacado SIN stock
+  // queda arriba con los destacados —deseable: es una vidriera rota que el
+  // carrusel de la home no puede mostrar, y enterrado en "sin stock" nadie lo
+  // ve—, y dentro de cada grupo se ordena por cantidad de stock, que es lo
+  // que separa "con stock" de "agotado" sin SQL crudo.
+  catalogo: [
+    { visibleEnCatalogo: "desc" },
+    { destacado: "desc" },
+    { stock: "desc" },
+    { id: "desc" },
+  ],
   // Los dos criterios de la pantalla de Costos y precios, donde la pregunta no
   // es por el precio publicado sino por lo que lo genera.
   //
