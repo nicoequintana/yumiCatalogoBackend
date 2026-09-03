@@ -85,8 +85,14 @@ export const LIST_SELECT = {
  * Sigue compartida por `mapProducto` y `mapProductoListado` —aunque hoy sea un
  * solo `return`— para que la portada de la grilla y la galería del detalle no
  * puedan divergir si vuelve a aparecer un segundo storage.
+ *
+ * Se exporta desde que apareció un TERCER consumidor: `ordenes.mapper.js`, que
+ * emite la portada de cada línea del detalle de una orden. Escribirla ahí como
+ * `item.product?.fotos?.[0]?.url` sería la cuarta copia de la misma regla, y el
+ * único de los tres lugares que no se enteraría del día que vuelva un segundo
+ * storage. Si aparece un cuarto consumidor, mudarla a `lib/fotos.js`.
  */
-function urlDeFoto(foto) {
+export function urlDeFoto(foto) {
   return foto.url;
 }
 

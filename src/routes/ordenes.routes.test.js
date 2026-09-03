@@ -656,9 +656,12 @@ describe("estadoEtiqueta en TODOS los caminos que devuelven una orden", () => {
   // pasar por `mapOrden`, así que `estadoEtiqueta` salía undefined y el panel
   // caía al respaldo (la clave cruda). Estos tests fijan que los tres caminos
   // pasen por el mapper.
-  it("GET /ordenes (listado) emite estadoEtiqueta en cada fila", async () => {
+  it("GET /ordenes (listado) emite estadoEtiqueta, total y resumen en cada fila", async () => {
+    // El fixture trae los items con la forma que pide LISTADO_ORDEN_INCLUDE:
+    // un `items: undefined` haria pasar el test sin ejercitar los derivados,
+    // que son justo la parte del listado capaz de publicar un monto inventado.
     ordenFindManyMock.mockResolvedValue([
-      { ...ORDEN, items: undefined, _count: { items: 1 } },
+      { ...ORDEN, items: [{ nombreProducto: "Producto A", precioUnitario: "100", cantidad: 2 }] },
     ]);
     ordenCountMock.mockResolvedValue(1);
 
@@ -666,6 +669,9 @@ describe("estadoEtiqueta en TODOS los caminos que devuelven una orden", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data[0].estadoEtiqueta).toBe("Pendiente");
+    expect(res.body.data[0].total).toBe("200");
+    expect(res.body.data[0].cantidadItems).toBe(1);
+    expect(res.body.data[0].resumen).toEqual([{ nombreProducto: "Producto A", cantidad: 2 }]);
   });
 
   it("GET /ordenes/:id emite estadoEtiqueta", async () => {

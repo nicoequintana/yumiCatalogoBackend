@@ -46,6 +46,7 @@ vi.mock("../lib/prisma.js", () => ({
 
 const { crear, listar, obtenerPorId, actualizarEstado, MAX_ITEMS_POR_ORDEN, MAX_CANTIDAD_POR_ITEM } =
   await import("./ordenes.controller.js");
+const { LISTADO_ORDEN_INCLUDE, DETALLE_ORDEN_INCLUDE } = await import("./ordenes.mapper.js");
 
 function buildReqRes({ body, query, params } = {}) {
   const req = { body: body ?? {}, query: query ?? {}, params: params ?? {} };
@@ -112,19 +113,31 @@ const ORDEN_CREADA_MOCK = {
   updatedAt: new Date(),
 };
 
-// Shape devuelta por listar(): cliente completo + _count.items (NO items
-// completos) — ver nota en ordenes.controller.js sobre por qué el listado
-// no trae el detalle línea por línea.
+// Shape devuelta por listar(): cliente completo + las tres columnas de cada
+// ítem que alimentan `total` y `resumen` (NO la línea entera) — ver nota en
+// ordenes.controller.js sobre por qué el listado no trae el detalle completo.
 const ORDEN_LISTADO_MOCK = {
   id: 100,
   clienteId: 10,
   estado: "PENDIENTE",
   notas: null,
   cliente: CLIENTE_EXISTENTE,
-  _count: { items: 1 },
+  items: [{ nombreProducto: "Producto A", precioUnitario: "100", cantidad: 1 }],
   createdAt: new Date(),
   updatedAt: new Date(),
 };
+
+/** El mock de arriba, tal como lo publica `mapOrdenListado`. */
+const ORDEN_LISTADO_ESPERADA = (() => {
+  const { items: _items, ...resto } = ORDEN_LISTADO_MOCK;
+  return {
+    ...resto,
+    estadoEtiqueta: "Pendiente",
+    cantidadItems: 1,
+    total: "100",
+    resumen: [{ nombreProducto: "Producto A", cantidad: 1 }],
+  };
+})();
 
 beforeEach(() => {
   clienteFindUniqueMock.mockReset();
@@ -592,7 +605,7 @@ describe("crear() — respuesta 201", () => {
 });
 
 describe("listar()", () => {
-  it("lista órdenes ordenadas por createdAt desc, con cliente y _count.items (NO items completos)", async () => {
+  it("lista órdenes ordenadas por createdAt desc, con el include del listado", async () => {
     ordenFindManyMock.mockResolvedValue([ORDEN_LISTADO_MOCK]);
     ordenCountMock.mockResolvedValue(1);
 
@@ -601,15 +614,42 @@ describe("listar()", () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+    // Se afirma por IDENTIDAD contra la constante del mapper, no copiando el
+    // objeto: así el test no puede quedar describiendo un include que el
+    // controller ya no usa.
     expect(ordenFindManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         orderBy: { createdAt: "desc" },
-        include: { cliente: true, _count: { select: { items: true } } },
+        include: LISTADO_ORDEN_INCLUDE,
       }),
     );
-    expect(res.body.data).toEqual([{ ...ORDEN_LISTADO_MOCK, estadoEtiqueta: "Pendiente" }]);
-    expect(res.body.data[0].items).toBeUndefined();
+    expect(res.body.data).toEqual([ORDEN_LISTADO_ESPERADA]);
     expect(res.body.total).toBe(1);
+  });
+
+  it("emite el monto total y el resumen de cada orden", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_LISTADO_MOCK]);
+    ordenCountMock.mockResolvedValue(1);
+
+    const { req, res, next } = buildReqRes();
+    await listar(req, res, next);
+
+    expect(res.body.data[0].total).toBe("100");
+    expect(res.body.data[0].cantidadItems).toBe(1);
+    expect(res.body.data[0].resumen).toEqual([{ nombreProducto: "Producto A", cantidad: 1 }]);
+  });
+
+  it("NO emite las líneas de la orden ni el _count", async () => {
+    // El guard de que `precioUnitario` renglón por renglón no se filtra a una
+    // grilla. `_count` desaparece porque `cantidadItems` lo reemplaza.
+    ordenFindManyMock.mockResolvedValue([{ ...ORDEN_LISTADO_MOCK, _count: { items: 1 } }]);
+    ordenCountMock.mockResolvedValue(1);
+
+    const { req, res, next } = buildReqRes();
+    await listar(req, res, next);
+
+    expect(res.body.data[0].items).toBeUndefined();
+    expect(res.body.data[0]._count).toBeUndefined();
   });
 
   it("filtra por estado exacto", async () => {
@@ -760,7 +800,7 @@ describe("obtenerPorId()", () => {
     expect(ordenFindUniqueMock).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 100 },
-        include: { cliente: true, items: true },
+        include: DETALLE_ORDEN_INCLUDE,
       }),
     );
     expect(res.statusCode).toBe(200);
@@ -772,6 +812,35 @@ describe("obtenerPorId()", () => {
       estadoEtiqueta: "Pendiente",
       items: ORDEN_CREADA_MOCK.items.map((item) => ({ costoUnitario: null, ...item })),
     });
+  });
+
+  it("emite la portada de cada ítem cuando el producto la tiene", async () => {
+    const item = {
+      ...ORDEN_CREADA_MOCK.items[0],
+      product: { fotos: [{ url: "https://res.cloudinary.com/demo/a.jpg" }] },
+    };
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, items: [item] });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" } });
+    await obtenerPorId(req, res, next);
+
+    expect(res.body.items[0].fotoPortada).toBe("https://res.cloudinary.com/demo/a.jpg");
+    expect(res.body.items[0]).not.toHaveProperty("product");
+  });
+
+  it("emite fotoPortada null cuando el producto fue borrado", async () => {
+    // `onDelete: SetNull` desliga la línea: Prisma devuelve `product: null` y
+    // la orden sigue siendo legible por sus snapshots. Tiene que responder 200,
+    // no reventar.
+    const item = { ...ORDEN_CREADA_MOCK.items[0], productId: null, product: null };
+    ordenFindUniqueMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, items: [item] });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" } });
+    await obtenerPorId(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items[0].fotoPortada).toBeNull();
   });
 
   it("responde 404 si la orden no existe", async () => {
@@ -808,11 +877,48 @@ describe("actualizarEstado()", () => {
       expect.objectContaining({
         where: { id: 100 },
         data: { estado: "EN_PREPARACION" },
-        include: { cliente: true, items: true },
+        include: DETALLE_ORDEN_INCLUDE,
       }),
     );
     expect(res.statusCode).toBe(200);
     expect(res.body.estado).toBe("EN_PREPARACION");
+  });
+
+  it("usa EL MISMO include que el detalle, no uno propio", async () => {
+    // ⚠️ El guard de la trampa central de esta feature. `AdminOrdenDetalle`
+    // hace `setOrden(respuesta)` con lo que devuelve este PATCH: si este
+    // include diverge del de `obtenerPorId`, las miniaturas de los productos
+    // se ven al abrir la orden y DESAPARECEN al cambiarle el estado. Sin
+    // error, sin test rojo — salvo este.
+    //
+    // Se afirma por IDENTIDAD de referencia contra la constante compartida:
+    // una copia estructural del objeto dejaría pasar exactamente la
+    // divergencia que este test existe para impedir.
+    ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+    ordenUpdateMock.mockResolvedValue({ ...ORDEN_CREADA_MOCK, estado: "EN_PREPARACION" });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
+    await actualizarEstado(req, res, next);
+
+    expect(ordenUpdateMock.mock.calls[0][0].include).toBe(DETALLE_ORDEN_INCLUDE);
+  });
+
+  it("emite la portada de cada ítem en la respuesta", async () => {
+    const item = {
+      ...ORDEN_CREADA_MOCK.items[0],
+      product: { fotos: [{ url: "https://res.cloudinary.com/demo/a.jpg" }] },
+    };
+    ordenFindUniqueMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+    ordenUpdateMock.mockResolvedValue({
+      ...ORDEN_CREADA_MOCK,
+      estado: "EN_PREPARACION",
+      items: [item],
+    });
+
+    const { req, res, next } = buildReqRes({ params: { id: "100" }, body: { estado: "EN_PREPARACION" } });
+    await actualizarEstado(req, res, next);
+
+    expect(res.body.items[0].fotoPortada).toBe("https://res.cloudinary.com/demo/a.jpg");
   });
 
   describe("descuento de stock al confirmar", () => {

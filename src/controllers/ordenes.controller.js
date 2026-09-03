@@ -11,7 +11,12 @@ import { httpError } from "../lib/httpError.js";
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
-import { mapOrden } from "./ordenes.mapper.js";
+import {
+  DETALLE_ORDEN_INCLUDE,
+  LISTADO_ORDEN_INCLUDE,
+  mapOrden,
+  mapOrdenListado,
+} from "./ordenes.mapper.js";
 import { notificarCambioEstado, notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
 
 const MAX_INTENTOS_DNI = 5;
@@ -288,14 +293,20 @@ function construirFiltrosOrdenes(query) {
 /**
  * GET /api/ordenes — listado paginado para el panel admin, protegido con
  * requireAuth. Filtros combinables por query string (estado/desde/hasta/
- * dni/nombre), orden por createdAt desc (más reciente primero). Incluye
- * `cliente` completo y `_count.items` (NO los items completos): nada en el
- * schema ni en `crear()` limita cuántos items puede tener una orden, así que
- * traer los items completos de hasta `MAX_PAGE_SIZE` órdenes (ver
- * `lib/paginacion.js`) podría inflar
- * el payload del listado sin necesidad real todavía (no hay frontend
- * consumiéndolo en este diff). El detalle línea por línea vive en
- * `obtenerPorId()` — split estándar lista/detalle.
+ * dni/nombre), orden por createdAt desc (más reciente primero).
+ *
+ * Responde con la forma de LISTADO (`mapOrdenListado`), que no es la del
+ * detalle: cliente completo, `total` en plata, `cantidadItems` y un `resumen`
+ * de hasta `MAX_ITEMS_RESUMEN` líneas — pero NO las líneas completas. El
+ * tablero de órdenes necesita el monto y un vistazo de qué se pidió sin abrir
+ * cada orden; `precioUnitario` renglón por renglón no tiene por qué viajar a
+ * una grilla, y nada en el schema ni en `crear()` limita cuántos items puede
+ * tener una orden.
+ *
+ * ⚠️ El tope del resumen vive en el MAPPER, nunca como un `take` en el
+ * include: con un `take`, el `total` sumaría solo las líneas traídas y
+ * publicaría un monto menor que el real, sin error. El detalle línea por línea
+ * vive en `obtenerPorId()` — split estándar lista/detalle.
  *
  * Paginación: `parsearPaginacion` de `lib/paginacion.js`, el mismo parser que
  * usan los listados de logs del admin — page/pageSize floored/clamped con
@@ -314,7 +325,7 @@ export async function listar(req, res, next) {
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: { cliente: true, _count: { select: { items: true } } },
+        include: LISTADO_ORDEN_INCLUDE,
       }),
     ]);
 
@@ -323,7 +334,7 @@ export async function listar(req, res, next) {
     // test — la fila cruda de Prisma salía sin etiqueta y el panel caía al
     // respaldo con la clave cruda. `esAdmin: true` porque la ruta está detrás
     // de `requireAuth`.
-    res.json({ data: ordenes.map((o) => mapOrden(o, { esAdmin: true })), page, pageSize, total });
+    res.json({ data: ordenes.map(mapOrdenListado), page, pageSize, total });
   } catch (err) {
     next(err);
   }
@@ -493,7 +504,7 @@ export async function obtenerPorId(req, res, next) {
 
     const orden = await prisma.orden.findUnique({
       where: { id },
-      include: { cliente: true, items: true },
+      include: DETALLE_ORDEN_INCLUDE,
     });
     if (!orden) throw httpError(404, "Orden no encontrada.");
 
@@ -717,7 +728,7 @@ export async function actualizarEstado(req, res, next) {
       return tx.orden.update({
         where: { id },
         data: { estado },
-        include: { cliente: true, items: true },
+        include: DETALLE_ORDEN_INCLUDE,
       });
     });
 
