@@ -12,6 +12,9 @@ const findManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
+    // Sin promociones vigentes, que es el caso normal y el que deja el precio
+    // igual al de lista. Ver `lib/precioEfectivo.js`.
+    promocionItem: { findMany: async () => [] },
     product: {
       findUnique: (...args) => findUniqueMock(...args),
       update: (...args) => updateMock(...args),

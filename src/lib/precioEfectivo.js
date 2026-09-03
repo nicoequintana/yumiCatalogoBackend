@@ -50,7 +50,13 @@ export function esPorcentajeValido(valor) {
 function aDecimal(valor) {
   if (valor === null || valor === undefined || valor === "") return null;
   try {
-    const decimal = new Decimal(valor);
+    // Los objetos se pasan por `toString()` antes de construir el `Decimal`:
+    // decimal.js acepta number, string y Decimal, pero no un objeto
+    // cualquiera. Prisma devuelve su propio wrapper de Decimal, cuyo
+    // `toString()` da el string numérico exacto — sin este paso, un precio
+    // leído de la base con un cliente de otra versión podría no construirse.
+    const crudo = typeof valor === "object" ? valor.toString() : valor;
+    const decimal = new Decimal(crudo);
     return decimal.isFinite() ? decimal : null;
   } catch {
     return null;

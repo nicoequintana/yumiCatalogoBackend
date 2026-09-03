@@ -238,3 +238,86 @@ describe("mapProducto — URL del video", () => {
     expect(url).not.toContain("/api/products/");
   });
 });
+
+/**
+ * Guard del precio efectivo en la respuesta.
+ *
+ * Es la regla 1 del proyecto aplicada al dato que más importa: el descuento lo
+ * resuelve el BACKEND y viaja resuelto. Card, ficha, carrusel, carrito y
+ * checkout consumen estos mismos mappers, así que un helper de precios en el
+ * frontend sería el tercer espejo manual del proyecto — y el que más plata
+ * mueve.
+ */
+describe("precio efectivo en los mappers", () => {
+  const descuento = { porcentaje: 15, promocionId: 3, promocionNombre: "Promo Hogar" };
+
+  it("sin descuento, la respuesta es EXACTAMENTE la de antes", () => {
+    // El contrato de "si no hay promoción activa, YIMA se comporta como antes".
+    const mapeado = mapProductoListado(filaDeProducto());
+
+    expect(mapeado.precio).toBe("45000");
+    expect(mapeado.precioEfectivo).toBeNull();
+    expect(mapeado.descuento).toBeNull();
+  });
+
+  it("con descuento emite el precio efectivo y DEJA INTACTO el de lista", () => {
+    // `precio` sigue siendo el publicado. El efectivo es un campo NUEVO: pisar
+    // `precio` haría que el tachado no tuviera de dónde salir, y que el panel
+    // viera un precio que nadie publicó.
+    const mapeado = mapProductoListado(filaDeProducto(), { descuento });
+
+    expect(mapeado.precio).toBe("45000");
+    expect(mapeado.precioEfectivo).toBe("38250");
+    expect(mapeado.descuento).toEqual({ porcentaje: 15 });
+  });
+
+  it("el detalle emite lo mismo que el listado", () => {
+    const mapeado = mapProducto(filaDeProducto(), { descuento });
+
+    expect(mapeado.precio).toBe("45000");
+    expect(mapeado.precioEfectivo).toBe("38250");
+    expect(mapeado.descuento).toEqual({ porcentaje: 15 });
+  });
+
+  it("al público NO le dice de qué promoción viene", () => {
+    // El nombre de una promoción es interno ("Promo Hogar", "Liquidación
+    // invierno"). Lo que el cliente necesita saber es el porcentaje.
+    const mapeado = mapProductoListado(filaDeProducto(), { descuento });
+
+    expect(JSON.stringify(mapeado)).not.toContain("Promo Hogar");
+    expect(mapeado.descuento.promocionId).toBeUndefined();
+  });
+
+  it("al ADMIN sí le dice de qué promoción viene", () => {
+    // Sin esto, el panel ve un precio distinto del publicado y no tiene forma
+    // de saber quién lo está bajando.
+    const mapeado = mapProductoListado(filaDeProducto(), { descuento, esAdmin: true });
+
+    expect(mapeado.descuento).toEqual({
+      porcentaje: 15,
+      promocionId: 3,
+      promocionNombre: "Promo Hogar",
+    });
+  });
+
+  it("un porcentaje inválido NO produce un precio efectivo", () => {
+    // `precioConDescuento` devuelve null ante un porcentaje fuera de rango. El
+    // mapper no puede convertir ese null en el precio de lista disfrazado de
+    // oferta: mejor sin descuento que con uno que no descuenta.
+    const mapeado = mapProductoListado(filaDeProducto(), {
+      descuento: { porcentaje: 90, promocionId: 1, promocionNombre: "Rota" },
+    });
+
+    expect(mapeado.precioEfectivo).toBeNull();
+    expect(mapeado.descuento).toBeNull();
+  });
+
+  it("el efectivo no tiene decimales aunque el cálculo dé fracción", () => {
+    // 999 × 90 / 100 = 899,1. Ningún monto del sistema tiene centavos.
+    const mapeado = mapProductoListado(filaDeProducto({ precio: { toString: () => "999" } }), {
+      descuento: { porcentaje: 10, promocionId: 1, promocionNombre: "X" },
+    });
+
+    expect(mapeado.precioEfectivo).toBe("899");
+  });
+});

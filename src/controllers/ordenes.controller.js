@@ -2,6 +2,7 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { subtotalDeItem } from "../lib/dinero.js";
+import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitados.js";
 import { MAX_ORDENES_HISTORICO } from "./admin.controller.js";
 import { logAudit } from "../lib/logAudit.js";
@@ -101,6 +102,11 @@ async function validarYSnapshotearProductos(items) {
   const productos = await prisma.product.findMany({ where: { id: { in: ids } } });
   const porId = new Map(productos.map((p) => [p.id, p]));
 
+  // Los descuentos vigentes AHORA, en UNA consulta para toda la orden. Se
+  // resuelven acá y no en el frontend por el mismo motivo por el que el precio
+  // tampoco viene del cliente: es lo que se va a cobrar.
+  const descuentos = await resolverDescuentos(prisma, ids);
+
   const itemsConSnapshot = [];
   for (const item of items) {
     const productId = Number(item.productId);
@@ -117,10 +123,30 @@ async function validarYSnapshotearProductos(items) {
       throw httpError(400, `El producto "${producto.nombre}" está agotado.`);
     }
 
+    // El precio que se cobra: el efectivo si hay promoción vigente, el de lista
+    // si no. `precioConDescuento` devuelve `null` ante un porcentaje inválido,
+    // y ese null cae al de lista — nunca se cobra un precio que el sistema no
+    // pudo calcular.
+    const descuento = descuentos.get(productId) ?? null;
+    const efectivo = descuento ? precioConDescuento(producto.precio, descuento.porcentaje) : null;
+    const huboDescuento = efectivo !== null;
+
     itemsConSnapshot.push({
       productId,
       nombreProducto: producto.nombre,
-      precioUnitario: producto.precio.toString(),
+      // Lo que el cliente PAGÓ. Guardar acá el de lista facturaría de más una
+      // venta que se cobró de menos, y la orden se crearía igual: es el error
+      // más caro que esta feature puede cometer y no falla en ningún lado.
+      precioUnitario: (huboDescuento ? efectivo : producto.precio).toString(),
+      // Lo que valía SIN promoción, y el porcentaje. Existen para poder
+      // contestar después "¿cuánta plata regalé en la campaña?": el precio de
+      // lista puede cambiar en cualquier momento, así que si no queda acá no
+      // queda en ningún lado.
+      //
+      // `null` significa "esta línea no tuvo descuento", NUNCA "descuento
+      // cero" — que además no puede existir, porque el mínimo es 5 %.
+      precioListaUnitario: huboDescuento ? producto.precio.toString() : null,
+      descuentoPorcentaje: huboDescuento ? descuento.porcentaje : null,
       // Foto del COSTO, por el mismo motivo que la del precio: sin ella, el
       // margen de esta venta se calcularía más adelante contra el
       // `Product.costo` vigente en ESE momento, y cada aumento de un proveedor

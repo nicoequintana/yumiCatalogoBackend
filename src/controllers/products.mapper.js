@@ -8,6 +8,7 @@
  */
 
 import { calcularPrecio, estadoDePrecio } from "../lib/precios.js";
+import { precioConDescuento } from "../lib/precioEfectivo.js";
 
 export const PRODUCT_INCLUDE = {
   caracteristicas: true,
@@ -113,6 +114,41 @@ export function urlDeFoto(foto) {
  * `precioCalculado` es `null` —nunca "0"— cuando falta costo o coeficiente. Un
  * 0 se escribiría como precio del producto.
  */
+/**
+ * El precio efectivo y su descuento, en la forma que sale en la respuesta.
+ *
+ * DOS CAMPOS NUEVOS, y `precio` NO SE TOCA. El de lista sigue siendo el
+ * publicado: pisarlo dejaría al tachado sin nada de dónde salir, y el panel
+ * vería un precio que nadie decidió publicar.
+ *
+ * `null` en los dos cuando no hay promoción — el caso normal, y el que hace que
+ * el sitio se comporte exactamente como antes de esta feature.
+ *
+ * Al PÚBLICO solo le viaja el porcentaje. El nombre de una promoción es interno
+ * ("Liquidación invierno"), y lo que el cliente necesita saber es cuánto le
+ * descuentan. El admin sí recibe de qué promoción viene: sin eso, el panel ve
+ * un precio distinto del publicado y no tiene cómo saber quién lo está bajando.
+ */
+function camposDeDescuento(producto, descuento, esAdmin) {
+  const efectivo = descuento ? precioConDescuento(producto.precio, descuento.porcentaje) : null;
+
+  // `precioConDescuento` devuelve null ante un porcentaje fuera de rango. Ese
+  // null NO puede degradar al precio de lista disfrazado de oferta: mejor sin
+  // descuento que con uno que no descuenta.
+  if (efectivo === null) return { precioEfectivo: null, descuento: null };
+
+  return {
+    precioEfectivo: efectivo.toString(),
+    descuento: esAdmin
+      ? {
+          porcentaje: descuento.porcentaje,
+          promocionId: descuento.promocionId,
+          promocionNombre: descuento.promocionNombre,
+        }
+      : { porcentaje: descuento.porcentaje },
+  };
+}
+
 function camposDePrecio(producto, esAdmin) {
   if (!esAdmin) return null;
 
@@ -141,9 +177,10 @@ function camposDePrecio(producto, esAdmin) {
  * pasarlo, el modo de falla es "faltan datos en el panel", nunca "el costo se
  * publicó".
  */
-export function mapProductoListado(producto, { esAdmin = false } = {}) {
+export function mapProductoListado(producto, { esAdmin = false, descuento = null } = {}) {
   return {
     ...camposDePrecio(producto, esAdmin),
+    ...camposDeDescuento(producto, descuento, esAdmin),
     id: producto.id,
     sku: producto.sku,
     nombre: producto.nombre,
@@ -172,7 +209,7 @@ function agruparListasPorTipo(listas) {
   return porTipo;
 }
 
-export function mapProducto(producto, { esAdmin = false } = {}) {
+export function mapProducto(producto, { esAdmin = false, descuento = null } = {}) {
   // Una sola pasada por `listas` para las cuatro claves. Antes se llamaba a
   // `agruparListasPorTipo` una vez por clave y se descartaban las otras tres
   // agrupaciones, o sea cuatro recorridos completos por producto. Hoy este
@@ -185,6 +222,7 @@ export function mapProducto(producto, { esAdmin = false } = {}) {
     // Costo y coeficiente solo para admin — ver `camposDePrecio`. Este mapper
     // también sirve al detalle público de la ficha.
     ...camposDePrecio(producto, esAdmin),
+    ...camposDeDescuento(producto, descuento, esAdmin),
     id: producto.id,
     sku: producto.sku,
     nombre: producto.nombre,

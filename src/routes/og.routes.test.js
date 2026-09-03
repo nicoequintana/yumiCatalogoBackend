@@ -5,7 +5,10 @@ import express from "express";
 const findUniqueMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
-  prisma: { product: { findUnique: (...args) => findUniqueMock(...args) } },
+  prisma: {     // Sin promociones vigentes, que es el caso normal y el que deja el precio
+    // igual al de lista. Ver `lib/precioEfectivo.js`.
+    promocionItem: { findMany: async () => [] },
+product: { findUnique: (...args) => findUniqueMock(...args) } },
 }));
 
 const { default: ogRouter } = await import("./og.routes.js");

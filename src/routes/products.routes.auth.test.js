@@ -7,6 +7,9 @@ process.env.JWT_SECRET = "test-secret";
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
+    // Sin promociones vigentes, que es el caso normal y el que deja el precio
+    // igual al de lista. Ver `lib/precioEfectivo.js`.
+    promocionItem: { findMany: async () => [] },
     product: {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(0),

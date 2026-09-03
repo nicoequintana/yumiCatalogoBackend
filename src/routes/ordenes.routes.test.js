@@ -40,6 +40,7 @@ const ordenUpdateMock = vi.fn();
 const ordenUpdateManyMock = vi.fn();
 const ordenCountMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
+const promocionItemFindManyMock = vi.fn();
 const auditCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
@@ -66,6 +67,9 @@ vi.mock("../lib/prisma.js", () => ({
     },
     eventoTrafico: {
       create: (...args) => eventoTraficoCreateMock(...args),
+    },
+    promocionItem: {
+      findMany: (...args) => promocionItemFindManyMock(...args),
     },
     $transaction: async (cb) =>
       cb({
@@ -144,6 +148,9 @@ beforeEach(() => {
   ordenCountMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   eventoTraficoCreateMock.mockResolvedValue({});
+  promocionItemFindManyMock.mockReset();
+  // Por defecto NO hay ninguna promoción vigente, que es el caso normal.
+  promocionItemFindManyMock.mockResolvedValue([]);
   notificarOrdenCreadaMock.mockReset();
   notificarOrdenCreadaMock.mockResolvedValue(undefined);
   notificarCambioEstadoMock.mockReset();
@@ -694,5 +701,112 @@ describe("estadoEtiqueta en TODOS los caminos que devuelven una orden", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.estadoEtiqueta).toBe("En preparación");
+  });
+});
+
+/**
+ * Guard del snapshot con promoción.
+ *
+ * `ItemOrden.precioUnitario` es lo que el cliente PAGÓ, y con una promoción
+ * activa eso es el precio efectivo. Guardar el de lista facturaría de más una
+ * venta que se cobró de menos — el error más caro que esta feature puede
+ * cometer, y uno que no falla en ningún lado: la orden se crea igual.
+ */
+describe("POST /api/ordenes — snapshot con promoción activa", () => {
+  const PRODUCTO = {
+    id: 1,
+    nombre: "Termo mate",
+    precio: { toString: () => "20000" },
+    costo: { toString: () => "8000" },
+    visibleEnCatalogo: true,
+    stock: 5,
+  };
+
+  function conPromo(porcentaje) {
+    promocionItemFindManyMock.mockResolvedValue([
+      { productId: 1, porcentaje, promocion: { id: 3, nombre: "Promo Hogar" } },
+    ]);
+  }
+
+  function pedir() {
+    return request(buildApp())
+      .post("/api/ordenes")
+      .send({
+        dni: "30111222",
+        nombre: "Ana",
+        telefono: "1155550000",
+        email: "ana@test.com",
+        items: [{ productId: 1, cantidad: 2 }],
+      });
+  }
+
+  beforeEach(() => {
+    productFindManyMock.mockResolvedValue([PRODUCTO]);
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue({ id: 9, dni: "30111222", nombre: "Ana" });
+    ordenCreateMock.mockResolvedValue({ id: 100, estado: "PENDIENTE", items: [], cliente: {} });
+    productFindUniqueMock.mockResolvedValue(PRODUCTO);
+    productUpdateMock.mockResolvedValue(PRODUCTO);
+  });
+
+  it("SIN promoción guarda el precio de lista y nada más", async () => {
+    // El contrato de "si no hay promoción, todo se comporta como antes".
+    await pedir();
+
+    const [item] = ordenCreateMock.mock.calls[0][0].data.items.create;
+    expect(item.precioUnitario).toBe("20000");
+    expect(item.precioListaUnitario).toBeNull();
+    expect(item.descuentoPorcentaje).toBeNull();
+  });
+
+  it("CON promoción guarda lo que el cliente PAGÓ", async () => {
+    conPromo(15);
+
+    await pedir();
+
+    const [item] = ordenCreateMock.mock.calls[0][0].data.items.create;
+    expect(item.precioUnitario).toBe("17000");
+  });
+
+  it("guarda además el precio de lista y el porcentaje", async () => {
+    // Sin estas dos columnas, "¿cuánta plata regalé en la campaña?" no se puede
+    // contestar nunca: el precio de lista puede cambiar en cualquier momento.
+    conPromo(15);
+
+    await pedir();
+
+    const [item] = ordenCreateMock.mock.calls[0][0].data.items.create;
+    expect(item.precioListaUnitario).toBe("20000");
+    expect(item.descuentoPorcentaje).toBe(15);
+  });
+
+  it("el COSTO no lo toca el descuento", async () => {
+    // El costo es lo que el negocio pagó por la mercadería: un descuento come
+    // margen, no baja el costo. Tocarlo escondería exactamente el efecto que la
+    // promoción tiene sobre la ganancia.
+    conPromo(15);
+
+    await pedir();
+
+    const [item] = ordenCreateMock.mock.calls[0][0].data.items.create;
+    expect(item.costoUnitario).toBe("8000");
+  });
+
+  it("una promoción que YA NO está vigente no se aplica", async () => {
+    // La consulta filtra por vigencia. Si no devuelve nada, la orden se cobra
+    // al precio de lista.
+    promocionItemFindManyMock.mockResolvedValue([]);
+
+    await pedir();
+
+    expect(ordenCreateMock.mock.calls[0][0].data.items.create[0].precioUnitario).toBe("20000");
+  });
+
+  it("el descuento se resuelve en UNA consulta para toda la orden", async () => {
+    conPromo(15);
+
+    await pedir();
+
+    expect(promocionItemFindManyMock).toHaveBeenCalledTimes(1);
   });
 });

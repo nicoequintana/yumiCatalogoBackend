@@ -17,6 +17,9 @@ const countMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
+    // Sin promociones vigentes, que es el caso normal y el que deja el precio
+    // igual al de lista. Ver `lib/precioEfectivo.js`.
+    promocionItem: { findMany: async () => [] },
     product: {
       findMany: (...args) => findManyMock(...args),
       findUnique: (...args) => findUniqueMock(...args),
@@ -110,12 +113,17 @@ describe("GET /api/products - payload liviano de listado", () => {
         "cantidadFotos",
         "categoria",
         "compartidos",
+        // Los dos del precio efectivo. Viajan SIEMPRE, en `null` cuando no hay
+        // promoción: si la clave apareciera sólo con descuento, la pantalla
+        // tendría que distinguir "sin promo" de "no vino en esta respuesta".
+        "descuento",
         "destacado",
         "etiqueta",
         "fotos",
         "id",
         "nombre",
         "precio",
+        "precioEfectivo",
         "sku",
         "stock",
         "visibleEnCatalogo",

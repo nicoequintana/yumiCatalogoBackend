@@ -24,6 +24,7 @@ import {
   mapProductoListado,
   mapProductoParaN8n,
 } from "./products.mapper.js";
+import { resolverDescuentos } from "../lib/precioEfectivo.js";
 import { enviarPedidoDeImagenes, estaConfigurado as n8nEstaConfigurado } from "../services/n8n.service.js";
 import {
   parseCaracteristicas,
@@ -332,7 +333,11 @@ export async function listar(req, res, next) {
     // es lo que se devuelve.
     if (ids !== null) {
       const productos = await prisma.product.findMany({ where, select: LIST_SELECT, orderBy });
-      const data = productos.map((producto) => mapProductoListado(producto, { esAdmin }));
+      // UNA consulta de descuentos para toda la tanda, no una por producto.
+      const descuentos = await resolverDescuentos(prisma, productos.map((p) => p.id));
+      const data = productos.map((producto) =>
+        mapProductoListado(producto, { esAdmin, descuento: descuentos.get(producto.id) ?? null }),
+      );
       res.json({ data, page: 1, pageSize: MAX_IDS_LISTADO, total: data.length });
       return;
     }
@@ -350,8 +355,15 @@ export async function listar(req, res, next) {
       }),
     ]);
 
+    // Los descuentos se resuelven DESPUÉS de saber qué productos salieron, en
+    // UNA consulta para los doce de la página. Sin promociones vigentes —el
+    // caso normal— `resolverDescuentos` ni siquiera toca la base.
+    const descuentos = await resolverDescuentos(prisma, productos.map((p) => p.id));
+
     res.json({
-      data: productos.map((producto) => mapProductoListado(producto, { esAdmin })),
+      data: productos.map((producto) =>
+        mapProductoListado(producto, { esAdmin, descuento: descuentos.get(producto.id) ?? null }),
+      ),
       page,
       pageSize,
       total,
@@ -474,10 +486,17 @@ async function obtenerRelacionados(producto, { esAdmin }) {
     take: 4,
   });
 
+  // Los relacionados se pintan con `ProductCard`, la MISMA card que la grilla:
+  // sin esto mostrarían el precio de lista de un producto que en `/coleccion`
+  // aparece con descuento. Una consulta para los cuatro.
+  const descuentos = await resolverDescuentos(prisma, relacionados.map((p) => p.id));
+
   // Sin `esAdmin`: los relacionados alimentan `ProductCard` en la ficha
   // pública. Un admin abriendo esa ficha tampoco necesita el costo de los
   // productos vecinos, y no emitirlo mantiene la superficie chica.
-  return relacionados.map((producto) => mapProductoListado(producto));
+  return relacionados.map((producto) =>
+    mapProductoListado(producto, { descuento: descuentos.get(producto.id) ?? null }),
+  );
 }
 
 /**
@@ -646,11 +665,19 @@ export async function obtenerPorId(req, res, next) {
       resolverImagenOg({ id: producto.id, fotos: [foto] }, { frontendUrl }),
     );
 
+    // Una sola consulta para la ficha. `mapProducto` calcula el precio efectivo
+    // a partir de esto, y el JSON-LD tiene que emitir EL MISMO: Google compara
+    // su `offers.price` contra el precio visible de la página y quita el rich
+    // result si difieren.
+    const descuentos = await resolverDescuentos(prisma, [producto.id]);
+    const descuento = descuentos.get(producto.id) ?? null;
+    const mapeado = mapProducto(producto, { esAdmin, descuento });
+
     res.json({
-      ...mapProducto(producto, { esAdmin }),
+      ...mapeado,
       relacionados,
       jsonLd: [
-        jsonLdProducto(producto, { frontendUrl, imagenes }),
+        jsonLdProducto(producto, { frontendUrl, imagenes, precioEfectivo: mapeado.precioEfectivo }),
         jsonLdBreadcrumb(producto, { frontendUrl }),
       ],
     });
