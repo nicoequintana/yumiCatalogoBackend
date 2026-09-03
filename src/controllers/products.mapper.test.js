@@ -195,3 +195,46 @@ describe("costo y coeficiente en los mappers", () => {
     expect(salida.estadoPrecio).toBe("SIN_COSTO");
   });
 });
+
+describe("mapProducto — URL del video", () => {
+  /**
+   * Espeja la regla que `urlDeFoto` ya aplica a las fotos: la URL guardada es la
+   * que se emite, sin importar de qué storage venga.
+   *
+   * Hasta el 03/09/2026 el video tenía una rama que devolvía
+   * `/api/products/{id}/video` cuando faltaba `cloudinaryPublicId`. Esa ruta era
+   * el proxy de la media legada de Drive y se ELIMINÓ el 02/09/2026 junto con el
+   * retiro de Drive, así que la rama entregaba una URL que responde 404. El
+   * fallback de fotos sí se corrigió en ese retiro; el de video quedó afuera.
+   */
+  it("un video de Cloudinary emite su URL guardada", () => {
+    const conCloudinary = filaDeProducto({
+      video: {
+        id: 3,
+        url: "https://res.cloudinary.com/yima/video/upload/v1/productos/7-termo/abc.mp4",
+        cloudinaryPublicId: "productos/7-termo/abc",
+      },
+    });
+
+    expect(mapProducto(conCloudinary).video.url).toBe(
+      "https://res.cloudinary.com/yima/video/upload/v1/productos/7-termo/abc.mp4",
+    );
+  });
+
+  it("un video legado sin cloudinaryPublicId emite su URL guardada, NUNCA una ruta de la API", () => {
+    const legado = filaDeProducto({
+      video: {
+        id: 3,
+        url: "https://drive.google.com/uc?id=1AbC",
+        cloudinaryPublicId: null,
+        driveFileId: "1AbC",
+      },
+    });
+
+    const { url } = mapProducto(legado).video;
+
+    expect(url).toBe("https://drive.google.com/uc?id=1AbC");
+    // La ruta murió con el retiro de Drive: emitirla es servir un 404.
+    expect(url).not.toContain("/api/products/");
+  });
+});

@@ -223,9 +223,14 @@ export function mapProducto(producto, { esAdmin = false } = {}) {
     video: producto.video
       ? {
           id: producto.video.id,
-          url: producto.video.cloudinaryPublicId
-            ? producto.video.url
-            : `/api/products/${producto.id}/video`,
+          // Misma regla que `urlDeFoto`: se emite la URL guardada, venga del
+          // storage que venga. Acá había una rama que devolvía
+          // `/api/products/{id}/video` cuando faltaba `cloudinaryPublicId` —el
+          // proxy de la media legada de Drive—, pero esa ruta se ELIMINÓ el
+          // 02/09/2026 junto con el retiro de Drive: entregaba un 404. El
+          // fallback de fotos se corrigió en ese mismo retiro; este quedó
+          // afuera hasta el 03/09/2026.
+          url: producto.video.url,
         }
       : null,
     createdAt: producto.createdAt,
