@@ -344,6 +344,43 @@ describe("GET /api/campanias/activas — el modal", () => {
     });
   });
 
+  it("el modal lleva el Doodle de SU campaña, para que el cartel se identifique", async () => {
+    // El cartel es la cara de la campaña: sin su arte arriba, un modal
+    // estacional es un texto suelto sobre el catálogo.
+    campaniaMock.findMany.mockResolvedValue([
+      conModal({ doodleUrl: "https://res.cloudinary.com/demo/primavera.png" }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal.doodleUrl).toBe("https://res.cloudinary.com/demo/primavera.png");
+  });
+
+  it("el Doodle del modal sale de la campaña del MODAL, no de la que manda el logo", async () => {
+    // Los dos recursos se resuelven APARTE y pueden caer en campañas distintas.
+    // Tomar el del header le pondría al cartel el arte de otra campaña: quien
+    // mira vería el logo de una y el título de la otra, sin ningún error.
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ id: 1, prioridad: 99, doodleUrl: "https://res.cloudinary.com/demo/logo.png" }),
+      conModal({ id: 2, prioridad: 1, doodleUrl: null }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.doodle.url).toBe("https://res.cloudinary.com/demo/logo.png");
+    expect(res.body.modal.doodleUrl).toBeNull();
+  });
+
+  it("un modal sin Doodle emite la clave en null, no ausente", async () => {
+    // `undefined` desaparece al serializar a JSON y la pantalla no puede
+    // distinguir "esta campaña no tiene arte" de "me olvidé de mandarlo".
+    campaniaMock.findMany.mockResolvedValue([conModal({ doodleUrl: null })]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal).toHaveProperty("doodleUrl", null);
+  });
+
   it("sin fecha objetivo el contador es null, no cero", async () => {
     // Cero significaría "es hoy" y sería mentira. El modal sin contador es un
     // caso legítimo: no todo cartel cuenta días.

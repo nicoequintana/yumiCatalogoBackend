@@ -352,6 +352,12 @@ function aModalPublico(campania, ahora) {
 
   return {
     campaniaId: campania.id,
+    // El Doodle de ESTA campaña, no el del header. Los dos recursos se
+    // resuelven aparte y pueden caer en campañas distintas: tomar el del logo
+    // le pondría al cartel el arte de otra, sin que nada falle. `null` cuando
+    // esta campaña no tiene arte — es un caso legítimo, y la clave viaja igual
+    // para que la pantalla no tenga que distinguirlo de un olvido.
+    doodleUrl: campania.doodleUrl ?? null,
     titulo: campania.modalTitulo,
     texto: campania.modalTexto,
     ctaTexto: campania.modalCtaTexto,
