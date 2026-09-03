@@ -6,7 +6,7 @@ import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
-import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
+import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import {
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
@@ -23,6 +23,36 @@ import {
  * traduce a un 400 genérico sin decir qué campo ni cuál es el límite.
  */
 export const LARGO_MAX_NOMBRE = 120;
+
+/** Espejan `@db.NVarChar(...)` de las columnas del modal, mismo criterio. */
+export const LARGO_MAX_MODAL_TITULO = 120;
+export const LARGO_MAX_MODAL_CTA = 60;
+export const LARGO_MAX_MODAL_DESTINO = 200;
+
+/**
+ * Las rutas del sitio a las que un CTA puede llevar.
+ *
+ * **El CTA navega DENTRO del sitio, punto.** Un modal que se le muestra a todo
+ * el mundo es la superficie ideal para mandar tráfico a cualquier lado, y el
+ * panel lo edita cualquiera con sesión: aceptar una URL absoluta convertiría
+ * una campaña en un redirector abierto.
+ *
+ * `/catalogo/admin/*` queda AFUERA a propósito: el modal es del catálogo
+ * público, y mandar a un visitante al login del panel no es un destino, es un
+ * accidente.
+ *
+ * Espeja las rutas de `frontend/src/App.jsx` — sincronización manual, con el
+ * modo de falla del lado seguro: una ruta nueva que falte acá se rechaza al
+ * cargarla, con mensaje, en vez de publicarse rota.
+ */
+const DESTINOS_VALIDOS = [
+  /^\/$/,
+  /^\/coleccion(\?[^\s]*)?$/,
+  /^\/coleccion\/categoria\/[a-z0-9-]+(\?[^\s]*)?$/,
+  /^\/producto\/[a-z0-9-]+$/i,
+  /^\/favoritos$/,
+  /^\/carrito$/,
+];
 
 /** Formato de fecha que acepta la API: día argentino, sin hora. */
 const SOLO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -67,6 +97,14 @@ function mapCampania(campania, ahora) {
     doodleUrl: campania.doodleUrl,
     doodleEnCatalogo: campania.doodleEnCatalogo,
     doodleEnAdmin: campania.doodleEnAdmin,
+    modalActivo: campania.modalActivo,
+    modalTitulo: campania.modalTitulo,
+    modalTexto: campania.modalTexto,
+    modalCtaTexto: campania.modalCtaTexto,
+    modalCtaDestino: campania.modalCtaDestino,
+    modalFechaObjetivo: campania.modalFechaObjetivo
+      ? claveDiaArgentino(campania.modalFechaObjetivo)
+      : null,
   };
 }
 
@@ -165,6 +203,71 @@ function parsearFlagDoodle(body, campo, porDefecto) {
   return body[campo];
 }
 
+/** Texto opcional acotado: vacío degrada a `null`, largo de más es 400. */
+function parsearTextoOpcional(valor, campo, largoMax) {
+  if (valor === undefined || valor === null) return null;
+  if (typeof valor !== "string") throw httpError(400, `\`${campo}\` debe ser texto.`);
+  const texto = valor.trim();
+  if (texto.length > largoMax) {
+    throw httpError(400, `\`${campo}\` no puede superar los ${largoMax} caracteres.`);
+  }
+  return texto || null;
+}
+
+/**
+ * Todo el bloque del modal, validado como una unidad.
+ *
+ * Se valida junto y no campo por campo porque las reglas son CRUZADAS: un modal
+ * prendido exige título, y un CTA con texto exige destino. Un botón que no
+ * lleva a ningún lado, o un cartel sin título, son cosas que el panel puede
+ * guardar sin querer y que después ve todo el mundo.
+ *
+ * Con el modal APAGADO no se exige nada: se pueden dejar los textos a medio
+ * escribir y prenderlo después.
+ */
+function parsearModal(body, actual = null) {
+  const activo = parsearFlagDoodle(body, "modalActivo", actual?.modalActivo ?? false);
+
+  const titulo = parsearTextoOpcional(body?.modalTitulo, "modalTitulo", LARGO_MAX_MODAL_TITULO);
+  const texto = parsearTextoOpcional(body?.modalTexto, "modalTexto", LARGO_MAX_TEXTO);
+  const ctaTexto = parsearTextoOpcional(body?.modalCtaTexto, "modalCtaTexto", LARGO_MAX_MODAL_CTA);
+  const ctaDestino = parsearTextoOpcional(
+    body?.modalCtaDestino,
+    "modalCtaDestino",
+    LARGO_MAX_MODAL_DESTINO,
+  );
+
+  if (ctaDestino !== null && !DESTINOS_VALIDOS.some((patron) => patron.test(ctaDestino))) {
+    throw httpError(
+      400,
+      "El destino del CTA tiene que ser una ruta del sitio (por ejemplo /coleccion o /coleccion/categoria/hogar).",
+    );
+  }
+
+  if (activo && !titulo) {
+    throw httpError(400, "Un modal activo necesita un título.");
+  }
+  if (ctaTexto !== null && ctaDestino === null) {
+    throw httpError(400, "El CTA tiene texto pero no tiene destino.");
+  }
+
+  let fechaObjetivo = null;
+  if (body?.modalFechaObjetivo !== undefined && body.modalFechaObjetivo !== null) {
+    fechaObjetivo = parsearFecha(body.modalFechaObjetivo, "objetivo del contador");
+  } else if (body?.modalFechaObjetivo === undefined) {
+    fechaObjetivo = actual?.modalFechaObjetivo ?? null;
+  }
+
+  return {
+    modalActivo: activo,
+    modalTitulo: titulo,
+    modalTexto: texto,
+    modalCtaTexto: ctaTexto,
+    modalCtaDestino: ctaDestino,
+    modalFechaObjetivo: fechaObjetivo,
+  };
+}
+
 /**
  * `GET /api/campanias/opciones` — los diccionarios que consume el panel.
  *
@@ -224,6 +327,39 @@ function aDoodlePublico(campania) {
     : null;
 }
 
+/**
+ * El modal en la forma que consume el catálogo.
+ *
+ * **`diasFaltantes` viaja YA RESUELTO.** El cálculo lo hace acá y no el
+ * frontend por la regla 1 de la metodología, y además porque este backend es el
+ * único que tiene la definición de "día" del sistema: contarlo del lado del
+ * visitante haría que alguien con el reloj mal puesto viera otro número.
+ *
+ * `null` cuando la campaña no configuró fecha objetivo — un modal sin contador
+ * es un caso legítimo, no todo cartel cuenta días. Y `null` es distinto de cero,
+ * que significa "es hoy".
+ *
+ * El `texto` viaja CRUDO, con su marcador `{dias}` sin reemplazar: la
+ * sustitución es presentación y la hace la pantalla, que es la que decide si el
+ * número va resaltado. Lo que no puede salir del backend es el CÁLCULO.
+ */
+function aModalPublico(campania, ahora) {
+  if (!campania) return null;
+
+  const claveObjetivo = campania.modalFechaObjetivo
+    ? claveDiaArgentino(campania.modalFechaObjetivo)
+    : null;
+
+  return {
+    campaniaId: campania.id,
+    titulo: campania.modalTitulo,
+    texto: campania.modalTexto,
+    ctaTexto: campania.modalCtaTexto,
+    ctaDestino: campania.modalCtaDestino,
+    diasFaltantes: claveObjetivo === null ? null : diasHastaClave(claveObjetivo, ahora),
+  };
+}
+
 export async function contextoActivo(req, res, next) {
   try {
     const ahora = new Date();
@@ -248,6 +384,13 @@ export async function contextoActivo(req, res, next) {
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),
       doodle: aDoodlePublico(elegirPorPrioridad(conDoodle.filter((c) => c.doodleEnCatalogo))),
+      // El modal es un recurso exclusivo igual que el logo —no se apilan dos
+      // carteles encima del catálogo— pero se resuelve APARTE: la campaña que
+      // manda el logo no tiene por qué ser la que manda el cartel.
+      modal: aModalPublico(
+        elegirPorPrioridad(activas.filter((c) => c.modalActivo && c.modalTitulo)),
+        ahora,
+      ),
     };
 
     if (esRequestDeAdmin(req)) {
@@ -311,6 +454,7 @@ export async function crear(req, res, next) {
       prioridad: parsearPrioridad(req.body),
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", true),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", false),
+      ...parsearModal(req.body),
       ...parsearRango(req.body),
     };
 
@@ -344,6 +488,7 @@ export async function actualizar(req, res, next) {
       // Ausente = "no lo toques": cae al valor ACTUAL, no al default del alta.
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", actual.doodleEnCatalogo),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", actual.doodleEnAdmin),
+      ...parsearModal(req.body, actual),
       ...parsearRango(req.body),
     };
 
@@ -432,6 +577,12 @@ export async function duplicar(req, res, next) {
         doodleCloudinaryResourceType: original.doodleCloudinaryResourceType,
         doodleEnCatalogo: original.doodleEnCatalogo,
         doodleEnAdmin: original.doodleEnAdmin,
+        modalActivo: original.modalActivo,
+        modalTitulo: original.modalTitulo,
+        modalTexto: original.modalTexto,
+        modalCtaTexto: original.modalCtaTexto,
+        modalCtaDestino: original.modalCtaDestino,
+        modalFechaObjetivo: original.modalFechaObjetivo,
       },
     });
 

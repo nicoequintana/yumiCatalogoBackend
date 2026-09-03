@@ -96,3 +96,33 @@ export function inicioDelDiaArgentino(clave) {
   // medianoche del 15 en Buenos Aires es el 15 a las 03:00 UTC.
   return new Date(medianoche.getTime() - DESFASE_ARGENTINA_MS);
 }
+
+/** Formato de clave que este módulo acepta: día argentino, sin hora. */
+const SOLO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Cuántos DÍAS ARGENTINOS faltan desde `ahora` hasta el día `clave`.
+ *
+ * Es el motor de los contadores de campaña ("Faltan 18 días para la Primavera").
+ * Cuenta DÍAS, no diferencias de instantes: los dos extremos se llevan a su
+ * medianoche argentina antes de restar. Sin eso, a las 21:00 del 20 —que en UTC
+ * ya es el 21— el contador se adelantaría un día cada noche, justo en la franja
+ * en la que más gente mira el sitio.
+ *
+ * El mismo día da **cero**, que es lo que permite decir "¡Es hoy!" en vez de
+ * "falta 1 día". Una fecha ya pasada da un **negativo**: cero sería mentir, y
+ * taparlo acá le sacaría al llamador la información para decidir qué mostrar.
+ *
+ * @param {string} clave - `"YYYY-MM-DD"`
+ * @param {Date} [ahora]
+ * @returns {number|null} null si la clave no tiene el formato esperado
+ */
+export function diasHastaClave(clave, ahora = new Date()) {
+  if (typeof clave !== "string" || !SOLO_FECHA.test(clave)) return null;
+
+  const objetivo = inicioDelDiaArgentino(clave);
+  if (objetivo === null) return null;
+
+  const hoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+  return Math.round((objetivo.getTime() - hoy.getTime()) / MS_POR_DIA);
+}

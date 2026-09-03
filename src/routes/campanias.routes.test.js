@@ -80,10 +80,29 @@ function fila(extra = {}) {
     doodleCloudinaryResourceType: "image",
     doodleEnCatalogo: true,
     doodleEnAdmin: false,
+    modalActivo: false,
+    modalTitulo: null,
+    modalTexto: null,
+    modalCtaTexto: null,
+    modalCtaDestino: null,
+    modalFechaObjetivo: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     ...extra,
   };
+}
+
+/** Una campaña con el modal prendido y su contador apuntando al 21/09. */
+function conModal(extra = {}) {
+  return fila({
+    modalActivo: true,
+    modalTitulo: "Llega la primavera",
+    modalTexto: "Faltan {dias} días para la Primavera.",
+    modalCtaTexto: "Ver la selección",
+    modalCtaDestino: "/coleccion?etiqueta=primavera",
+    modalFechaObjetivo: inicioDelDiaArgentino("2026-09-21"),
+    ...extra,
+  });
 }
 
 beforeEach(() => {
@@ -280,6 +299,184 @@ describe("GET /api/campanias/activas — el contexto comercial del catálogo pú
     const res = await request(buildApp()).get("/api/campanias/activas");
 
     expect(res.body.doodle.campaniaId).toBe(2);
+  });
+});
+
+describe("GET /api/campanias/activas — el modal", () => {
+  it("emite el modal con el contador YA RESUELTO", async () => {
+    // El cálculo lo hace el BACKEND, que es el único que tiene la definición de
+    // "día" del sistema. Si contara el frontend, el número dependería del reloj
+    // del visitante: alguien con la máquina mal puesta vería otro número.
+    campaniaMock.findMany.mockResolvedValue([conModal()]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal).toMatchObject({
+      titulo: "Llega la primavera",
+      texto: "Faltan {dias} días para la Primavera.",
+      ctaTexto: "Ver la selección",
+      ctaDestino: "/coleccion?etiqueta=primavera",
+      // Estamos parados el 15/09 y el objetivo es el 21/09.
+      diasFaltantes: 6,
+      campaniaId: 1,
+    });
+  });
+
+  it("sin fecha objetivo el contador es null, no cero", async () => {
+    // Cero significaría "es hoy" y sería mentira. El modal sin contador es un
+    // caso legítimo: no todo cartel cuenta días.
+    campaniaMock.findMany.mockResolvedValue([conModal({ modalFechaObjetivo: null })]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal.diasFaltantes).toBeNull();
+  });
+
+  it("con el modal apagado no emite modal, aunque la campaña esté activa", async () => {
+    // Es el caso de una campaña que solo quiere su Doodle: el modal interrumpe,
+    // y prenderlo tiene que ser una decisión aparte.
+    campaniaMock.findMany.mockResolvedValue([conModal({ modalActivo: false })]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal).toBeNull();
+  });
+
+  it("una campaña DESHABILITADA no muestra su modal", async () => {
+    campaniaMock.findMany.mockResolvedValue([conModal({ estado: "DESHABILITADA" })]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal).toBeNull();
+  });
+
+  it("una campaña fuera de fecha no muestra su modal", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      conModal({
+        desde: inicioDelDiaArgentino("2026-08-01"),
+        hasta: inicioDelDiaArgentino("2026-08-31"),
+      }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal).toBeNull();
+  });
+
+  it("entre dos modales activos gana la prioridad más alta", async () => {
+    // El modal es un recurso exclusivo igual que el logo: no se pueden apilar
+    // dos carteles encima del catálogo.
+    campaniaMock.findMany.mockResolvedValue([
+      conModal({ id: 1, prioridad: 10, modalTitulo: "Primavera" }),
+      conModal({ id: 2, prioridad: 30, modalTitulo: "Día del Padre" }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.modal.campaniaId).toBe(2);
+  });
+
+  it("el modal NO filtra datos internos de la campaña", async () => {
+    campaniaMock.findMany.mockResolvedValue([conModal()]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(JSON.stringify(res.body)).not.toContain("Nota interna");
+    expect(res.body.modal).not.toHaveProperty("estado");
+    expect(res.body.modal).not.toHaveProperty("prioridad");
+  });
+
+  it("el Doodle y el modal pueden venir de campañas DISTINTAS", async () => {
+    // Son dos recursos exclusivos independientes: la campaña que manda el logo
+    // no tiene por qué ser la que manda el cartel.
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ id: 1, prioridad: 50, doodleEnCatalogo: true }),
+      conModal({ id: 2, prioridad: 10, doodleUrl: null }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.doodle.campaniaId).toBe(1);
+    expect(res.body.modal.campaniaId).toBe(2);
+  });
+});
+
+describe("POST /api/campanias — el destino del CTA", () => {
+  const base = {
+    nombre: "Primavera",
+    tipo: "ESTACIONAL",
+    desde: "2026-09-10",
+    hasta: "2026-09-20",
+    modalActivo: true,
+    modalTitulo: "Título",
+  };
+
+  function crear(body) {
+    return request(buildApp()).post("/api/campanias").set("Authorization", authHeader).send(body);
+  }
+
+  it("acepta las rutas reales del sitio", async () => {
+    campaniaMock.create.mockResolvedValue(conModal());
+
+    for (const destino of [
+      "/coleccion",
+      "/coleccion?etiqueta=primavera",
+      "/coleccion/categoria/hogar",
+      "/producto/12-velador-led",
+      "/favoritos",
+      "/",
+    ]) {
+      const res = await crear({ ...base, modalCtaDestino: destino });
+      expect(res.status, `destino: ${destino}`).toBe(201);
+    }
+  });
+
+  it("rechaza un destino EXTERNO", async () => {
+    // Un modal que ve todo el mundo es la superficie ideal para mandar tráfico
+    // a cualquier lado. El CTA navega DENTRO del sitio, punto.
+    const res = await crear({ ...base, modalCtaDestino: "https://otro-sitio.com" });
+
+    expect(res.status).toBe(400);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("rechaza javascript: y otras rutas que no son del sitio", async () => {
+    for (const destino of ["javascript:alert(1)", "//evil.com", "coleccion", "/catalogo/admin/productos"]) {
+      const res = await crear({ ...base, modalCtaDestino: destino });
+      expect(res.status, `destino: ${destino}`).toBe(400);
+    }
+  });
+
+  it("rechaza un modal activo sin título", async () => {
+    // Un cartel sin título es un cuadro gris encima del catálogo.
+    const res = await crear({ ...base, modalTitulo: "   " });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("un modal APAGADO no exige nada", async () => {
+    campaniaMock.create.mockResolvedValue(fila());
+
+    const res = await crear({ ...base, modalActivo: false, modalTitulo: null });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("rechaza un CTA con texto pero sin destino", async () => {
+    // Un botón que no lleva a ningún lado.
+    const res = await crear({ ...base, modalCtaTexto: "Ver más", modalCtaDestino: null });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("guarda la fecha objetivo como la medianoche argentina de su día", async () => {
+    campaniaMock.create.mockResolvedValue(conModal());
+
+    await crear({ ...base, modalFechaObjetivo: "2026-09-21" });
+
+    expect(campaniaMock.create.mock.calls[0][0].data.modalFechaObjetivo.toISOString()).toBe(
+      "2026-09-21T03:00:00.000Z",
+    );
   });
 });
 

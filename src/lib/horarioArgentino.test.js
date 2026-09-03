@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DESFASE_ARGENTINA_MS,
   claveDiaArgentino,
+  diasHastaClave,
   enHorarioArgentino,
   inicioDelDiaArgentino,
 } from "./horarioArgentino.js";
@@ -61,5 +62,55 @@ describe("enHorarioArgentino", () => {
     expect(enHorarioArgentino(null)).toBeNull();
     expect(enHorarioArgentino(undefined)).toBeNull();
     expect(enHorarioArgentino("cualquier cosa")).toBeNull();
+  });
+});
+
+describe("diasHastaClave — el contador de los modales de campaña", () => {
+  /** Un instante ARGENTINO a partir de un día y una hora del reloj local. */
+  function enArgentina(clave, horas = 0) {
+    return new Date(inicioDelDiaArgentino(clave).getTime() + horas * 3_600_000);
+  }
+
+  it("cuenta días ARGENTINOS, no diferencias de instantes", () => {
+    expect(diasHastaClave("2026-09-21", enArgentina("2026-09-03"))).toBe(18);
+  });
+
+  it("el mismo día da CERO, no uno", () => {
+    // "Faltan 0 días para la Primavera" es lo que permite que la pantalla diga
+    // "¡Es hoy!". Un 1 acá le erraría al día entero.
+    expect(diasHastaClave("2026-09-21", enArgentina("2026-09-21"))).toBe(0);
+  });
+
+  it("sigue dando CERO a las 23:59 del día objetivo", () => {
+    // Es día completo, no un instante: hasta que no pasa la medianoche
+    // argentina, sigue siendo hoy.
+    expect(diasHastaClave("2026-09-21", enArgentina("2026-09-21", 23))).toBe(0);
+  });
+
+  it("a las 21:00 de la víspera todavía falta UNO, aunque en UTC ya sea el día", () => {
+    // La trampa horaria de siempre: las 21:00 del 20 en Buenos Aires son las
+    // 00:00 UTC del 21. Con aritmética sobre instantes UTC, el contador se
+    // adelantaría un día cada noche, que es cuando más gente mira el sitio.
+    const vispera = enArgentina("2026-09-20", 21);
+    expect(vispera.toISOString().slice(0, 10)).toBe("2026-09-21");
+
+    expect(diasHastaClave("2026-09-21", vispera)).toBe(1);
+  });
+
+  it("una fecha que ya pasó da un número NEGATIVO, no cero", () => {
+    // Cero significaría "es hoy" y sería mentira. Quien consuma esto decide qué
+    // hacer con un negativo; taparlo acá le sacaría la información.
+    expect(diasHastaClave("2026-09-01", enArgentina("2026-09-03"))).toBe(-2);
+  });
+
+  it("cruza meses y años sin contar de más", () => {
+    expect(diasHastaClave("2026-10-01", enArgentina("2026-09-30"))).toBe(1);
+    expect(diasHastaClave("2027-01-01", enArgentina("2026-12-25"))).toBe(7);
+  });
+
+  it("una clave ilegible devuelve null en vez de un número inventado", () => {
+    expect(diasHastaClave("25/12/2026", enArgentina("2026-09-03"))).toBeNull();
+    expect(diasHastaClave(null, enArgentina("2026-09-03"))).toBeNull();
+    expect(diasHastaClave(undefined, enArgentina("2026-09-03"))).toBeNull();
   });
 });

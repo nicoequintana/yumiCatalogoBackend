@@ -232,6 +232,23 @@ model Campania {
   doodleEnCatalogo Boolean @default(true)
   doodleEnAdmin    Boolean @default(false)
 
+  /// Modal estacional del catálogo público. `modalActivo` es el interruptor:
+  /// una campaña puede estar activa por su Doodle y no querer interrumpir a
+  /// nadie con un cartel.
+  modalActivo     Boolean @default(false)
+  modalTitulo     String? @db.NVarChar(120)
+  modalTexto      String? @db.NVarChar(1000)
+  modalCtaTexto   String? @db.NVarChar(60)
+  /// Ruta INTERNA del sitio (`/coleccion`, `/coleccion/categoria/x`, …). Se
+  /// valida en el controller: un destino roto en un modal que se le muestra a
+  /// todo el mundo es peor que no tener modal.
+  modalCtaDestino String? @db.NVarChar(200)
+  /// El día al que apunta el contador ("Faltan 18 días para la Primavera").
+  /// Es SEPARADO de `hasta` a propósito: la campaña de Navidad corre del 25/11
+  /// al 25/12 pero puede contar hacia el 25/12, y la de Primavera termina el 21
+  /// contando hacia el 21. Que a veces coincidan no los vuelve el mismo dato.
+  modalFechaObjetivo DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
