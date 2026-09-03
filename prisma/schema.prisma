@@ -59,6 +59,8 @@ model Product {
   video              Video?
   eventos            EventoTrafico[]
   itemsOrden         ItemOrden[]
+  /// En qué promociones participa, con su porcentaje propio en cada una.
+  itemsPromocion     PromocionItem[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -232,6 +234,10 @@ model Campania {
   doodleEnCatalogo Boolean @default(true)
   doodleEnAdmin    Boolean @default(false)
 
+  /// Las promociones que esta campaña aplica mientras está activa. Apagar la
+  /// campaña las apaga a todas de una.
+  promociones CampaniaPromocion[]
+
   /// Modal estacional del catálogo público. `modalActivo` es el interruptor:
   /// una campaña puede estar activa por su Doodle y no querer interrumpir a
   /// nadie con un cartel.
@@ -255,6 +261,103 @@ model Campania {
   // La consulta de vigencia es exactamente `where estado = ... and desde <= hoy
   // and hasta >= hoy`.
   @@index([estado, desde, hasta])
+}
+
+/// Promoción: define QUÉ productos tienen QUÉ descuento. NO define cuándo.
+///
+/// La separación es el eje del módulo y no una preferencia de diseño:
+///
+///   PROMOCIÓN  define el descuento
+///   CALENDARIO define cuándo se aplica
+///
+/// Por eso acá NO hay fechas. Una promoción sin programación no se aplica a
+/// nadie, y la misma promoción puede programarse muchas veces sin duplicarse.
+///
+/// `activa` es administrativo —archivar una promo que ya no se usa sin
+/// perderla— y NO tiene nada que ver con la vigencia temporal.
+model Promocion {
+  id          Int     @id @default(autoincrement())
+  nombre      String  @db.NVarChar(120)
+  descripcion String? @db.NVarChar(1000)
+  activa      Boolean @default(true)
+
+  items          PromocionItem[]
+  programaciones ProgramacionPromocion[]
+  campanias      CampaniaPromocion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Un producto dentro de una promoción, con SU porcentaje.
+///
+/// Cada producto lleva el suyo: un descuento parejo es una comodidad del panel
+/// ("aplicar el mismo a todos"), no una restricción del modelo.
+///
+/// `habilitado` es la granularidad del conflicto: cuando dos promociones se
+/// pisan sobre un producto y el admin elige cuál gana, la perdedora queda en
+/// `false` PARA ESE PRODUCTO y sigue funcionando para todos los demás. **No se
+/// reactiva sola cuando termina la ganadora**: volver a `true` es una acción
+/// explícita.
+model PromocionItem {
+  id          Int       @id @default(autoincrement())
+  promocionId Int
+  promocion   Promocion @relation(fields: [promocionId], references: [id], onDelete: Cascade)
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  /// Entero entre 5 y 50. Los límites viven en `lib/precioEfectivo.js`.
+  porcentaje  Int
+  habilitado  Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Un producto no puede estar dos veces en la misma promoción: cuál de los dos
+  // porcentajes gana no tendría respuesta.
+  @@unique([promocionId, productId])
+  // La resolución del precio entra por productId, no por promoción.
+  @@index([productId])
+}
+
+/// Programación INDIVIDUAL: una promoción en el calendario, sin campaña.
+///
+/// `desde`/`hasta` guardan la medianoche ARGENTINA de su día y el fin es
+/// inclusivo, igual que en `Campania`.
+///
+/// Es una tabla SEPARADA de `CampaniaPromocion` y no un `campaniaId` nullable
+/// acá: una promoción dentro de una campaña hereda las fechas de la campaña y no
+/// puede tener las propias. Con un solo modelo, `desde`/`hasta` serían nullable
+/// y la consulta de vigencia necesitaría un COALESCE sobre un join — el índice
+/// dejaría de servir justo en la consulta que corre en cada listado.
+model ProgramacionPromocion {
+  id          Int       @id @default(autoincrement())
+  promocionId Int
+  promocion   Promocion @relation(fields: [promocionId], references: [id], onDelete: Cascade)
+  desde       DateTime
+  hasta       DateTime
+  /// El OFF manual de esta programación, sin tocar la promoción ni sus fechas.
+  habilitada  Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([habilitada, desde, hasta])
+}
+
+/// Promoción DENTRO de una campaña: la vigencia la hereda de la campaña.
+///
+/// De acá sale la regla de que apagar una campaña apaga TODAS sus promociones
+/// de una, sin desactivar nada una por una.
+model CampaniaPromocion {
+  campaniaId  Int
+  campania    Campania  @relation(fields: [campaniaId], references: [id], onDelete: Cascade)
+  promocionId Int
+  promocion   Promocion @relation(fields: [promocionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([campaniaId, promocionId])
+  @@index([promocionId])
 }
 
 model Usuario {
@@ -372,6 +475,20 @@ model ItemOrden {
   product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   nombreProducto String // snapshot, no se recalcula
   precioUnitario Decimal @db.Decimal(10, 0) // snapshot entero, no se recalcula
+  /// Lo que el producto valía SIN promoción, y el porcentaje que se aplicó.
+  ///
+  /// `precioUnitario` guarda lo que el cliente PAGÓ —el promocional, si había
+  /// promo— porque es lo que se facturó y lo que suman las métricas. Estas dos
+  /// columnas existen para poder contestar después "¿cuánta plata regalé en la
+  /// campaña de Primavera?": sin ellas ese dato no queda registrado en ningún
+  /// lado, porque el precio de lista puede cambiar en cualquier momento.
+  ///
+  /// Nullable, y el `null` significa **"esta línea no tuvo descuento"** — que es
+  /// la verdad para todo el histórico anterior a esta migración. NO significa
+  /// "descuento cero", que es un dato distinto y que no puede existir: el
+  /// mínimo es 5 %.
+  precioListaUnitario Decimal? @db.Decimal(10, 0)
+  descuentoPorcentaje Int?
   // Snapshot del COSTO al momento de la compra, por el mismo motivo que
   // `precioUnitario`: sin él, el margen de una venta pasada se calcularía
   // contra el `Product.costo` de HOY, así que cada aumento de un proveedor
