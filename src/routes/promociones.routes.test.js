@@ -610,3 +610,131 @@ describe("programaciones — el calendario es el que programa", () => {
     });
   });
 });
+
+describe("GET /api/promociones/conflictos", () => {
+  it("arma la forma que la detección necesita y emite el resultado", async () => {
+    promocionMock.findMany.mockResolvedValue([
+      {
+        id: 1,
+        nombre: "Promo Velador",
+        items: [
+          { productId: 10, porcentaje: 10, habilitado: true, product: { nombre: "Velador LED" } },
+        ],
+        programaciones: [
+          { desde: new Date("2026-09-01T03:00:00Z"), hasta: new Date("2026-09-30T03:00:00Z"), habilitada: true },
+        ],
+        campanias: [],
+      },
+      {
+        id: 2,
+        nombre: "Primavera",
+        items: [
+          { productId: 10, porcentaje: 20, habilitado: true, product: { nombre: "Velador LED" } },
+        ],
+        programaciones: [],
+        campanias: [
+          {
+            campania: {
+              estado: "HABILITADA",
+              desde: new Date("2026-09-10T03:00:00Z"),
+              hasta: new Date("2026-09-20T03:00:00Z"),
+            },
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/conflictos")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({
+      productId: 10,
+      nombreProducto: "Velador LED",
+      predominaId: 1,
+    });
+  });
+
+  it("una campaña APAGADA no aporta período: sus promociones no conflictúan", async () => {
+    // Apagar la campaña apaga sus promociones, así que dejan de competir. Si
+    // siguieran figurando, la alerta pediría resolver algo que no está pasando.
+    promocionMock.findMany.mockResolvedValue([
+      {
+        id: 1,
+        nombre: "A",
+        items: [{ productId: 10, porcentaje: 10, habilitado: true, product: { nombre: "X" } }],
+        programaciones: [
+          { desde: new Date("2026-09-01T03:00:00Z"), hasta: new Date("2026-09-30T03:00:00Z"), habilitada: true },
+        ],
+        campanias: [],
+      },
+      {
+        id: 2,
+        nombre: "B",
+        items: [{ productId: 10, porcentaje: 20, habilitado: true, product: { nombre: "X" } }],
+        programaciones: [],
+        campanias: [
+          {
+            campania: {
+              estado: "DESHABILITADA",
+              desde: new Date("2026-09-01T03:00:00Z"),
+              hasta: new Date("2026-09-30T03:00:00Z"),
+            },
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/conflictos")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toEqual([]);
+  });
+
+  it("una programación en OFF tampoco aporta período", async () => {
+    promocionMock.findMany.mockResolvedValue([
+      {
+        id: 1,
+        nombre: "A",
+        items: [{ productId: 10, porcentaje: 10, habilitado: true, product: { nombre: "X" } }],
+        programaciones: [
+          { desde: new Date("2026-09-01T03:00:00Z"), hasta: new Date("2026-09-30T03:00:00Z"), habilitada: true },
+        ],
+        campanias: [],
+      },
+      {
+        id: 2,
+        nombre: "B",
+        items: [{ productId: 10, porcentaje: 20, habilitado: true, product: { nombre: "X" } }],
+        programaciones: [
+          { desde: new Date("2026-09-01T03:00:00Z"), hasta: new Date("2026-09-30T03:00:00Z"), habilitada: false },
+        ],
+        campanias: [],
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/conflictos")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toEqual([]);
+  });
+
+  it("requiere auth", async () => {
+    expect((await request(buildApp()).get("/api/promociones/conflictos")).status).toBe(401);
+  });
+
+  it("NO se confunde con /:id", async () => {
+    promocionMock.findMany.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/conflictos")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.findUnique).not.toHaveBeenCalled();
+  });
+});

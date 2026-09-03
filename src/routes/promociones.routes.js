@@ -15,6 +15,11 @@ const router = Router();
  * un id. Mismo pisotón que evitan `/products/import` y `/campanias/activas`.
  */
 router.get("/productos", requireAuth, promocionesController.listadoComercial);
+// Solo lectura: los conflictos se calculan cada vez, no se guardan. Un snapshot
+// habría que invalidarlo ante cualquier cambio de items, de programación o de
+// estado de campaña — y el §41 pide que agregar un producto a una promoción ya
+// programada haga aparecer el conflicto nuevo.
+router.get("/conflictos", requireAuth, promocionesController.listarConflictos);
 
 // PROGRAMACIONES. Viven bajo `/promociones` porque una programación no existe
 // sin su promoción, pero la ACCIÓN de programar es del calendario: esta

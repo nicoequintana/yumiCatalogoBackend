@@ -5,6 +5,7 @@ import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
+import { detectarConflictos } from "../lib/conflictosPromociones.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 import { LIST_SELECT } from "./products.mapper.js";
 import {
@@ -623,6 +624,70 @@ export async function eliminarProgramacion(req, res, next) {
     });
 
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `GET /promociones/conflictos` — dónde dos promociones se pisan el precio.
+ *
+ * SOLO LECTURA y sin estado: los conflictos se calculan cada vez, no se
+ * guardan. Guardarlos obligaría a recalcularlos ante cualquier cambio de
+ * programación, de items o de estado de campaña — y el §41 pide justamente que
+ * agregar un producto a una promoción ya programada haga aparecer el conflicto
+ * nuevo. Una consulta lo resuelve; un snapshot habría que invalidarlo.
+ *
+ * Los PERÍODOS de una promoción salen de sus dos caminos: las programaciones
+ * habilitadas, y las campañas asociadas que estén HABILITADAS. Una campaña
+ * apagada o una programación en OFF **no aportan período**, así que sus
+ * promociones dejan de competir — que es lo correcto: apagarlas ya resolvió el
+ * conflicto de hecho.
+ */
+export async function listarConflictos(_req, res, next) {
+  try {
+    const promociones = await prisma.promocion.findMany({
+      where: { activa: true },
+      include: {
+        items: {
+          where: { habilitado: true },
+          select: {
+            productId: true,
+            porcentaje: true,
+            habilitado: true,
+            product: { select: { nombre: true } },
+          },
+        },
+        programaciones: { select: { desde: true, hasta: true, habilitada: true } },
+        campanias: {
+          select: { campania: { select: { estado: true, desde: true, hasta: true } } },
+        },
+      },
+    });
+
+    const paraDetectar = promociones.map((promocion) => ({
+      id: promocion.id,
+      nombre: promocion.nombre,
+      items: promocion.items.map((item) => ({
+        productId: item.productId,
+        porcentaje: item.porcentaje,
+        habilitado: item.habilitado,
+        nombreProducto: item.product.nombre,
+      })),
+      periodos: [
+        ...promocion.programaciones
+          .filter((p) => p.habilitada)
+          .map((p) => ({ desde: claveDiaArgentino(p.desde), hasta: claveDiaArgentino(p.hasta) })),
+        ...promocion.campanias
+          .filter((a) => a.campania.estado === "HABILITADA")
+          .map((a) => ({
+            desde: claveDiaArgentino(a.campania.desde),
+            hasta: claveDiaArgentino(a.campania.hasta),
+          })),
+      ],
+    }));
+
+    res.json(detectarConflictos(paraDetectar));
   } catch (err) {
     next(err);
   }
