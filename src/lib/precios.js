@@ -19,8 +19,9 @@ import { Decimal } from "@prisma/client/runtime/client.js";
  *
  * ⚠️ **Espejo manual de `frontend/src/utils/precios.js`.** Los dos repos se
  * publican por separado (ver CLAUDE.md, "Deploy"), así que no hay forma de
- * compartir el módulo — mismo caso que `lib/slug.js` ↔ `utils/slug.js` y
- * `lib/jsonLd.js` ↔ `utils/jsonLd.js`. La copia del frontend no tiene `Decimal`
+ * compartir el módulo — mismo caso que `lib/slug.js` ↔ `utils/slug.js`, el
+ * otro módulo que sigue duplicado entero entre los dos repos. La copia del
+ * frontend no tiene `Decimal`
  * y resuelve lo mismo con aritmética entera; los dos tienen el mismo set de
  * casos en sus tests. **Si divergen, el admin ve en pantalla un precio distinto
  * del que el backend escribe** — sin error y sin nada que lo delate.

@@ -13,14 +13,15 @@
  * CLAUDE.md: dos definiciones de "día" que se pueden desincronizar sin que nada
  * falle.
  *
- * ESPEJO MANUAL de `frontend/src/utils/periodo.js`, que es quien CONSTRUYE las
- * claves `desde`/`hasta` que este módulo INTERPRETA. Los dos repos se publican
- * por separado, así que no hay forma de compartir el módulo ni de compararlos
- * en la misma corrida de tests: la única defensa es que los dos lados tengan la
- * misma tabla de casos (`horarioArgentino.test.js` ↔ `periodo.test.js`). Si
- * divergen, el frontend pide una ventana y el backend contesta por otra, sin
- * ningún error — es la misma sincronización manual que
- * `lib/slug.js` ↔ `utils/slug.js` y `lib/precios.js` ↔ `utils/precios.js`.
+ * ÚNICA definición de "día" del sistema: no hay copia en el frontend. La
+ * hubo — `frontend/src/utils/periodo.js`, que construía las claves
+ * `desde`/`hasta` con su propio desfase— y se eliminó: las pantallas de
+ * analytics mandan `?dias=N` y el rango lo resuelve `parsearPeriodo` acá, así
+ * que ya no hay dos calendarios que se puedan desincronizar.
+ *
+ * Los dos consumidores son `controllers/admin.controller.js`, que resuelve el
+ * período pedido y agrupa las ventas por día, y `lib/plantillasEmail.js`, que
+ * fecha el comprobante del cliente.
  */
 
 /**

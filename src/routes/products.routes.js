@@ -152,10 +152,13 @@ const limitadorGenerarImagenes = crearLimitadorDeVelocidad({
 
 const router = Router();
 
-// `authOpcional` en los dos GET públicos: siguen sirviendo a visitantes
+// `authOpcional` va en las CUATRO rutas públicas de producto: los dos GET de
+// acá abajo (`/` y `/:id`) y los dos POST de interacción de más abajo
+// (`/:id/compartir` y `/:id/favorito`). Todas siguen sirviendo a visitantes
 // anónimos, pero cuando el llamador presenta un JWT válido el controller lo ve
-// en `req.usuario` y habilita la vista admin (ocultos + agotados). Es lo que
-// reemplaza al viejo `?admin=1`, que otorgaba esa vista a cualquiera.
+// en `req.usuario`: en los GET eso habilita la vista admin (ocultos +
+// agotados) y en los POST levanta la paridad de 404. Es lo que reemplaza al
+// viejo `?admin=1`, que otorgaba esa vista a cualquiera.
 router.get("/", limitadorLecturaPublica, authOpcional, productsController.listar);
 router.get("/import/template", requireAuth, productsImportController.descargarPlantilla);
 // `/export` alimenta el flujo de ACTUALIZACIÓN masiva (exportar -> editar a
@@ -194,10 +197,11 @@ router.post("/precios-masivo", requireAuth, productsPreciosController.aplicarPre
 // multer `uploadXlsx` que `/import`.
 router.post("/actualizar-masivo", requireAuth, uploadXlsx, productsImportController.actualizarMasivo);
 router.post("/", requireAuth, uploadFields, productsController.crear);
-// `authOpcional` también acá: los dos endpoints siguen siendo públicos, pero
-// necesitan saber si el llamador es admin para aplicar la misma paridad de 404
-// que `obtenerPorId` — un producto oculto tiene que responder igual que uno
-// inexistente, y solo un JWT verificado levanta esa guarda.
+// Los otros dos de las cuatro rutas con `authOpcional` (ver el comentario de
+// arriba de todo). Siguen siendo públicos, pero necesitan saber si el llamador
+// es admin para aplicar la misma paridad de 404 que `obtenerPorId` — un
+// producto oculto tiene que responder igual que uno inexistente, y solo un JWT
+// verificado levanta esa guarda.
 router.post("/:id/compartir", limitadorInteraccionesPublicas, authOpcional, productsController.compartir);
 router.post("/:id/favorito", limitadorInteraccionesPublicas, authOpcional, productsController.favorito);
 // Dispara el flujo de n8n que genera las imágenes del producto. No colisiona
