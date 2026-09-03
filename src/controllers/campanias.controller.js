@@ -437,8 +437,21 @@ export async function listar(req, res, next) {
 
 export async function obtenerPorId(req, res, next) {
   try {
-    const campania = await buscarOFallar(idDeParams(req));
-    res.json(mapCampania(campania, new Date()));
+    const id = idDeParams(req);
+    const campania = await prisma.campania.findUnique({
+      where: { id },
+      // El detalle SÍ trae sus promociones: es la pantalla desde la que se
+      // editan. El listado no, porque son N consultas para pintar una grilla.
+      include: {
+        promociones: { select: { promocion: { select: { id: true, nombre: true } } } },
+      },
+    });
+    if (!campania) throw httpError(404, "Campaña no encontrada.");
+
+    res.json({
+      ...mapCampania(campania, new Date()),
+      promociones: campania.promociones.map((a) => a.promocion),
+    });
   } catch (err) {
     next(err);
   }
@@ -747,6 +760,80 @@ export async function eliminar(req, res, next) {
     });
 
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PUT /api/campanias/:id/promociones` — qué promociones aplica esta campaña.
+ *
+ * **De acá sale la regla más útil del módulo**: apagar la campaña apaga TODAS
+ * sus promociones de una, sin desactivar nada una por una. No hay ningún estado
+ * que copiar ni sincronizar — la vigencia la hereda la asociación, y por eso
+ * `resolverDescuentos` mira la campaña y no una fecha guardada acá.
+ *
+ * Es un REEMPLAZO de la lista completa, mismo criterio que los items de una
+ * promoción: el panel edita el conjunto entero, y mandar la lista vigente es la
+ * forma natural de expresar "quedó así".
+ *
+ * ⚠️ Desasociar NO borra la promoción: sigue existiendo, con sus productos y sus
+ * otras programaciones. Son dos cosas distintas y la confusión sería cara.
+ */
+export async function guardarPromociones(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    await buscarOFallar(id);
+
+    const promocionIds = req.body?.promocionIds;
+    if (!Array.isArray(promocionIds)) {
+      throw httpError(400, "Enviá la lista de promociones en `promocionIds`.");
+    }
+    if (!promocionIds.every((valor) => Number.isInteger(valor) && valor > 0)) {
+      throw httpError(400, "Los ids de promoción deben ser números enteros.");
+    }
+    if (new Set(promocionIds).size !== promocionIds.length) {
+      throw httpError(400, "Hay una promoción repetida en la lista.");
+    }
+
+    if (promocionIds.length > 0) {
+      const existentes = await prisma.promocion.findMany({
+        where: { id: { in: promocionIds } },
+        select: { id: true },
+      });
+      const presentes = new Set(existentes.map((p) => p.id));
+      const faltantes = promocionIds.filter((valor) => !presentes.has(valor));
+      if (faltantes.length > 0) {
+        throw httpError(
+          400,
+          `Estas promociones ya no existen: ${faltantes.join(", ")}. Recargá la pantalla.`,
+        );
+      }
+    }
+
+    // En transacción: aplicada a medias dejaría la campaña con la mitad de las
+    // promociones viejas y la mitad de las nuevas.
+    await prisma.$transaction(async (tx) => {
+      await tx.campaniaPromocion.deleteMany({ where: { campaniaId: id } });
+      if (promocionIds.length > 0) {
+        await tx.campaniaPromocion.createMany({
+          data: promocionIds.map((promocionId) => ({ campaniaId: id, promocionId })),
+        });
+      }
+    });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_PROMOCIONES",
+      entidad: "Campania",
+      entidadId: id,
+      detalle: { promocionIds },
+    });
+
+    const asociadas = await prisma.campaniaPromocion.findMany({
+      where: { campaniaId: id },
+      select: { promocionId: true },
+    });
+    res.json({ promocionIds: asociadas.map((a) => a.promocionId) });
   } catch (err) {
     next(err);
   }

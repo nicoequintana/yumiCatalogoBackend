@@ -4,6 +4,7 @@ import { httpError } from "../lib/httpError.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
+import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 import { LIST_SELECT } from "./products.mapper.js";
 import {
@@ -468,6 +469,160 @@ export async function listadoComercial(req, res, next) {
     });
 
     res.json({ data, page, pageSize, total });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/* ── Programaciones ───────────────────────────────────────────────────────────
+ *
+ * Es lo que hace que una promoción le llegue a alguien. Sin programar, el
+ * módulo entero es una lista de intenciones.
+ *
+ * Los endpoints viven bajo `/promociones` porque una programación no existe sin
+ * su promoción, pero **la acción de programar es del CALENDARIO**: la pantalla
+ * de Promociones no los llama, los llama `AdminCampanias`.
+ */
+
+/** `"YYYY-MM-DD"` → la medianoche ARGENTINA de ese día. */
+function parsearDia(valor, campo) {
+  if (typeof valor !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+    throw httpError(400, `La fecha de ${campo} debe tener el formato AAAA-MM-DD.`);
+  }
+  const fecha = inicioDelDiaArgentino(valor);
+  if (fecha === null) throw httpError(400, `La fecha de ${campo} no es válida.`);
+  return fecha;
+}
+
+function mapProgramacion(programacion) {
+  return {
+    id: programacion.id,
+    promocionId: programacion.promocion?.id ?? programacion.promocionId,
+    nombre: programacion.promocion?.nombre ?? null,
+    // Como en las campañas: `"YYYY-MM-DD"`, no ISO con hora. `formatFecha`
+    // detecta ese formato y lo descompone a mano para no correrlo un día.
+    desde: claveDiaArgentino(programacion.desde),
+    hasta: claveDiaArgentino(programacion.hasta),
+    habilitada: programacion.habilitada,
+  };
+}
+
+/**
+ * `GET /promociones/programaciones?desde&hasta` — las del mes visible.
+ *
+ * Filtro de SOLAPAMIENTO, igual que el de campañas: una programación de agosto
+ * a octubre ocupa septiembre y tiene que aparecer al mirar ese mes.
+ */
+export async function listarProgramaciones(req, res, next) {
+  try {
+    const where = {};
+    if (req.query.desde !== undefined || req.query.hasta !== undefined) {
+      const desde = parsearDia(req.query.desde, "inicio");
+      const hasta = parsearDia(req.query.hasta, "fin");
+      where.desde = { lte: hasta };
+      where.hasta = { gte: desde };
+    }
+
+    const programaciones = await prisma.programacionPromocion.findMany({
+      where,
+      include: { promocion: { select: { id: true, nombre: true, activa: true } } },
+      orderBy: [{ desde: "desc" }, { id: "desc" }],
+    });
+
+    res.json(programaciones.map(mapProgramacion));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `POST /promociones/:id/programaciones` — programa una promoción suelta. */
+export async function crearProgramacion(req, res, next) {
+  try {
+    const promocionId = idDeParams(req);
+    await buscarOFallar(promocionId, undefined);
+
+    const desde = parsearDia(req.body?.desde, "inicio");
+    const hasta = parsearDia(req.body?.hasta, "fin");
+    if (desde.getTime() > hasta.getTime()) {
+      throw httpError(400, "La fecha de inicio no puede ser posterior a la de fin.");
+    }
+
+    const programacion = await prisma.programacionPromocion.create({
+      // Nace HABILITADA: programar algo ES querer que se aplique. Que naciera
+      // apagada obligaría a un segundo paso que nadie va a recordar.
+      data: { promocionId, desde, hasta, habilitada: true },
+      include: { promocion: { select: { id: true, nombre: true, activa: true } } },
+    });
+
+    logAudit(req, {
+      accion: "PROGRAMAR",
+      entidad: "Promocion",
+      entidadId: promocionId,
+      detalle: { desde: req.body.desde, hasta: req.body.hasta },
+    });
+
+    res.status(201).json(mapProgramacion(programacion));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function buscarProgramacionOFallar(req) {
+  const id = Number(req.params.programacionId);
+  if (!Number.isInteger(id)) throw httpError(404, "Programación no encontrada.");
+  const programacion = await prisma.programacionPromocion.findUnique({ where: { id } });
+  if (!programacion) throw httpError(404, "Programación no encontrada.");
+  return programacion;
+}
+
+/**
+ * `PATCH /promociones/programaciones/:programacionId` — el OFF manual del §24.
+ *
+ * Apaga la programación **sin borrarla ni tocar sus fechas**: la promoción deja
+ * de aplicarse en el acto y el período queda ahí para volver a prenderla. Es lo
+ * mismo que el ON/OFF de una campaña, un nivel más abajo.
+ */
+export async function cambiarEstadoProgramacion(req, res, next) {
+  try {
+    const programacion = await buscarProgramacionOFallar(req);
+    if (typeof req.body?.habilitada !== "boolean") {
+      throw httpError(400, "`habilitada` debe ser un booleano.");
+    }
+
+    const actualizada = await prisma.programacionPromocion.update({
+      where: { id: programacion.id },
+      data: { habilitada: req.body.habilitada },
+      include: { promocion: { select: { id: true, nombre: true, activa: true } } },
+    });
+
+    logAudit(req, {
+      accion: req.body.habilitada ? "PROGRAMACION_ON" : "PROGRAMACION_OFF",
+      entidad: "Promocion",
+      entidadId: programacion.promocionId,
+      detalle: { programacionId: programacion.id },
+    });
+
+    res.json(mapProgramacion(actualizada));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `DELETE /promociones/programaciones/:programacionId` — borra el período. */
+export async function eliminarProgramacion(req, res, next) {
+  try {
+    const programacion = await buscarProgramacionOFallar(req);
+
+    await prisma.programacionPromocion.delete({ where: { id: programacion.id } });
+
+    logAudit(req, {
+      accion: "DESPROGRAMAR",
+      entidad: "Promocion",
+      entidadId: programacion.promocionId,
+      detalle: { programacionId: programacion.id },
+    });
+
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

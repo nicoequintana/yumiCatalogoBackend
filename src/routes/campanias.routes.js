@@ -57,6 +57,9 @@ router.post("/", requireAuth, campaniasController.crear);
 // También antes de `/:id`, por lo mismo.
 router.post("/:id/duplicar", requireAuth, campaniasController.duplicar);
 router.patch("/:id/estado", requireAuth, campaniasController.cambiarEstado);
+// Qué promociones aplica la campaña mientras está activa. Apagar la campaña las
+// apaga a todas de una: la vigencia la heredan de acá, no la guardan.
+router.put("/:id/promociones", requireAuth, campaniasController.guardarPromociones);
 router.put("/:id/doodle", requireAuth, uploadDoodle.single("doodle"), campaniasController.guardarDoodle);
 router.delete("/:id/doodle", requireAuth, campaniasController.quitarDoodle);
 

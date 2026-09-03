@@ -14,6 +14,7 @@ const promocionMock = {
   delete: vi.fn(),
 };
 const promocionItemMock = { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn(), update: vi.fn() };
+const programacionMock = { findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() };
 const productMock = { findMany: vi.fn(), count: vi.fn() };
 const ordenMock = { findMany: vi.fn() };
 const usuarioFindUniqueMock = vi.fn();
@@ -34,6 +35,13 @@ vi.mock("../lib/prisma.js", () => ({
       deleteMany: (...a) => promocionItemMock.deleteMany(...a),
       createMany: (...a) => promocionItemMock.createMany(...a),
       update: (...a) => promocionItemMock.update(...a),
+    },
+    programacionPromocion: {
+      findMany: (...a) => programacionMock.findMany(...a),
+      findUnique: (...a) => programacionMock.findUnique(...a),
+      create: (...a) => programacionMock.create(...a),
+      update: (...a) => programacionMock.update(...a),
+      delete: (...a) => programacionMock.delete(...a),
     },
     product: {
       findMany: (...a) => productMock.findMany(...a),
@@ -93,6 +101,7 @@ beforeEach(() => {
   // anterior — y con una forma distinta, que es peor que sin respuesta.
   promocionMock.findMany.mockResolvedValue([]);
   promocionItemMock.findMany.mockResolvedValue([]);
+  programacionMock.findMany.mockResolvedValue([]);
   promocionItemMock.deleteMany.mockResolvedValue({ count: 0 });
   promocionItemMock.createMany.mockResolvedValue({ count: 0 });
   productMock.findMany.mockResolvedValue([]);
@@ -468,5 +477,136 @@ describe("GET /api/promociones/productos — el listado comercial", () => {
 
     const { where } = ordenMock.findMany.mock.calls[0][0];
     expect(where.items.some.productId).toEqual({ in: [21] });
+  });
+});
+
+/**
+ * Guard de la PROGRAMACIÓN, que es lo que hace que una promoción le llegue a
+ * alguien. Sin esto, el módulo entero es una lista de intenciones.
+ */
+describe("programaciones — el calendario es el que programa", () => {
+  beforeEach(() => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+    programacionMock.create.mockResolvedValue({
+      id: 5,
+      promocionId: 3,
+      desde: new Date("2026-09-10T03:00:00.000Z"),
+      hasta: new Date("2026-09-20T03:00:00.000Z"),
+      habilitada: true,
+    });
+  });
+
+  function programar(body) {
+    return request(buildApp())
+      .post("/api/promociones/3/programaciones")
+      .set("Authorization", authHeader)
+      .send(body);
+  }
+
+  it("guarda las fechas como la medianoche ARGENTINA de su día", async () => {
+    const res = await programar({ desde: "2026-09-10", hasta: "2026-09-20" });
+
+    expect(res.status).toBe(201);
+    const { data } = programacionMock.create.mock.calls[0][0];
+    // La medianoche del 10 en Buenos Aires es el 10 a las 03:00 UTC.
+    expect(data.desde.toISOString()).toBe("2026-09-10T03:00:00.000Z");
+    expect(data.hasta.toISOString()).toBe("2026-09-20T03:00:00.000Z");
+  });
+
+  it("rechaza inicio posterior al fin", async () => {
+    const res = await programar({ desde: "2026-09-20", hasta: "2026-09-10" });
+
+    expect(res.status).toBe(400);
+    expect(programacionMock.create).not.toHaveBeenCalled();
+  });
+
+  it("acepta un solo día", async () => {
+    expect((await programar({ desde: "2026-12-25", hasta: "2026-12-25" })).status).toBe(201);
+  });
+
+  it("rechaza una fecha ilegible", async () => {
+    expect((await programar({ desde: "10/09/2026", hasta: "2026-09-20" })).status).toBe(400);
+  });
+
+  it("nace HABILITADA: programar es querer que se aplique", async () => {
+    await programar({ desde: "2026-09-10", hasta: "2026-09-20" });
+
+    expect(programacionMock.create.mock.calls[0][0].data.habilitada).toBe(true);
+  });
+
+  it("PATCH apaga una programación sin borrarla ni tocar sus fechas", async () => {
+    // El OFF manual del §24: la promoción deja de aplicarse en el acto, y el
+    // período queda para volver a prenderla.
+    programacionMock.findUnique.mockResolvedValue({ id: 5, promocionId: 3 });
+    // La fila COMPLETA: Prisma siempre devuelve las fechas, y un mock que las
+    // omite prueba una forma que la base nunca produce.
+    programacionMock.update.mockResolvedValue({
+      id: 5,
+      promocionId: 3,
+      desde: new Date("2026-09-10T03:00:00.000Z"),
+      hasta: new Date("2026-09-20T03:00:00.000Z"),
+      habilitada: false,
+    });
+
+    const res = await request(buildApp())
+      .patch("/api/promociones/programaciones/5")
+      .set("Authorization", authHeader)
+      .send({ habilitada: false });
+
+    expect(res.status).toBe(200);
+    expect(programacionMock.update.mock.calls[0][0].data).toEqual({ habilitada: false });
+  });
+
+  it("DELETE borra la programación, no la promoción", async () => {
+    programacionMock.findUnique.mockResolvedValue({ id: 5, promocionId: 3 });
+    programacionMock.delete.mockResolvedValue({ id: 5 });
+
+    const res = await request(buildApp())
+      .delete("/api/promociones/programaciones/5")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.delete).not.toHaveBeenCalled();
+  });
+
+  it("el listado del mes trae las programaciones que SOLAPAN, no solo las contenidas", async () => {
+    // Una programación de agosto a octubre ocupa septiembre y tiene que
+    // aparecer al mirar ese mes.
+    programacionMock.findMany.mockResolvedValue([]);
+
+    await request(buildApp())
+      .get("/api/promociones/programaciones?desde=2026-09-01&hasta=2026-09-30")
+      .set("Authorization", authHeader);
+
+    const { where } = programacionMock.findMany.mock.calls[0][0];
+    expect(where.desde.lte.toISOString()).toBe("2026-09-30T03:00:00.000Z");
+    expect(where.hasta.gte.toISOString()).toBe("2026-09-01T03:00:00.000Z");
+  });
+
+  it("el listado emite el nombre de la promoción, para el calendario", async () => {
+    // §22: una promoción programada tiene que identificarse en el calendario
+    // sin abrir el detalle.
+    programacionMock.findMany.mockResolvedValue([
+      {
+        id: 5,
+        desde: new Date("2026-09-10T03:00:00.000Z"),
+        hasta: new Date("2026-09-15T03:00:00.000Z"),
+        habilitada: true,
+        promocion: { id: 3, nombre: "Velador 10% OFF", activa: true },
+      },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/programaciones?desde=2026-09-01&hasta=2026-09-30")
+      .set("Authorization", authHeader);
+
+    expect(res.body[0]).toMatchObject({
+      id: 5,
+      promocionId: 3,
+      nombre: "Velador 10% OFF",
+      desde: "2026-09-10",
+      hasta: "2026-09-15",
+      habilitada: true,
+    });
   });
 });

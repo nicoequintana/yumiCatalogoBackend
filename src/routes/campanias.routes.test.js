@@ -15,6 +15,9 @@ const campaniaMock = {
   delete: vi.fn(),
   count: vi.fn(),
 };
+const promocionFindManyMock = vi.fn();
+const campaniaPromocionMock = { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() };
+const transactionMock = vi.fn();
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
 const subirArchivoMock = vi.fn();
@@ -35,6 +38,13 @@ vi.mock("../lib/prisma.js", () => ({
       delete: (...args) => campaniaMock.delete(...args),
       count: (...args) => campaniaMock.count(...args),
     },
+    promocion: { findMany: (...a) => promocionFindManyMock(...a) },
+    campaniaPromocion: {
+      deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
+      createMany: (...a) => campaniaPromocionMock.createMany(...a),
+      findMany: (...a) => campaniaPromocionMock.findMany(...a),
+    },
+    $transaction: (...a) => transactionMock(...a),
     usuario: { findUnique: (...args) => usuarioFindUniqueMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
   },
@@ -116,6 +126,18 @@ beforeEach(() => {
   auditCreateMock.mockResolvedValue({ id: 1 });
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
   campaniaMock.findMany.mockResolvedValue([]);
+  promocionFindManyMock.mockResolvedValue([]);
+  campaniaPromocionMock.findMany.mockResolvedValue([]);
+  transactionMock.mockImplementation(async (arg) =>
+    typeof arg === "function"
+      ? arg({
+          campaniaPromocion: {
+            deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
+            createMany: (...a) => campaniaPromocionMock.createMany(...a),
+          },
+        })
+      : Promise.all(arg),
+  );
   campaniaMock.count.mockResolvedValue(0);
   subirArchivoMock.mockResolvedValue({
     url: "https://res.cloudinary.com/demo/nuevo.png",
@@ -846,7 +868,19 @@ describe("PUT /api/campanias/:id/doodle", () => {
 
   it("sube, guarda los tres campos y recién DESPUÉS borra el anterior", async () => {
     campaniaMock.findUnique.mockResolvedValue(fila());
-    campaniaMock.findMany.mockResolvedValue([]); // nadie más comparte el doodle viejo
+    campaniaMock.findMany.mockResolvedValue([]);
+  promocionFindManyMock.mockResolvedValue([]);
+  campaniaPromocionMock.findMany.mockResolvedValue([]);
+  transactionMock.mockImplementation(async (arg) =>
+    typeof arg === "function"
+      ? arg({
+          campaniaPromocion: {
+            deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
+            createMany: (...a) => campaniaPromocionMock.createMany(...a),
+          },
+        })
+      : Promise.all(arg),
+  ); // nadie más comparte el doodle viejo
     campaniaMock.update.mockResolvedValue(
       fila({ doodleUrl: "https://res.cloudinary.com/demo/nuevo.png" }),
     );
@@ -882,6 +916,18 @@ describe("DELETE /api/campanias/:id/doodle", () => {
   it("limpia los tres campos y borra el archivo remoto", async () => {
     campaniaMock.findUnique.mockResolvedValue(fila());
     campaniaMock.findMany.mockResolvedValue([]);
+  promocionFindManyMock.mockResolvedValue([]);
+  campaniaPromocionMock.findMany.mockResolvedValue([]);
+  transactionMock.mockImplementation(async (arg) =>
+    typeof arg === "function"
+      ? arg({
+          campaniaPromocion: {
+            deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
+            createMany: (...a) => campaniaPromocionMock.createMany(...a),
+          },
+        })
+      : Promise.all(arg),
+  );
     campaniaMock.update.mockResolvedValue(fila({ doodleUrl: null }));
 
     const res = await quitar();
@@ -944,5 +990,68 @@ describe("DELETE /api/campanias/:id", () => {
 
     expect(res.status).toBe(200);
     expect(auditCreateMock).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Guard de la asociación campaña ↔ promociones.
+ *
+ * De acá sale la regla más útil del módulo: apagar una campaña apaga TODAS sus
+ * promociones de una, sin desactivar nada una por una. No hay ningún estado que
+ * copiar — la vigencia la hereda la asociación.
+ */
+describe("PUT /api/campanias/:id/promociones", () => {
+  function asociar(promocionIds) {
+    return request(buildApp())
+      .put("/api/campanias/1/promociones")
+      .set("Authorization", authHeader)
+      .send({ promocionIds });
+  }
+
+  beforeEach(() => {
+    campaniaMock.findUnique.mockResolvedValue(fila());
+    promocionFindManyMock.mockResolvedValue([{ id: 3 }, { id: 4 }]);
+    campaniaPromocionMock.deleteMany.mockResolvedValue({ count: 0 });
+    campaniaPromocionMock.createMany.mockResolvedValue({ count: 2 });
+  });
+
+  it("reemplaza la lista completa en una transacción", async () => {
+    const res = await asociar([3, 4]);
+
+    expect(res.status).toBe(200);
+    expect(campaniaPromocionMock.deleteMany).toHaveBeenCalledWith({ where: { campaniaId: 1 } });
+    expect(campaniaPromocionMock.createMany.mock.calls[0][0].data).toEqual([
+      { campaniaId: 1, promocionId: 3 },
+      { campaniaId: 1, promocionId: 4 },
+    ]);
+  });
+
+  it("una lista vacía desasocia todo, sin borrar ninguna promoción", async () => {
+    const res = await asociar([]);
+
+    expect(res.status).toBe(200);
+    expect(campaniaPromocionMock.deleteMany).toHaveBeenCalled();
+    expect(campaniaPromocionMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza una promoción que no existe", async () => {
+    promocionFindManyMock.mockResolvedValue([{ id: 3 }]);
+
+    const res = await asociar([3, 999]);
+
+    expect(res.status).toBe(400);
+    expect(campaniaPromocionMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza ids repetidos", async () => {
+    const res = await asociar([3, 3]);
+
+    expect(res.status).toBe(400);
+  });
+
+  it("sin token responde 401", async () => {
+    const res = await request(buildApp()).put("/api/campanias/1/promociones").send({ promocionIds: [] });
+
+    expect(res.status).toBe(401);
   });
 });

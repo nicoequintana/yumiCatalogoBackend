@@ -16,6 +16,17 @@ const router = Router();
  */
 router.get("/productos", requireAuth, promocionesController.listadoComercial);
 
+// PROGRAMACIONES. Viven bajo `/promociones` porque una programación no existe
+// sin su promoción, pero la ACCIÓN de programar es del calendario: esta
+// pantalla no las llama, las llama `AdminCampanias`.
+//
+// ⚠️ Las tres van antes de `/:id`: "programaciones" no puede matchearse como
+// un id de promoción.
+router.get("/programaciones", requireAuth, promocionesController.listarProgramaciones);
+router.patch("/programaciones/:programacionId", requireAuth, promocionesController.cambiarEstadoProgramacion);
+router.delete("/programaciones/:programacionId", requireAuth, promocionesController.eliminarProgramacion);
+router.post("/:id/programaciones", requireAuth, promocionesController.crearProgramacion);
+
 router.get("/", requireAuth, promocionesController.listar);
 router.post("/", requireAuth, promocionesController.crear);
 
