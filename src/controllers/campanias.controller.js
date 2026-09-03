@@ -11,6 +11,8 @@ import {
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
   elegirPorPrioridad,
+  listaDeEstadosCampania,
+  listaDeTipos,
   resolverEstadoCampania,
 } from "../lib/campanias.js";
 
@@ -147,6 +149,36 @@ function parsearPrioridad(body) {
   return body.prioridad;
 }
 
+/**
+ * Los dos flags de dónde se muestra el Doodle.
+ *
+ * Una clave AUSENTE significa "no la toques" y cae al valor que se le pase —
+ * el default en el alta, el valor actual en la edición. Mismo criterio que
+ * `parsearActivo` en `anuncios.controller.js`: interpretar un body sin la clave
+ * como `false` apagaría el flag en cualquier edición que solo cambie el nombre.
+ */
+function parsearFlagDoodle(body, campo, porDefecto) {
+  if (body?.[campo] === undefined) return porDefecto;
+  if (typeof body[campo] !== "boolean") {
+    throw httpError(400, `\`${campo}\` debe ser un booleano.`);
+  }
+  return body[campo];
+}
+
+/**
+ * `GET /api/campanias/opciones` — los diccionarios que consume el panel.
+ *
+ * **Va declarada ANTES de `/:id`**, si no Express matchea "opciones" como un id.
+ *
+ * Existe para que el frontend NO tenga copia de las listas de tipos y estados.
+ * Es el mismo criterio que `GET /ordenes/estados`, y el mismo motivo: un
+ * diccionario duplicado a mano falla MUDO — se agrega un tipo, el backend lo
+ * acepta, el `<select>` no lo ofrece, y ningún test se pone rojo.
+ */
+export function opciones(_req, res) {
+  res.json({ tipos: listaDeTipos(), estados: listaDeEstadosCampania() });
+}
+
 function idDeParams(req) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) throw httpError(404, "Campaña no encontrada.");
@@ -277,6 +309,8 @@ export async function crear(req, res, next) {
       tipo: parsearTipo(req.body),
       estado: parsearEstado(req.body?.estado ?? "BORRADOR"),
       prioridad: parsearPrioridad(req.body),
+      doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", true),
+      doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", false),
       ...parsearRango(req.body),
     };
 
@@ -307,6 +341,9 @@ export async function actualizar(req, res, next) {
       tipo: parsearTipo(req.body),
       estado: parsearEstado(req.body?.estado ?? actual.estado),
       prioridad: parsearPrioridad(req.body),
+      // Ausente = "no lo toques": cae al valor ACTUAL, no al default del alta.
+      doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", actual.doodleEnCatalogo),
+      doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", actual.doodleEnAdmin),
       ...parsearRango(req.body),
     };
 

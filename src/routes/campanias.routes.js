@@ -47,6 +47,10 @@ const limitadorLecturaPublica = crearLimitadorDeVelocidad({
 // vencida rompería el logo del catálogo.
 router.get("/activas", limitadorLecturaPublica, authOpcional, campaniasController.contextoActivo);
 
+// También antes de `/:id`: los diccionarios que consume el panel, para que el
+// frontend no tenga copia de las listas de tipos y estados.
+router.get("/opciones", requireAuth, campaniasController.opciones);
+
 router.get("/", requireAuth, campaniasController.listar);
 router.post("/", requireAuth, campaniasController.crear);
 

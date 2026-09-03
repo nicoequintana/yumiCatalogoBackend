@@ -405,6 +405,115 @@ describe("POST /api/campanias — validaciones", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("acepta los flags de dónde se muestra el Doodle", async () => {
+    // Sin esto los flags son una rama muerta: la columna existe, el filtro del
+    // backend la lee y ninguna ruta la puede escribir, así que `doodleAdmin`
+    // sale null para toda campaña que pueda existir.
+    campaniaMock.create.mockResolvedValue(fila());
+
+    await crear({ ...valida, doodleEnCatalogo: false, doodleEnAdmin: true });
+
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      doodleEnCatalogo: false,
+      doodleEnAdmin: true,
+    });
+  });
+
+  it("los flags del Doodle tienen default cuando no vienen", async () => {
+    campaniaMock.create.mockResolvedValue(fila());
+
+    await crear(valida);
+
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      doodleEnCatalogo: true,
+      doodleEnAdmin: false,
+    });
+  });
+
+  it("rechaza un flag que no es booleano", async () => {
+    const res = await crear({ ...valida, doodleEnAdmin: "si" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("PUT /api/campanias/:id — los flags del Doodle se pueden cambiar", () => {
+  it("actualizar escribe los dos flags", async () => {
+    campaniaMock.findUnique.mockResolvedValue(fila());
+    campaniaMock.update.mockResolvedValue(fila({ doodleEnAdmin: true }));
+
+    const res = await request(buildApp())
+      .put("/api/campanias/1")
+      .set("Authorization", authHeader)
+      .send({
+        nombre: "Primavera",
+        tipo: "ESTACIONAL",
+        desde: "2026-09-10",
+        hasta: "2026-09-20",
+        doodleEnCatalogo: false,
+        doodleEnAdmin: true,
+      });
+
+    expect(res.status).toBe(200);
+    expect(campaniaMock.update.mock.calls[0][0].data).toMatchObject({
+      doodleEnCatalogo: false,
+      doodleEnAdmin: true,
+    });
+  });
+
+  it("un flag ausente CONSERVA el valor actual, no cae al default", async () => {
+    // Un PUT que no menciona el flag no puede apagarlo: el panel manda el
+    // formulario entero, pero un llamador que solo cambie el nombre no tiene
+    // por qué resetear dónde se muestra el Doodle.
+    campaniaMock.findUnique.mockResolvedValue(fila({ doodleEnAdmin: true, doodleEnCatalogo: false }));
+    campaniaMock.update.mockResolvedValue(fila());
+
+    await request(buildApp())
+      .put("/api/campanias/1")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Otro", tipo: "OTRO", desde: "2026-09-10", hasta: "2026-09-20" });
+
+    expect(campaniaMock.update.mock.calls[0][0].data).toMatchObject({
+      doodleEnCatalogo: false,
+      doodleEnAdmin: true,
+    });
+  });
+});
+
+describe("GET /api/campanias/opciones — la fuente de los diccionarios", () => {
+  it("emite tipos y estados con su etiqueta", async () => {
+    // El panel NO tiene copia de estos diccionarios. Mismo criterio que
+    // `GET /ordenes/estados`: agregar un tipo se toca en un solo archivo.
+    const res = await request(buildApp())
+      .get("/api/campanias/opciones")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tipos).toContainEqual({ valor: "ESTACIONAL", etiqueta: "Estacional" });
+    expect(res.body.estados).toContainEqual({ valor: "HABILITADA", etiqueta: "Habilitada" });
+    expect(res.body.tipos).toHaveLength(6);
+    expect(res.body.estados).toHaveLength(3);
+  });
+
+  it("requiere auth: es una ruta del panel", async () => {
+    const res = await request(buildApp()).get("/api/campanias/opciones");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("NO se confunde con /:id — 'opciones' no se matchea como un id", async () => {
+    // La trampa clásica de Express. Si la ruta literal no va antes de /:id,
+    // `obtenerPorId` recibe "opciones", `Number(...)` da NaN y responde 404.
+    campaniaMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .get("/api/campanias/opciones")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(campaniaMock.findUnique).not.toHaveBeenCalled();
+  });
 });
 
 describe("PATCH /api/campanias/:id/estado — el ON/OFF manual", () => {

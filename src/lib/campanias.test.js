@@ -3,9 +3,12 @@ import { inicioDelDiaArgentino } from "./horarioArgentino.js";
 import {
   ESTADOS_CAMPANIA,
   ESTADOS_TEMPORALES,
+  ETIQUETA_TIPO,
   TIPOS_CAMPANIA,
   elegirPorPrioridad,
   estadoTemporal,
+  listaDeEstadosCampania,
+  listaDeTipos,
   resolverEstadoCampania,
 } from "./campanias.js";
 
@@ -155,6 +158,33 @@ describe("resolverEstadoCampania — las dos mitades juntas", () => {
   });
 });
 
+describe("los diccionarios que consume el panel", () => {
+  it("listaDeTipos emite valor + etiqueta de los seis tipos", () => {
+    // Es la fuente del <select> del formulario. Sin esto el frontend tiene que
+    // copiar la lista a mano, y agregar un tipo pasa a tocarse en dos lugares:
+    // el backend lo acepta y el panel no lo ofrece, sin ningún test rojo.
+    const tipos = listaDeTipos();
+
+    expect(tipos).toHaveLength(TIPOS_CAMPANIA.length);
+    expect(tipos[0]).toEqual({ valor: "ESTACIONAL", etiqueta: "Estacional" });
+  });
+
+  it("listaDeEstadosCampania emite valor + etiqueta de los tres estados", () => {
+    expect(listaDeEstadosCampania()).toEqual([
+      { valor: "BORRADOR", etiqueta: "Borrador" },
+      { valor: "HABILITADA", etiqueta: "Habilitada" },
+      { valor: "DESHABILITADA", etiqueta: "Deshabilitada" },
+    ]);
+  });
+
+  it("devuelven objetos NUEVOS en cada llamada", () => {
+    // El resultado viaja a serialización y a pantallas que podrían mutarlo; un
+    // llamador descuidado no puede envenenar la fuente para el resto del
+    // proceso. Mismo criterio que `listaDeEstados` en estadosOrden.js.
+    expect(listaDeTipos()[0]).not.toBe(listaDeTipos()[0]);
+  });
+});
+
 describe("elegirPorPrioridad — el recurso visual que solo admite uno", () => {
   it("gana la prioridad más alta", () => {
     const a = campaniaDePrueba({ id: 1, prioridad: 10 });
@@ -194,6 +224,13 @@ describe("las listas canónicas", () => {
   it("los estados administrativos son tres y los temporales otros tres", () => {
     expect(ESTADOS_CAMPANIA).toEqual(["BORRADOR", "HABILITADA", "DESHABILITADA"]);
     expect(ESTADOS_TEMPORALES).toEqual(["PROGRAMADA", "ACTIVA", "FINALIZADA"]);
+  });
+
+  it("TODO tipo tiene etiqueta, y no hay etiquetas sobrantes", () => {
+    // `ETIQUETA_TIPO` era código muerto: existía la casa única, estaba vacía, y
+    // el formulario del panel usaba una copia hecha a mano. Este test es lo que
+    // mantiene los dos diccionarios pegados.
+    expect(Object.keys(ETIQUETA_TIPO).sort()).toEqual([...TIPOS_CAMPANIA].sort());
   });
 
   it("los estados administrativos y los temporales no comparten ningún valor", () => {

@@ -58,7 +58,15 @@ export const ESTADOS_CAMPANIA = ["BORRADOR", "HABILITADA", "DESHABILITADA"];
  */
 export const ESTADOS_TEMPORALES = ["PROGRAMADA", "ACTIVA", "FINALIZADA"];
 
-/** Etiquetas legibles de los tipos, para el texto que ve una persona. */
+/**
+ * Etiquetas legibles de los tipos.
+ *
+ * **Es LA ÚNICA copia**, igual que las de estado: viajan por
+ * `GET /campanias/opciones` y el panel no tiene diccionario propio. Estuvo un
+ * rato sin ningún consumidor mientras el formulario usaba una copia hecha a
+ * mano — o sea, la casa única vacía y el espejo en uso. Hay un test que afirma
+ * que todo tipo tiene su etiqueta y que no sobra ninguna.
+ */
 export const ETIQUETA_TIPO = {
   ESTACIONAL: "Estacional",
   EVENTO_COMERCIAL: "Evento comercial",
@@ -87,6 +95,29 @@ export const ETIQUETA_ESTADO_TEMPORAL = {
   ACTIVA: "Activa",
   FINALIZADA: "Finalizada",
 };
+
+/**
+ * Los tipos con su etiqueta, en la forma que consume el `<select>` del panel.
+ *
+ * Existe por el mismo motivo que `listaDeEstados` en `estadosOrden.js`: sin
+ * este endpoint el frontend copia la lista a mano, y agregar un tipo pasa a
+ * tocarse en dos lugares con un modo de falla MUDO — el backend lo acepta y el
+ * panel no lo ofrece, sin que nada falle.
+ *
+ * Devuelve objetos NUEVOS en cada llamada: el resultado viaja a serialización y
+ * a pantallas que podrían mutarlo.
+ */
+export function listaDeTipos() {
+  return TIPOS_CAMPANIA.map((valor) => ({ valor, etiqueta: ETIQUETA_TIPO[valor] ?? valor }));
+}
+
+/** Ídem para el eje administrativo. */
+export function listaDeEstadosCampania() {
+  return ESTADOS_CAMPANIA.map((valor) => ({
+    valor,
+    etiqueta: ETIQUETA_ESTADO_CAMPANIA[valor] ?? valor,
+  }));
+}
 
 /**
  * El instante en que una campaña deja de estar vigente: la medianoche
