@@ -1,0 +1,30 @@
+import { Router } from "express";
+import * as promocionesController from "../controllers/promociones.controller.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
+import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
+
+const router = Router();
+
+/**
+ * ADMIN → Promociones. **Todo el módulo exige auth**: no hay ninguna lectura
+ * pública acá. Los descuentos que el catálogo necesita ya viajan resueltos en
+ * `GET /products`, así que un endpoint público de promociones solo agregaría
+ * superficie — y una de las peores, porque expone costo y coeficiente.
+ *
+ * ⚠️ `/productos` va ANTES de `/:id`: si no, Express matchea "productos" como
+ * un id. Mismo pisotón que evitan `/products/import` y `/campanias/activas`.
+ */
+router.get("/productos", requireAuth, promocionesController.listadoComercial);
+
+router.get("/", requireAuth, promocionesController.listar);
+router.post("/", requireAuth, promocionesController.crear);
+
+// También antes de `/:id`, por lo mismo.
+router.put("/:id/items", requireAuth, promocionesController.guardarItems);
+router.patch("/:id/items/:productId", requireAuth, promocionesController.cambiarEstadoItem);
+
+router.get("/:id", requireAuth, promocionesController.obtenerPorId);
+router.put("/:id", requireAuth, promocionesController.actualizar);
+router.delete("/:id", requireAuth, requierePermisoDeBorrado, promocionesController.eliminar);
+
+export default router;

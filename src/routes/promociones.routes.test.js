@@ -1,0 +1,472 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import request from "supertest";
+import express from "express";
+import jwt from "jsonwebtoken";
+import { manejadorDeErrores } from "../middlewares/errorHandler.js";
+
+process.env.JWT_SECRET = "test-secret";
+
+const promocionMock = {
+  findMany: vi.fn(),
+  findUnique: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+};
+const promocionItemMock = { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn(), update: vi.fn() };
+const productMock = { findMany: vi.fn(), count: vi.fn() };
+const ordenMock = { findMany: vi.fn() };
+const usuarioFindUniqueMock = vi.fn();
+const auditCreateMock = vi.fn();
+const transactionMock = vi.fn();
+
+vi.mock("../lib/prisma.js", () => ({
+  prisma: {
+    promocion: {
+      findMany: (...a) => promocionMock.findMany(...a),
+      findUnique: (...a) => promocionMock.findUnique(...a),
+      create: (...a) => promocionMock.create(...a),
+      update: (...a) => promocionMock.update(...a),
+      delete: (...a) => promocionMock.delete(...a),
+    },
+    promocionItem: {
+      findMany: (...a) => promocionItemMock.findMany(...a),
+      deleteMany: (...a) => promocionItemMock.deleteMany(...a),
+      createMany: (...a) => promocionItemMock.createMany(...a),
+      update: (...a) => promocionItemMock.update(...a),
+    },
+    product: {
+      findMany: (...a) => productMock.findMany(...a),
+      count: (...a) => productMock.count(...a),
+    },
+    orden: { findMany: (...a) => ordenMock.findMany(...a) },
+    usuario: { findUnique: (...a) => usuarioFindUniqueMock(...a) },
+    auditLog: { create: (...a) => auditCreateMock(...a) },
+    $transaction: (...a) => transactionMock(...a),
+  },
+}));
+
+const { default: promocionesRouter } = await import("./promociones.routes.js");
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use("/api/promociones", promocionesRouter);
+  app.use(manejadorDeErrores);
+  return app;
+}
+
+const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "test-secret", {
+  expiresIn: "3650d",
+});
+const authHeader = `Bearer ${token}`;
+
+function promo(extra = {}) {
+  return {
+    id: 3,
+    nombre: "Promo Hogar",
+    descripcion: null,
+    activa: true,
+    items: [
+      {
+        id: 1,
+        productId: 21,
+        porcentaje: 15,
+        habilitado: true,
+        product: { id: 21, nombre: "Velador LED", sku: "YIMA-1", precio: { toString: () => "20000" } },
+      },
+    ],
+    programaciones: [],
+    campanias: [],
+    createdAt: new Date("2026-09-01"),
+    updatedAt: new Date("2026-09-01"),
+    ...extra,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  auditCreateMock.mockResolvedValue({ id: 1 });
+  usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
+  // Defaults EXPLÍCITOS: `vi.clearAllMocks()` limpia las llamadas pero NO los
+  // `mockResolvedValue`, así que sin esto un test hereda la respuesta del
+  // anterior — y con una forma distinta, que es peor que sin respuesta.
+  promocionMock.findMany.mockResolvedValue([]);
+  promocionItemMock.findMany.mockResolvedValue([]);
+  promocionItemMock.deleteMany.mockResolvedValue({ count: 0 });
+  promocionItemMock.createMany.mockResolvedValue({ count: 0 });
+  productMock.findMany.mockResolvedValue([]);
+  productMock.count.mockResolvedValue(0);
+  ordenMock.findMany.mockResolvedValue([]);
+  transactionMock.mockImplementation(async (arg) =>
+    typeof arg === "function"
+      ? arg({
+          promocionItem: {
+            deleteMany: (...a) => promocionItemMock.deleteMany(...a),
+            createMany: (...a) => promocionItemMock.createMany(...a),
+          },
+        })
+      : Promise.all(arg),
+  );
+});
+
+describe("seguridad", () => {
+  it("TODAS las rutas exigen auth: es un módulo del panel entero", async () => {
+    const app = buildApp();
+    const rutas = [
+      ["get", "/api/promociones"],
+      ["get", "/api/promociones/productos"],
+      ["get", "/api/promociones/3"],
+      ["post", "/api/promociones"],
+      ["put", "/api/promociones/3"],
+      ["put", "/api/promociones/3/items"],
+      ["delete", "/api/promociones/3"],
+    ];
+
+    for (const [metodo, ruta] of rutas) {
+      const res = await request(app)[metodo](ruta);
+      expect(res.status, `${metodo.toUpperCase()} ${ruta}`).toBe(401);
+    }
+  });
+
+  it("eliminar exige además el permiso de borrado", async () => {
+    usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: false });
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .delete("/api/promociones/3")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(403);
+    expect(promocionMock.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/promociones", () => {
+  it("emite cada promoción con cuántos productos tiene y si está programada", async () => {
+    // Son las dos preguntas que se hacen mirando la lista: a cuántos alcanza, y
+    // si está haciendo algo hoy. Sin ellas hay que abrir cada una.
+    promocionMock.findMany.mockResolvedValue([promo()]);
+
+    const res = await request(buildApp()).get("/api/promociones").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      id: 3,
+      nombre: "Promo Hogar",
+      cantidadProductos: 1,
+      programada: false,
+    });
+  });
+
+  it("una promoción con programación vigente figura como programada", async () => {
+    promocionMock.findMany.mockResolvedValue([
+      promo({ programaciones: [{ id: 1, habilitada: true }] }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/promociones").set("Authorization", authHeader);
+
+    expect(res.body[0].programada).toBe(true);
+  });
+
+  it("NO emite los items en el listado", async () => {
+    // El listado es una grilla: traer todos los productos de todas las
+    // promociones sería un payload que crece sin techo. Están en el detalle.
+    promocionMock.findMany.mockResolvedValue([promo()]);
+
+    const res = await request(buildApp()).get("/api/promociones").set("Authorization", authHeader);
+
+    expect(res.body[0].items).toBeUndefined();
+  });
+});
+
+describe("GET /api/promociones/:id — el detalle", () => {
+  it("emite cada producto con su porcentaje y el precio resultante", async () => {
+    // El precio promocional se muestra en el panel para que el admin vea a
+    // cuánto queda ANTES de programar. Lo calcula el backend, no la pantalla.
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp()).get("/api/promociones/3").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items[0]).toMatchObject({
+      productId: 21,
+      nombre: "Velador LED",
+      porcentaje: 15,
+      precio: "20000",
+      precioPromocional: "17000",
+      habilitado: true,
+    });
+  });
+
+  it("una promoción inexistente da 404", async () => {
+    promocionMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/99")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("POST /api/promociones — validaciones", () => {
+  function crear(body) {
+    return request(buildApp()).post("/api/promociones").set("Authorization", authHeader).send(body);
+  }
+
+  it("crea con nombre", async () => {
+    promocionMock.create.mockResolvedValue(promo({ items: [] }));
+
+    const res = await crear({ nombre: "Promo Hogar" });
+
+    expect(res.status).toBe(201);
+    expect(auditCreateMock).toHaveBeenCalled();
+  });
+
+  it("rechaza el nombre vacío", async () => {
+    expect((await crear({ nombre: "  " })).status).toBe(400);
+  });
+
+  it("NO acepta fechas: las fechas son del calendario", async () => {
+    // Es el eje del módulo. Aceptar una fecha acá, aunque fuera para
+    // ignorarla, le enseñaría a un llamador que este endpoint programa.
+    const res = await crear({ nombre: "X", desde: "2026-09-01", hasta: "2026-09-30" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/calendario/i);
+  });
+});
+
+describe("PUT /api/promociones/:id/items — los productos y sus porcentajes", () => {
+  function guardar(items) {
+    return request(buildApp())
+      .put("/api/promociones/3/items")
+      .set("Authorization", authHeader)
+      .send({ items });
+  }
+
+  beforeEach(() => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+    promocionItemMock.deleteMany.mockResolvedValue({ count: 1 });
+    promocionItemMock.createMany.mockResolvedValue({ count: 2 });
+  });
+
+  it("guarda cada producto con SU porcentaje", async () => {
+    productMock.findMany.mockResolvedValue([{ id: 21 }, { id: 22 }]);
+
+    const res = await guardar([
+      { productId: 21, porcentaje: 10 },
+      { productId: 22, porcentaje: 20 },
+    ]);
+
+    expect(res.status).toBe(200);
+    const { data } = promocionItemMock.createMany.mock.calls[0][0];
+    expect(data).toEqual([
+      { promocionId: 3, productId: 21, porcentaje: 10 },
+      { promocionId: 3, productId: 22, porcentaje: 20 },
+    ]);
+  });
+
+  it("rechaza un porcentaje fuera del rango 5-50", async () => {
+    for (const invalido of [0, 4, 51, -10, 12.5]) {
+      const res = await guardar([{ productId: 21, porcentaje: invalido }]);
+      expect(res.status, `porcentaje: ${invalido}`).toBe(400);
+    }
+    expect(promocionItemMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un producto repetido", async () => {
+    // Cuál de los dos porcentajes gana no tendría respuesta. La base también lo
+    // impide con un unique, pero el 400 explica y el P2002 no.
+    const res = await guardar([
+      { productId: 21, porcentaje: 10 },
+      { productId: 21, porcentaje: 20 },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/repetido/i);
+  });
+
+  it("rechaza un producto que no existe", async () => {
+    productMock.findMany.mockResolvedValue([{ id: 21 }]);
+
+    const res = await guardar([
+      { productId: 21, porcentaje: 10 },
+      { productId: 999, porcentaje: 20 },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(promocionItemMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("reemplaza la lista COMPLETA en una transacción", async () => {
+    // Aplicada a medias dejaría una promoción con la mitad vieja y la mitad
+    // nueva, que es un descuento que nadie pidió.
+    productMock.findMany.mockResolvedValue([{ id: 21 }]);
+
+    await guardar([{ productId: 21, porcentaje: 10 }]);
+
+    expect(transactionMock).toHaveBeenCalled();
+    expect(promocionItemMock.deleteMany).toHaveBeenCalledWith({ where: { promocionId: 3 } });
+  });
+
+  it("una lista VACÍA es válida: deja la promoción sin productos", async () => {
+    productMock.findMany.mockResolvedValue([]);
+    // Vaciar una promoción es una operación legítima, y es distinta de
+    // borrarla: se conservan sus programaciones y su nombre.
+    const res = await guardar([]);
+
+    expect(res.status).toBe(200);
+    expect(promocionItemMock.deleteMany).toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/promociones/:id/items/:productId — el override del conflicto", () => {
+  it("apaga un producto dentro de una promoción sin tocar el resto", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+    promocionItemMock.findMany.mockResolvedValue([{ id: 1, promocionId: 3, productId: 21 }]);
+    promocionItemMock.update.mockResolvedValue({ id: 1, habilitado: false });
+
+    const res = await request(buildApp())
+      .patch("/api/promociones/3/items/21")
+      .set("Authorization", authHeader)
+      .send({ habilitado: false });
+
+    expect(res.status).toBe(200);
+    expect(promocionItemMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { habilitado: false } }),
+    );
+  });
+
+  it("rechaza un valor que no es booleano", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .patch("/api/promociones/3/items/21")
+      .set("Authorization", authHeader)
+      .send({ habilitado: "no" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/promociones/productos — el listado comercial", () => {
+  const FILA = {
+    id: 21,
+    sku: "YIMA-1",
+    nombre: "Velador LED",
+    precio: { toString: () => "20000" },
+    costo: { toString: () => "8000" },
+    coeficiente: { toString: () => "2.50" },
+    etiqueta: null,
+    visibleEnCatalogo: true,
+    stock: 4,
+    destacado: false,
+    vistas: 120,
+    compartidos: 2,
+    categoria: { id: 1, nombre: "Hogar" },
+    fotos: [{ id: 9, url: "https://res.cloudinary.com/x.png", orden: 0, cloudinaryPublicId: "x" }],
+    _count: { fotos: 1 },
+  };
+
+  beforeEach(() => {
+    productMock.findMany.mockResolvedValue([FILA]);
+    productMock.count.mockResolvedValue(1);
+  });
+
+  it("cruza vistas y VENTAS, que hoy ningún endpoint junta", async () => {
+    // Las ventas salen de agregar `Orden.items` en memoria: Prisma no sabe
+    // sumar la expresión `precioUnitario * cantidad`.
+    ordenMock.findMany.mockResolvedValue([
+      { estado: "ENTREGADA", items: [{ productId: 21, cantidad: 3, precioUnitario: "20000" }] },
+      { estado: "EN_PREPARACION", items: [{ productId: 21, cantidad: 1, precioUnitario: "20000" }] },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/productos")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      id: 21,
+      nombre: "Velador LED",
+      vistas: 120,
+      unidadesVendidas: 4,
+      costo: "8000",
+      coeficiente: "2.50",
+      precio: "20000",
+    });
+  });
+
+  it("una orden CANCELADA no cuenta como venta", async () => {
+    // Se afirma sobre el WHERE y no sobre el resultado: quien filtra las
+    // canceladas es la consulta, y en un test con Prisma mockeado el filtro no
+    // corre. Afirmar sobre el resultado sería un test que pasa por el mock, no
+    // por el código — de los que no pueden fallar cuando la regla se rompe.
+    await request(buildApp()).get("/api/promociones/productos").set("Authorization", authHeader);
+
+    const { where } = ordenMock.findMany.mock.calls[0][0];
+    expect(where.estado.in).toEqual(["EN_PREPARACION", "ENTREGADA"]);
+    expect(where.estado.in).not.toContain("CANCELADA");
+    expect(where.estado.in).not.toContain("PENDIENTE");
+  });
+
+  it("emite la conversión, para detectar mucha vista y poca venta", async () => {
+    // El §18 del pedido. Se resuelve con un número derivado, no con IA.
+    ordenMock.findMany.mockResolvedValue([
+      { estado: "ENTREGADA", items: [{ productId: 21, cantidad: 3, precioUnitario: "20000" }] },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/productos")
+      .set("Authorization", authHeader);
+
+    // 3 de 120 vistas = 2,5 %
+    expect(res.body.data[0].conversion).toBeCloseTo(2.5, 1);
+  });
+
+  it("sin vistas la conversión es null, NUNCA cero", async () => {
+    // Cero diría "nadie de los que lo vieron compró", y nadie lo vio. Es la
+    // misma distinción que `costoUnitario: null` vs. margen 0.
+    productMock.findMany.mockResolvedValue([{ ...FILA, vistas: 0 }]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/productos")
+      .set("Authorization", authHeader);
+
+    expect(res.body.data[0].conversion).toBeNull();
+  });
+
+  it("emite en qué promociones está cada producto", async () => {
+    promocionItemMock.findMany.mockResolvedValue([
+      { productId: 21, porcentaje: 15, promocion: { id: 3, nombre: "Promo Hogar" } },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/promociones/productos")
+      .set("Authorization", authHeader);
+
+    expect(res.body.data[0].promociones).toEqual([
+      { id: 3, nombre: "Promo Hogar", porcentaje: 15 },
+    ]);
+  });
+
+  it("devuelve el sobre paginado del proyecto", async () => {
+    const res = await request(buildApp())
+      .get("/api/promociones/productos")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toMatchObject({ page: 1, total: 1 });
+    expect(Array.isArray(res.body.data)).toBe(true);
+  });
+
+  it("las ventas se agregan SOLO sobre los productos de la página", async () => {
+    // Recorrer el histórico entero para pintar veinte filas sería traerse
+    // 20.000 órdenes en cada carga de la pantalla.
+    await request(buildApp()).get("/api/promociones/productos").set("Authorization", authHeader);
+
+    const { where } = ordenMock.findMany.mock.calls[0][0];
+    expect(where.items.some.productId).toEqual({ in: [21] });
+  });
+});
