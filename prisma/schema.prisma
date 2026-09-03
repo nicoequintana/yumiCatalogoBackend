@@ -175,6 +175,71 @@ model Anuncio {
   @@index([activo, orden])
 }
 
+/// Campaña comercial: define CUÁNDO está activa una experiencia comercial
+/// (Doodle en el logo, modal estacional, CTA) y, más adelante, qué promociones
+/// se aplican.
+///
+/// El estado de una campaña son DOS ejes distintos, y sólo uno se persiste:
+///
+///   - `estado`, el ADMINISTRATIVO, que el admin elige a mano;
+///   - el TEMPORAL (PROGRAMADA/ACTIVA/FINALIZADA), que sale de las fechas y
+///     NO tiene columna a propósito.
+///
+/// El temporal no se guarda por lo mismo que `estadoDePrecio` tampoco se
+/// guarda: una columna con ese estado se desincroniza sola al pasar la
+/// medianoche, sin ninguna escritura que la delate — y una campaña "ACTIVA" en
+/// la base pero vencida en el calendario no falla en ningún lado, simplemente
+/// le sigue mostrando el Doodle de Navidad a alguien en marzo. La única casa
+/// del cálculo es `src/lib/campanias.js`.
+///
+/// Los valores válidos de `tipo` y `estado` viven en ese mismo módulo:
+/// SQL Server vía Prisma no tiene enums, así que la columna es `VarChar` y
+/// quien valida es el código (mismo criterio que `Orden.estado`).
+model Campania {
+  id          Int     @id @default(autoincrement())
+  nombre      String  @db.NVarChar(120)
+  /// Nota interna del panel. Nunca sale al catálogo público.
+  descripcion String? @db.NVarChar(1000)
+  /// ESTACIONAL | EVENTO_COMERCIAL | FECHA_ESPECIAL | PROMOCIONAL | INSTITUCIONAL | OTRO
+  tipo        String  @db.VarChar(20)
+  /// BORRADOR | HABILITADA | DESHABILITADA — ver ESTADOS_CAMPANIA.
+  estado      String  @db.VarChar(20)
+
+  /// Los dos extremos del período, guardados como la medianoche ARGENTINA de
+  /// su día (los escribe `inicioDelDiaArgentino`). El fin es INCLUSIVO: una
+  /// campaña que termina el 20 vale durante todo el 20, incluidas las 21:00,
+  /// que en UTC ya son el 21. Esa extensión la resuelve `estadoTemporal`, no
+  /// la columna.
+  desde DateTime
+  hasta DateTime
+
+  /// Desempate para los recursos visuales que sólo admiten uno a la vez (el
+  /// logo es uno solo, aunque dos campañas se superpongan). Mayor gana.
+  ///
+  /// ⚠️ NO se usa para resolver conflictos de descuentos entre promociones:
+  /// esos se deciden a mano y por producto.
+  prioridad Int @default(0)
+
+  /// Doodle: el reemplazo temporal del logo. Sólo Cloudinary, mismo trío de
+  /// columnas que `Categoria.imagenUrl` y por el mismo motivo (poder borrar el
+  /// archivo remoto al reemplazarlo o quitarlo).
+  doodleUrl                    String?
+  doodleCloudinaryPublicId     String?
+  doodleCloudinaryResourceType String?
+  /// Dónde se aplica el Doodle. Son dos flags y no uno porque el catálogo y el
+  /// panel son públicos distintos: se puede querer la marca festiva de cara al
+  /// cliente sin cambiarle el logo a quien está laburando en el admin.
+  doodleEnCatalogo Boolean @default(true)
+  doodleEnAdmin    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // La consulta de vigencia es exactamente `where estado = ... and desde <= hoy
+  // and hasta >= hoy`.
+  @@index([estado, desde, hasta])
+}
+
 model Usuario {
   id           Int      @id @default(autoincrement())
   email        String   @unique
