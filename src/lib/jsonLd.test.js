@@ -154,3 +154,55 @@ describe("jsonLdColeccion", () => {
     });
   });
 });
+
+/**
+ * Guard de la coherencia de precio con los buscadores.
+ *
+ * Google compara el `offers.price` del structured data contra el precio VISIBLE
+ * en la página. Si difieren, quita el rich result — y en el peor caso lo trata
+ * como precio engañoso. Con promociones, el precio visible es el efectivo, así
+ * que el JSON-LD tiene que emitir ESE.
+ *
+ * Es la misma familia de reglas que el cloaking: lo que ve el buscador y lo que
+ * ve la persona tienen que ser lo mismo.
+ */
+describe("jsonLdProducto — precio con promoción activa", () => {
+  const base = {
+    id: 7,
+    nombre: "Termo mate",
+    descripcion: "Un termo",
+    sku: "YIMA-1",
+    precio: { toString: () => "20000" },
+    stock: 4,
+    especificaciones: [],
+  };
+  const opciones = { frontendUrl: "https://yima-productos.com", imagenes: [] };
+
+  it("sin promoción emite el precio de lista", () => {
+    const salida = jsonLdProducto(base, opciones);
+
+    expect(salida.offers.price).toBe("20000");
+  });
+
+  it("con promoción emite el precio EFECTIVO, no el de lista", () => {
+    // Es lo que la persona ve en la ficha. Emitir el de lista sería declararle
+    // a Google un precio que en la página no aparece por ningún lado.
+    const salida = jsonLdProducto(base, { ...opciones, precioEfectivo: "17000" });
+
+    expect(salida.offers.price).toBe("17000");
+  });
+
+  it("el precio efectivo viaja como STRING, nunca como number", () => {
+    // Un float publica un precio con cola de flotante en el resultado de
+    // búsqueda. Misma regla que ya cumple el precio de lista.
+    const salida = jsonLdProducto(base, { ...opciones, precioEfectivo: "17000" });
+
+    expect(typeof salida.offers.price).toBe("string");
+  });
+
+  it("un precio efectivo nulo cae al de lista, no rompe", () => {
+    const salida = jsonLdProducto(base, { ...opciones, precioEfectivo: null });
+
+    expect(salida.offers.price).toBe("20000");
+  });
+});

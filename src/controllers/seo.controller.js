@@ -6,6 +6,7 @@ import { jsonLdProducto, jsonLdBreadcrumb, jsonLdOrganizacion, jsonLdColeccion }
 import { parsearIdDeRuta, rutaProducto, rutaCategoria, slugify } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";
 import { cuerpoProducto } from "./seo.cuerpo.js";
+import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 
 /**
@@ -85,6 +86,18 @@ export async function servirSeoProducto(req, res, next) {
       ? truncarDescripcion(producto.fraseComercial, DESCRIPCION_MAX_LENGTH)
       : truncarDescripcion(producto.descripcion, DESCRIPCION_MAX_LENGTH);
 
+    // REGLA DE CLOAKING: lo que ve el crawler tiene que ser lo mismo que ve la
+    // persona. Con una promoción activa, la ficha muestra el precio tachado, el
+    // efectivo y el porcentaje — así que este HTML y su JSON-LD tienen que
+    // mostrar exactamente eso. Servirle el precio de lista a Google mientras la
+    // página muestra otro es la definición del problema que la regla evita.
+    const descuentos = await resolverDescuentos(prisma, [producto.id]);
+    const vigente = descuentos.get(producto.id) ?? null;
+    const efectivo = vigente ? precioConDescuento(producto.precio, vigente.porcentaje) : null;
+    const descuento = efectivo
+      ? { porcentaje: vigente.porcentaje, precioEfectivo: efectivo.toString() }
+      : null;
+
     const html = renderHtmlSeo({
       titulo: `${producto.nombre} — ${SITE_NAME}`,
       descripcion,
@@ -92,10 +105,14 @@ export async function servirSeoProducto(req, res, next) {
       imagen,
       tipoOg: "product",
       bloquesJsonLd: [
-        jsonLdProducto(producto, { frontendUrl, imagenes }),
+        jsonLdProducto(producto, {
+          frontendUrl,
+          imagenes,
+          precioEfectivo: descuento?.precioEfectivo ?? null,
+        }),
         jsonLdBreadcrumb(producto, { frontendUrl }),
       ],
-      cuerpo: cuerpoProducto(producto),
+      cuerpo: cuerpoProducto(producto, { descuento }),
     });
 
     res.status(200).type("html").send(html);

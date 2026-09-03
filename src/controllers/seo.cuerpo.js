@@ -1,4 +1,5 @@
 import { escapeHtml } from "../lib/htmlSeo.js";
+import { Decimal } from "@prisma/client/runtime/client.js";
 import { formatearMonto } from "../lib/plantillasEmail.js";
 
 /**
@@ -32,7 +33,24 @@ function porTipo(listas, tipo) {
   return (listas ?? []).filter((l) => l.tipo === tipo);
 }
 
-export function cuerpoProducto(producto) {
+/**
+ * Normaliza a `Decimal` lo que le llegue.
+ *
+ * `formatearMonto` llama a `.toFixed(0)`, que un string no tiene. El precio
+ * efectivo puede viajar como Decimal (desde el controller) o como string
+ * (desde un mapper ya serializado), y el HTML del crawler no puede explotar
+ * según por dónde entre.
+ */
+function aDecimal(valor) {
+  return valor instanceof Decimal ? valor : new Decimal(valor);
+}
+
+/**
+ * @param {object} producto
+ * @param {object} [opciones]
+ * @param {{porcentaje: number, precioEfectivo: string}|null} [opciones.descuento]
+ */
+export function cuerpoProducto(producto, { descuento = null } = {}) {
   const partes = [
     `<h1>${escapeHtml(producto.nombre)}</h1>`,
     producto.etiqueta ? `<p>Etiqueta: ${escapeHtml(producto.etiqueta)}</p>` : "",
@@ -42,7 +60,19 @@ export function cuerpoProducto(producto) {
     // aritmética con `Decimal` que usan los mails de órdenes — para que el
     // precio que ve el crawler coincida con el que muestra `FichaProducto.jsx`
     // ($45.000,00), no con el string crudo del `Decimal` ($45000.00).
-    `<p>Precio: ${escapeHtml(formatearMonto(producto.precio))}</p>`,
+    //
+    // ⚠️ REGLA DE CLOAKING. Con una promoción activa la ficha muestra el precio
+    // tachado, el efectivo y el porcentaje: el crawler tiene que ver LO MISMO.
+    // Servirle solo el de lista sería mostrarle al buscador un precio que en la
+    // página no existe — y servirle solo el efectivo, ocultarle que hay oferta.
+    descuento
+      ? `<p>Precio: <s>${escapeHtml(formatearMonto(producto.precio))}</s> ` +
+        // `aDecimal` y no el valor crudo: `formatearMonto` llama a `.toFixed(0)`,
+        // que un string no tiene. La primera versión pasó toda la suite en verde
+        // y tiró un 500 en el endpoint real por exactamente esto.
+        `${escapeHtml(formatearMonto(aDecimal(descuento.precioEfectivo)))} ` +
+        `(${descuento.porcentaje}% OFF)</p>`
+      : `<p>Precio: ${escapeHtml(formatearMonto(producto.precio))}</p>`,
     `<p>${producto.stock > 0 ? "Disponible" : "Sin stock"}</p>`,
     seccion("Descripción", parrafo(producto.descripcion)),
     seccion("Por qué lo vas a querer", parrafo(producto.porQueLoVasAQuerer)),

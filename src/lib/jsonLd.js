@@ -33,7 +33,14 @@ function absoluta(frontendUrl, ruta) {
   return `${frontendUrl}${ruta}`;
 }
 
-export function jsonLdProducto(producto, { frontendUrl, imagenes }) {
+/**
+ * @param {object} producto
+ * @param {object} opciones
+ * @param {string} opciones.frontendUrl
+ * @param {string[]} opciones.imagenes
+ * @param {string|null} [opciones.precioEfectivo] - el promocional, si hay promo
+ */
+export function jsonLdProducto(producto, { frontendUrl, imagenes, precioEfectivo = null }) {
   const url = absoluta(frontendUrl, rutaProducto(producto));
 
   // Google rechaza el rich result de `Product` que no declara `image` — un
@@ -58,7 +65,14 @@ export function jsonLdProducto(producto, { frontendUrl, imagenes }) {
       // cuántos decimales lleve depende de la escala del valor guardado (un
       // precio entero sale sin decimales, ej. `"45000"`); schema.org acepta
       // las dos formas.
-      price: producto.precio.toString(),
+      //
+      // ⚠️ Con una promoción activa sale el precio EFECTIVO, que es el que la
+      // persona ve en la ficha. Google compara este valor contra el precio
+      // visible de la página: si difieren quita el rich result, y en el peor
+      // caso lo trata como precio engañoso. Es la misma familia de reglas que
+      // el cloaking — lo que ve el buscador y lo que ve la persona tienen que
+      // ser lo mismo.
+      price: precioEfectivo ?? producto.precio.toString(),
       priceCurrency: MONEDA,
       availability: producto.stock > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
       itemCondition: "https://schema.org/NewCondition",
