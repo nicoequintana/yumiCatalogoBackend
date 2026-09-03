@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem, costoDeItem, sumarDecimales } from "../lib/dinero.js";
 import { ESTADOS_ORDEN, etiquetaDeEstado } from "../lib/estadosOrden.js";
-import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
+import { MS_POR_DIA, claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 
 export async function listarErrorLogs(req, res, next) {
   try {
@@ -113,8 +113,6 @@ const MAX_DIAS_PERIODO = 400;
  * sostenidas un año) y sigue siendo barato de reducir en O(n).
  */
 export const MAX_ORDENES_HISTORICO = 20000;
-
-const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /**
  * `Date` -> "YYYY-MM-DD" del día ARGENTINO, la misma clave que agrupa la serie

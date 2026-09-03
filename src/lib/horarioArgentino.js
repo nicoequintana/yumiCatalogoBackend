@@ -32,6 +32,17 @@
 export const DESFASE_ARGENTINA_MS = -3 * 60 * 60 * 1000;
 
 /**
+ * Milisegundos de un día.
+ *
+ * Vive acá y no en cada controller por el mismo motivo que el desfase: es una
+ * pieza de la definición de "día" del sistema. Estuvo escrita literal en tres
+ * archivos a la vez (`admin`, `adminClientes` y `adminOperacion`), sin que
+ * ninguno declarara ser espejo de los otros — la forma de duplicación que peor
+ * envejece, porque nadie sabe que existe hasta que hay que cambiarla.
+ */
+export const MS_POR_DIA = 24 * 60 * 60 * 1000;
+
+/**
  * Desplaza un instante a la hora de Argentina para poder leer sus partes con
  * los getters `getUTC*`.
  *

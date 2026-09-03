@@ -5,6 +5,7 @@ import { aClaveDia, parsearPeriodo } from "./admin.controller.js";
 // tablero de estancamiento se limita a los no terminales, y `ESTADOS_ORDEN`
 // fija las claves de la respuesta.
 import { ESTADOS_NO_TERMINALES, ESTADOS_ORDEN, listaDeEstados, etiquetaDeEstado } from "../lib/estadosOrden.js";
+import { MS_POR_DIA } from "../lib/horarioArgentino.js";
 
 /**
  * Días sin cambios a partir de los cuales una orden se considera estancada.
@@ -35,8 +36,6 @@ const TOP_STOCK = 20;
  * riesgo que la tienda no está comunicando, o al revés.
  */
 const STOCK_BAJO_MAXIMO = 3;
-
-const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /**
  * Días enteros transcurridos desde `fecha` hasta `ahora`, hacia abajo.

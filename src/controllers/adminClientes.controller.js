@@ -1,6 +1,7 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { prisma } from "../lib/prisma.js";
 import { totalDeItems } from "../lib/dinero.js";
+import { MS_POR_DIA } from "../lib/horarioArgentino.js";
 import {
   ESTADOS_FACTURABLES,
   MAX_ORDENES_HISTORICO,
@@ -41,8 +42,6 @@ const TOP_RANKING = 10;
  * público primero (lo consume su suite de tests).
  */
 export { MAX_ORDENES_HISTORICO };
-
-const MS_POR_DIA = 24 * 60 * 60 * 1000;
 
 /**
  * GET /api/admin/clientes-resumen — dashboard de clientes del panel admin.
