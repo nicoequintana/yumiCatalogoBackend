@@ -25,6 +25,7 @@ import {
   mapProductoParaN8n,
 } from "./products.mapper.js";
 import { resolverDescuentos } from "../lib/precioEfectivo.js";
+import { resolverEstadoCampania } from "../lib/campanias.js";
 import { enviarPedidoDeImagenes, estaConfigurado as n8nEstaConfigurado } from "../services/n8n.service.js";
 import {
   parseCaracteristicas,
@@ -216,12 +217,65 @@ export function parsearIdsListado(valor) {
   return ids;
 }
 
-function construirFiltrosListado(query, { esAdmin, ids }) {
+/**
+ * La VITRINA que se pidió por `?campania=ID`, o el veredicto de que no hay
+ * ninguna que mostrar.
+ *
+ * **La vigencia la decide `resolverEstadoCampania`, NO el `where` de la
+ * consulta.** Poner `campania: { estado: "HABILITADA" }` adentro del filtro de
+ * productos parece equivalente y no lo es: ignora las FECHAS, así que una
+ * campaña habilitada pero ya vencida seguiría listando su vitrina mientras el
+ * resto del sitio la da por terminada. Y meter las fechas en el `where` sería
+ * una TERCERA copia de la condición de vigencia — ya está en
+ * `lib/precioEfectivo.js` y en `campanias.controller.js`—, o sea tres lugares
+ * que se desincronizan sin que nada falle. La vigencia tiene una sola casa:
+ * `lib/campanias.js`.
+ *
+ * Los tres resultados posibles son tres cosas distintas y el llamador los
+ * distingue:
+ *
+ * - `undefined` — el parámetro no vino: el listado se comporta como siempre y
+ *   el sobre no gana ninguna clave;
+ * - `{ campania: null }` — se pidió una vitrina que no existe, no está activa o
+ *   ni siquiera es un id: la respuesta es VACÍA, nunca el catálogo entero;
+ * - `{ campania: {...}, campaniaId }` — hay vitrina y se filtra por ella.
+ *
+ * @param {unknown} valor - `req.query.campania`
+ * @param {Date} ahora
+ */
+async function resolverVitrina(valor, ahora) {
+  if (valor === undefined) return undefined;
+
+  // `Number.isInteger`, mismo criterio que `categoria`: un `?campania=1.5` o un
+  // array (`?campania=1&campania=2`) no puede llegar a Prisma, que espera un
+  // Int y responde con un 500 en un endpoint público.
+  const id = Number(valor);
+  if (!Number.isInteger(id) || id <= 0) return { campania: null };
+
+  const campania = await prisma.campania.findUnique({
+    where: { id },
+    // Lo mínimo: los dos campos que viajan al público más los tres que decide
+    // la lib. Este endpoint no tiene token, así que todo lo que se traiga de
+    // más es una fila de campaña esperando a filtrarse en una respuesta.
+    select: { id: true, nombre: true, estado: true, desde: true, hasta: true },
+  });
+  if (!campania || !resolverEstadoCampania(campania, ahora).activa) return { campania: null };
+
+  return { campania: { id: campania.id, nombre: campania.nombre }, campaniaId: campania.id };
+}
+
+function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   const where = {};
   if (!esAdmin) {
     where.visibleEnCatalogo = true;
     where.stock = { gt: 0 };
   }
+
+  // La vitrina COMPONE con las guardas públicas, nunca las reemplaza — misma
+  // regla que `ids`. Un producto oculto o agotado no puede aparecer en
+  // `/coleccion` por estar en la vitrina de una campaña: la campaña elige QUÉ
+  // exhibir, no cambia qué se puede publicar.
+  if (campaniaId !== undefined) where.campanias = { some: { campaniaId } };
 
   // `ids` se compone con el resto del `where`, no lo reemplaza: las guardas
   // públicas de visibilidad y stock tienen que seguir aplicando. Es lo que
@@ -314,15 +368,38 @@ export async function listar(req, res, next) {
   try {
     const esAdmin = esRequestDeAdmin(req);
     const ids = parsearIdsListado(req.query.ids);
+    const ahora = new Date();
+    const vitrina = await resolverVitrina(req.query.campania, ahora);
+
+    // Cortocircuito: se pidió una vitrina y no hay ninguna activa que mostrar.
+    // Devuelve VACÍO, no el catálogo entero: la pantalla necesita poder
+    // distinguir "esta vitrina no tiene nada" de "no hay catálogo", y caer al
+    // listado completo le mostraría al visitante productos que la campaña nunca
+    // eligió, bajo el título de la campaña.
+    if (vitrina?.campania === null) {
+      const { pageSize } = parsearPaginacion(req.query, { porDefecto: PAGE_SIZE_CATALOGO });
+      res.json({ data: [], page: 1, pageSize, total: 0, campania: null });
+      return;
+    }
 
     // Cortocircuito: se pidieron ids y ninguno quedó en pie. No hay nada que
     // consultar, y una consulta con `id: { in: [] }` sería un viaje perdido.
     if (ids !== null && ids.length === 0) {
-      res.json({ data: [], page: 1, pageSize: MAX_IDS_LISTADO, total: 0 });
+      res.json({
+        data: [],
+        page: 1,
+        pageSize: MAX_IDS_LISTADO,
+        total: 0,
+        ...(vitrina ? { campania: vitrina.campania } : {}),
+      });
       return;
     }
 
-    const where = construirFiltrosListado(req.query, { esAdmin, ids });
+    const where = construirFiltrosListado(req.query, {
+      esAdmin,
+      ids,
+      campaniaId: vitrina?.campaniaId,
+    });
     const orderBy = elegirOrden(req.query.orden);
 
     // Pedir por `ids` saltea la paginación a propósito: el llamador ya enumeró
@@ -338,7 +415,13 @@ export async function listar(req, res, next) {
       const data = productos.map((producto) =>
         mapProductoListado(producto, { esAdmin, descuento: descuentos.get(producto.id) ?? null }),
       );
-      res.json({ data, page: 1, pageSize: MAX_IDS_LISTADO, total: data.length });
+      res.json({
+        data,
+        page: 1,
+        pageSize: MAX_IDS_LISTADO,
+        total: data.length,
+        ...(vitrina ? { campania: vitrina.campania } : {}),
+      });
       return;
     }
 
@@ -367,6 +450,11 @@ export async function listar(req, res, next) {
       page,
       pageSize,
       total,
+      // `campania` es la PRIMERA clave aditiva de este sobre, y aparece SOLO
+      // cuando el parámetro vino. Emitirla siempre (aunque fuera `undefined`,
+      // que `res.json` descarta) rompería el contrato de cuatro claves que el
+      // resto del listado tiene fijado por test.
+      ...(vitrina ? { campania: vitrina.campania } : {}),
     });
   } catch (err) {
     next(err);
