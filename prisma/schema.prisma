@@ -288,6 +288,24 @@ model Campania {
   /// contando hacia el 21. Que a veces coincidan no los vuelve el mismo dato.
   modalFechaObjetivo DateTime?
 
+  /// Banner de la home: la franja que queda DESPUÉS de que el visitante cierra
+  /// el cartel. Es una superficie propia y no un reflejo del modal — una
+  /// campaña puede querer anunciarse sin interrumpir a nadie, o interrumpir sin
+  /// dejar franja. Por eso tiene interruptor y copy propios.
+  ///
+  /// El DESTINO no se duplica: el banner usa `modalCtaTipo` /
+  /// `modalCtaReferenciaId`, que son de la CAMPAÑA aunque el nombre diga
+  /// `modal`. Una campaña tiene un solo lugar a donde mandar. Los nombres se
+  /// conservan a propósito: renombrarlos es una migración de datos, rompe el
+  /// contrato con el editor y ensucia los `accion` históricos de `AuditLog`.
+  bannerEnHome   Boolean @default(false)
+  bannerTitulo   String? @db.NVarChar(120)
+  /// NVarChar(200) y no 1000 como `modalTexto`: el banner es una franja de una
+  /// o dos líneas dentro del flujo de la home, no una tarjeta a pantalla
+  /// completa.
+  bannerTexto    String? @db.NVarChar(200)
+  bannerCtaTexto String? @db.NVarChar(60)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
