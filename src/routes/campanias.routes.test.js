@@ -17,6 +17,14 @@ const campaniaMock = {
 };
 const promocionFindManyMock = vi.fn();
 const campaniaPromocionMock = { deleteMany: vi.fn(), createMany: vi.fn(), findMany: vi.fn() };
+const campaniaProductoMock = {
+  deleteMany: vi.fn(),
+  createMany: vi.fn(),
+  findMany: vi.fn(),
+  count: vi.fn(),
+};
+const productMock = { findMany: vi.fn(), findUnique: vi.fn() };
+const categoriaMock = { findUnique: vi.fn() };
 const transactionMock = vi.fn();
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
@@ -39,10 +47,21 @@ vi.mock("../lib/prisma.js", () => ({
       count: (...args) => campaniaMock.count(...args),
     },
     promocion: { findMany: (...a) => promocionFindManyMock(...a) },
+    product: {
+      findMany: (...a) => productMock.findMany(...a),
+      findUnique: (...a) => productMock.findUnique(...a),
+    },
+    categoria: { findUnique: (...a) => categoriaMock.findUnique(...a) },
     campaniaPromocion: {
       deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
       createMany: (...a) => campaniaPromocionMock.createMany(...a),
       findMany: (...a) => campaniaPromocionMock.findMany(...a),
+    },
+    campaniaProducto: {
+      deleteMany: (...a) => campaniaProductoMock.deleteMany(...a),
+      createMany: (...a) => campaniaProductoMock.createMany(...a),
+      findMany: (...a) => campaniaProductoMock.findMany(...a),
+      count: (...a) => campaniaProductoMock.count(...a),
     },
     $transaction: (...a) => transactionMock(...a),
     usuario: { findUnique: (...args) => usuarioFindUniqueMock(...args) },
@@ -94,10 +113,16 @@ function fila(extra = {}) {
     modalTitulo: null,
     modalTexto: null,
     modalCtaTexto: null,
-    modalCtaDestino: null,
+    modalCtaTipo: null,
+    modalCtaReferenciaId: null,
     modalFechaObjetivo: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
+    // El listado lo pide con `include`, así que Prisma SIEMPRE lo devuelve ahí.
+    // Va en el fixture base a propósito: las filas de crear/actualizar tampoco
+    // lo tendrían en producción, y tenerlo acá deja probado que `mapCampania`
+    // lo IGNORA en vez de filtrar un cero falso.
+    _count: { productos: 0 },
     ...extra,
   };
 }
@@ -109,10 +134,38 @@ function conModal(extra = {}) {
     modalTitulo: "Llega la primavera",
     modalTexto: "Faltan {dias} días para la Primavera.",
     modalCtaTexto: "Ver la selección",
-    modalCtaDestino: "/coleccion?etiqueta=primavera",
+    modalCtaTipo: "CATALOGO",
     modalFechaObjetivo: inicioDelDiaArgentino("2026-09-21"),
     ...extra,
   });
+}
+
+/**
+ * Una fila de producto tal como la trae la vitrina: envuelta en la fila de
+ * `CampaniaProducto`, con la portada ya recortada a una foto.
+ *
+ * `precio` se finge con un `toString` propio y NO con un número: un mapper que
+ * se olvide de serializarlo emitiría el objeto crudo, que en JSON sale `{}` —
+ * con un número el test pasaría igual y dejaría de poder atrapar el bug.
+ */
+function enVitrina(producto = {}) {
+  return {
+    product: {
+      id: 7,
+      nombre: "Termo Stanley",
+      sku: "YIMA-0007",
+      precio: { toString: () => "48000" },
+      visibleEnCatalogo: true,
+      stock: 5,
+      fotos: [{ id: 11, url: "https://res.cloudinary.com/demo/termo.webp" }],
+      ...producto,
+    },
+  };
+}
+
+/** La campaña como la devuelve el detalle: con sus dos relaciones cargadas. */
+function conDetalle({ productos = [], promociones = [], ...extra } = {}) {
+  return fila({ productos, promociones, ...extra });
 }
 
 beforeEach(() => {
@@ -128,12 +181,32 @@ beforeEach(() => {
   campaniaMock.findMany.mockResolvedValue([]);
   promocionFindManyMock.mockResolvedValue([]);
   campaniaPromocionMock.findMany.mockResolvedValue([]);
+  campaniaProductoMock.findMany.mockResolvedValue([]);
+  campaniaProductoMock.deleteMany.mockResolvedValue({ count: 0 });
+  campaniaProductoMock.createMany.mockResolvedValue({ count: 0 });
+  // La vitrina arranca VACÍA: el default del `count` es 0 para que el destino
+  // CAMPANIA caiga en `/coleccion` salvo que un test diga lo contrario.
+  campaniaProductoMock.count.mockResolvedValue(0);
+  productMock.findMany.mockResolvedValue([]);
+  // Las referencias del CTA arrancan INEXISTENTES: así, un test que espere que
+  // el destino resuelva tiene que decir explícitamente qué hay del otro lado.
+  productMock.findUnique.mockResolvedValue(null);
+  categoriaMock.findUnique.mockResolvedValue(null);
+  // El `tx` se arma a mano: sólo expone lo que los controllers usan adentro de
+  // la transacción. Un delegado que falte sale como "no es una función", que es
+  // más claro que un mock automático que devuelve `undefined` en silencio.
   transactionMock.mockImplementation(async (arg) =>
     typeof arg === "function"
       ? arg({
+          campania: { create: (...a) => campaniaMock.create(...a) },
           campaniaPromocion: {
             deleteMany: (...a) => campaniaPromocionMock.deleteMany(...a),
             createMany: (...a) => campaniaPromocionMock.createMany(...a),
+          },
+          campaniaProducto: {
+            deleteMany: (...a) => campaniaProductoMock.deleteMany(...a),
+            createMany: (...a) => campaniaProductoMock.createMany(...a),
+            findMany: (...a) => campaniaProductoMock.findMany(...a),
           },
         })
       : Promise.all(arg),
@@ -337,7 +410,7 @@ describe("GET /api/campanias/activas — el modal", () => {
       titulo: "Llega la primavera",
       texto: "Faltan {dias} días para la Primavera.",
       ctaTexto: "Ver la selección",
-      ctaDestino: "/coleccion?etiqueta=primavera",
+      ctaDestino: "/coleccion",
       // Estamos parados el 15/09 y el objetivo es el 21/09.
       diasFaltantes: 6,
       campaniaId: 1,
@@ -460,6 +533,185 @@ describe("GET /api/campanias/activas — el modal", () => {
   });
 });
 
+/**
+ * El corazón del cambio: la campaña guarda la INTENCIÓN y el backend arma la
+ * RUTA al leer.
+ *
+ * Antes se guardaba la ruta escrita a mano. Eso dejaba tres agujeros mudos: una
+ * categoría renombrada dejaba el botón apuntando a un slug que ya no existe, un
+ * `/coleccion?etiqueta=x` pasaba la validación aunque ninguna pantalla lee ese
+ * parámetro, y no había forma de saber si el destino seguía existiendo. Con la
+ * intención guardada, la ruta se resuelve contra la base en cada lectura: nunca
+ * puede apuntar a algo que ya no está.
+ */
+describe("GET /api/campanias/activas — el destino del CTA se RESUELVE al leer", () => {
+  async function modalDe(campania) {
+    campaniaMock.findMany.mockResolvedValue([campania]);
+    const res = await request(buildApp()).get("/api/campanias/activas");
+    return res.body.modal;
+  }
+
+  it("CATALOGO lleva a /coleccion SIN consultar nada", async () => {
+    // Es el destino que no depende de ningún dato: gastar una consulta en él
+    // sería pagar una ida a la base por cada carga de página del catálogo.
+    const modal = await modalDe(conModal({ modalCtaTipo: "CATALOGO" }));
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+    expect(categoriaMock.findUnique).not.toHaveBeenCalled();
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+    expect(campaniaProductoMock.count).not.toHaveBeenCalled();
+  });
+
+  it("CAMPANIA lleva a la vitrina cuando tiene algo que mostrar", async () => {
+    campaniaProductoMock.count.mockResolvedValue(1);
+
+    const modal = await modalDe(conModal({ id: 1, modalCtaTipo: "CAMPANIA" }));
+
+    expect(modal.ctaDestino).toBe("/coleccion?campania=1");
+  });
+
+  it("CAMPANIA con la vitrina VACÍA cae al catálogo, no a una grilla vacía", async () => {
+    // El cartel lo ve todo el mundo: mandar a una pantalla sin un solo producto
+    // es peor que no tener botón. Y "vacía" acá significa "sin nada PUBLICADO":
+    // una vitrina de productos ocultos o agotados se ve igual de vacía.
+    campaniaProductoMock.count.mockResolvedValue(0);
+
+    const modal = await modalDe(conModal({ id: 1, modalCtaTipo: "CAMPANIA" }));
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("CAMPANIA cuenta SOLO los productos visibles y con stock", async () => {
+    campaniaProductoMock.count.mockResolvedValue(1);
+
+    await modalDe(conModal({ id: 1, modalCtaTipo: "CAMPANIA" }));
+
+    expect(campaniaProductoMock.count.mock.calls[0][0]).toEqual({
+      where: { campaniaId: 1, product: { visibleEnCatalogo: true, stock: { gt: 0 } } },
+    });
+  });
+
+  it("CATEGORIA arma la ruta desde el NOMBRE de hoy, no desde un slug guardado", async () => {
+    // Éste es el bug que el cambio cierra: con la ruta persistida, renombrar la
+    // categoría dejaba el botón apuntando a un slug que ya no resuelve.
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "Hogar" });
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/coleccion/categoria/hogar");
+  });
+
+  it("CATEGORIA borrada cae al catálogo en vez de dejar el botón roto", async () => {
+    // La columna no lleva FK (ver el schema: SQL Server y el error 1785), así
+    // que un id colgado es un caso REAL y se degrada acá, en la lectura.
+    categoriaMock.findUnique.mockResolvedValue(null);
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 999 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("CATEGORIA sin slug posible cae al catálogo", async () => {
+    // `rutaCategoria` devuelve `null` cuando el nombre no deja slug: sin id en
+    // la ruta no hay fallback, y `/coleccion/categoria/` sería una URL rota.
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "***" });
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("PRODUCTO arma la ruta con id + slug", async () => {
+    productMock.findUnique.mockResolvedValue({
+      id: 12,
+      nombre: "Velador LED",
+      visibleEnCatalogo: true,
+    });
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 12 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/producto/12-velador-led");
+  });
+
+  it("PRODUCTO OCULTO cae al catálogo: su ficha pública da 404", async () => {
+    // Mandar ahí sería un botón roto. Un producto AGOTADO en cambio sigue
+    // teniendo ficha (con el badge "Agotado"), así que el stock no se mira acá.
+    productMock.findUnique.mockResolvedValue({
+      id: 12,
+      nombre: "Velador LED",
+      visibleEnCatalogo: false,
+    });
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 12 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("PRODUCTO agotado SÍ resuelve: su ficha existe", async () => {
+    productMock.findUnique.mockResolvedValue({
+      id: 12,
+      nombre: "Velador LED",
+      visibleEnCatalogo: true,
+      stock: 0,
+    });
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 12 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/producto/12-velador-led");
+  });
+
+  it("PRODUCTO borrado cae al catálogo", async () => {
+    productMock.findUnique.mockResolvedValue(null);
+
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 999 }),
+    );
+
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("sin tipo de destino no hay botón: ni texto ni destino", async () => {
+    // Un modal puede ser solo un aviso. Emitir un `ctaTexto` sin destino le
+    // haría dibujar a la pantalla un botón que no lleva a ningún lado.
+    const modal = await modalDe(conModal({ modalCtaTipo: null, modalCtaTexto: "Ver más" }));
+
+    expect(modal.ctaTexto).toBeNull();
+    expect(modal.ctaDestino).toBeNull();
+  });
+
+  it("con destino y SIN texto, el botón usa el texto por defecto", async () => {
+    // El default sale del backend (`CTA_TEXTO_POR_DEFECTO`) y no del
+    // formulario: es la regla 1 —el dato derivado viaja en la respuesta—, y así
+    // el panel no tiene una copia manual del string.
+    const modal = await modalDe(conModal({ modalCtaTipo: "CATALOGO", modalCtaTexto: null }));
+
+    expect(modal.ctaTexto).toBe("Ver más");
+    expect(modal.ctaDestino).toBe("/coleccion");
+  });
+
+  it("NO filtra la intención ni la referencia al público", async () => {
+    // El catálogo necesita la RUTA, no el modelo interno del panel.
+    const modal = await modalDe(
+      conModal({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+
+    expect(modal).not.toHaveProperty("modalCtaTipo");
+    expect(modal).not.toHaveProperty("modalCtaReferenciaId");
+  });
+});
+
 describe("POST /api/campanias — el destino del CTA", () => {
   const base = {
     nombre: "Primavera",
@@ -474,36 +726,34 @@ describe("POST /api/campanias — el destino del CTA", () => {
     return request(buildApp()).post("/api/campanias").set("Authorization", authHeader).send(body);
   }
 
-  it("acepta las rutas reales del sitio", async () => {
+  it("acepta los cuatro tipos de destino", async () => {
     campaniaMock.create.mockResolvedValue(conModal());
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "Hogar" });
+    productMock.findUnique.mockResolvedValue({ id: 12, nombre: "Velador", visibleEnCatalogo: true });
 
-    for (const destino of [
-      "/coleccion",
-      "/coleccion?etiqueta=primavera",
-      "/coleccion/categoria/hogar",
-      "/producto/12-velador-led",
-      "/favoritos",
-      "/",
-    ]) {
-      const res = await crear({ ...base, modalCtaDestino: destino });
-      expect(res.status, `destino: ${destino}`).toBe(201);
+    for (const modalCtaTipo of ["CAMPANIA", "CATALOGO", "CATEGORIA", "PRODUCTO"]) {
+      const res = await crear({ ...base, modalCtaTipo, modalCtaReferenciaId: 3 });
+      expect(res.status, `tipo: ${modalCtaTipo}`).toBe(201);
     }
   });
 
-  it("rechaza un destino EXTERNO", async () => {
-    // Un modal que ve todo el mundo es la superficie ideal para mandar tráfico
-    // a cualquier lado. El CTA navega DENTRO del sitio, punto.
-    const res = await crear({ ...base, modalCtaDestino: "https://otro-sitio.com" });
+  it("rechaza un tipo de destino fuera de la lista", async () => {
+    // Ya no hay URLs que validar: lo que se guarda es una intención de un
+    // conjunto cerrado, así que un valor inventado no puede entrar a la base.
+    const res = await crear({ ...base, modalCtaTipo: "SITIO_EXTERNO" });
 
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/destino/i);
     expect(campaniaMock.create).not.toHaveBeenCalled();
   });
 
-  it("rechaza javascript: y otras rutas que no son del sitio", async () => {
-    for (const destino of ["javascript:alert(1)", "//evil.com", "coleccion", "/catalogo/admin/productos"]) {
-      const res = await crear({ ...base, modalCtaDestino: destino });
-      expect(res.status, `destino: ${destino}`).toBe(400);
-    }
+  it("rechaza una URL en el tipo: el campo dejó de aceptar rutas", async () => {
+    // Guard del cambio de modelo. Un llamador viejo que mande la ruta que antes
+    // funcionaba tiene que fallar con un 400 explícito, no guardarla como tipo.
+    const res = await crear({ ...base, modalCtaTipo: "https://otro-sitio.com" });
+
+    expect(res.status).toBe(400);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
   });
 
   it("rechaza un modal activo sin título", async () => {
@@ -521,11 +771,102 @@ describe("POST /api/campanias — el destino del CTA", () => {
     expect(res.status).toBe(201);
   });
 
-  it("rechaza un CTA con texto pero sin destino", async () => {
-    // Un botón que no lleva a ningún lado.
-    const res = await crear({ ...base, modalCtaTexto: "Ver más", modalCtaDestino: null });
+  it("rechaza un CTA con texto pero sin tipo de destino", async () => {
+    // El invariante viejo era "texto ⇒ destino" con el destino como ruta. Ahora
+    // el destino es la INTENCIÓN, y un botón con texto que no lleva a ningún
+    // lado sigue siendo un botón roto.
+    const res = await crear({ ...base, modalCtaTexto: "Ver más", modalCtaTipo: null });
 
     expect(res.status).toBe(400);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("CATEGORIA sin referencia es un 400: no hay categoría a la que llevar", async () => {
+    const res = await crear({ ...base, modalCtaTipo: "CATEGORIA" });
+
+    expect(res.status).toBe(400);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("PRODUCTO sin referencia es un 400", async () => {
+    const res = await crear({ ...base, modalCtaTipo: "PRODUCTO" });
+
+    expect(res.status).toBe(400);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("CATEGORIA con un id que no existe es un 400 que NOMBRA la categoría", async () => {
+    // Se verifica al ESCRIBIR además de degradar al leer: guardar una campaña
+    // apuntando a algo que no existe es un error del panel, y decirlo en el
+    // momento es lo que evita publicar un cartel que ya nace roto.
+    categoriaMock.findUnique.mockResolvedValue(null);
+
+    const res = await crear({ ...base, modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 999 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/categor/i);
+    expect(campaniaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("PRODUCTO con un id que no existe es un 400 que NOMBRA el producto", async () => {
+    productMock.findUnique.mockResolvedValue(null);
+
+    const res = await crear({ ...base, modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 999 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/producto/i);
+  });
+
+  it("CATALOGO con una referencia la GUARDA en null", async () => {
+    // Una referencia con un tipo que no la usa no significa nada, y dejarla
+    // guardada haría que cambiar el tipo a CATEGORIA resucite un id viejo.
+    campaniaMock.create.mockResolvedValue(conModal());
+
+    const res = await crear({ ...base, modalCtaTipo: "CATALOGO", modalCtaReferenciaId: 7 });
+
+    expect(res.status).toBe(201);
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      modalCtaTipo: "CATALOGO",
+      modalCtaReferenciaId: null,
+    });
+    // Y no gastó una consulta verificando una referencia que no usa.
+    expect(categoriaMock.findUnique).not.toHaveBeenCalled();
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("CAMPANIA con una referencia también la guarda en null", async () => {
+    campaniaMock.create.mockResolvedValue(conModal());
+
+    await crear({ ...base, modalCtaTipo: "CAMPANIA", modalCtaReferenciaId: 7 });
+
+    expect(campaniaMock.create.mock.calls[0][0].data.modalCtaReferenciaId).toBeNull();
+  });
+
+  it("rechaza una referencia que no es un entero positivo", async () => {
+    for (const modalCtaReferenciaId of [0, -3, 2.5, "3"]) {
+      const res = await crear({ ...base, modalCtaTipo: "CATEGORIA", modalCtaReferenciaId });
+      expect(res.status, `referencia: ${modalCtaReferenciaId}`).toBe(400);
+    }
+  });
+
+  it("un PUT que no menciona el CTA CONSERVA el que estaba", async () => {
+    // Misma semántica que los flags del Doodle: clave ausente = "no la toques".
+    // Un llamador que solo cambie el nombre no puede borrarle el botón al cartel.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+    campaniaMock.update.mockResolvedValue(fila());
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "Hogar" });
+
+    await request(buildApp())
+      .put("/api/campanias/1")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Otro", tipo: "OTRO", desde: "2026-09-10", hasta: "2026-09-20" });
+
+    expect(campaniaMock.update.mock.calls[0][0].data).toMatchObject({
+      modalCtaTipo: "CATEGORIA",
+      modalCtaReferenciaId: 3,
+    });
   });
 
   it("guarda la fecha objetivo como la medianoche argentina de su día", async () => {
@@ -752,6 +1093,29 @@ describe("GET /api/campanias/opciones — la fuente de los diccionarios", () => 
     expect(res.body.estados).toHaveLength(3);
   });
 
+  it("emite además los destinos del CTA con su etiqueta", async () => {
+    const res = await request(buildApp())
+      .get("/api/campanias/opciones")
+      .set("Authorization", authHeader);
+
+    expect(res.body.destinos).toHaveLength(4);
+    expect(res.body.destinos).toContainEqual({
+      valor: "CAMPANIA",
+      etiqueta: "Los productos de la campaña",
+    });
+  });
+
+  it("emite el texto por defecto del botón, para que el panel no lo copie", async () => {
+    // Regla 1 de la metodología: el dato derivado viaja en la respuesta. El
+    // placeholder del editor no puede ser una copia manual de este string —
+    // divergiría sin error, sin test rojo y sin nada en pantalla.
+    const res = await request(buildApp())
+      .get("/api/campanias/opciones")
+      .set("Authorization", authHeader);
+
+    expect(res.body.ctaTextoPorDefecto).toBe("Ver más");
+  });
+
   it("requiere auth: es una ruta del panel", async () => {
     const res = await request(buildApp()).get("/api/campanias/opciones");
 
@@ -766,6 +1130,61 @@ describe("GET /api/campanias/opciones — la fuente de los diccionarios", () => 
     const res = await request(buildApp())
       .get("/api/campanias/opciones")
       .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(campaniaMock.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `GET /api/campanias/contador` — cuántos días faltan hasta una fecha.
+ *
+ * **El día lo cuenta el BACKEND, nunca el navegador.** `horarioArgentino.js` es
+ * la única definición de "día" del sistema: contarlo del lado del panel haría
+ * que alguien con el reloj mal puesto viera otro número, y que el preview del
+ * editor no coincida con lo que el cartel le muestra al visitante.
+ */
+describe("GET /api/campanias/contador", () => {
+  function contar(query) {
+    return request(buildApp())
+      .get(`/api/campanias/contador${query}`)
+      .set("Authorization", authHeader);
+  }
+
+  it("cuenta los días que faltan hasta la fecha pedida", async () => {
+    // La suite está parada el 15/09/2026.
+    const res = await contar("?hasta=2026-09-21");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ diasFaltantes: 6 });
+  });
+
+  it("el mismo día da cero, que es lo que permite decir '¡es hoy!'", async () => {
+    const res = await contar("?hasta=2026-09-15");
+
+    expect(res.body.diasFaltantes).toBe(0);
+  });
+
+  it("rechaza un formato de fecha que no sea AAAA-MM-DD", async () => {
+    // `new Date("21/09/2026")` no falla: devuelve una fecha plausible y
+    // equivocada. El formato se exige antes de tocar `Date`.
+    const res = await contar("?hasta=21/09/2026");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/AAAA-MM-DD/);
+  });
+
+  it("sin token responde 401: es una ruta del panel", async () => {
+    const res = await request(buildApp()).get("/api/campanias/contador?hasta=2026-09-21");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("NO se confunde con /:id — 'contador' no se matchea como un id", async () => {
+    // La trampa clásica de Express, la misma que ya cubre `/opciones`.
+    campaniaMock.findUnique.mockResolvedValue(null);
+
+    const res = await contar("?hasta=2026-09-21");
 
     expect(res.status).toBe(200);
     expect(campaniaMock.findUnique).not.toHaveBeenCalled();
@@ -843,6 +1262,23 @@ describe("POST /api/campanias/:id/duplicar", () => {
 
     const { data } = campaniaMock.create.mock.calls[0][0];
     expect(data.doodleCloudinaryPublicId).toBe("campanias/doodle");
+  });
+
+  it("copia el destino del CTA: tipo y referencia", async () => {
+    // `duplicar` enumera los campos a mano a propósito, así que una columna
+    // nueva NO se cuela sola — y por lo mismo, olvidarse de sumarla acá deja el
+    // duplicado sin botón sin que nada falle.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+    campaniaMock.create.mockResolvedValue(fila({ id: 2 }));
+
+    await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
+
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      modalCtaTipo: "CATEGORIA",
+      modalCtaReferenciaId: 3,
+    });
   });
 
   it("no arrastra el id ni los timestamps de la original", async () => {
@@ -1090,5 +1526,320 @@ describe("PUT /api/campanias/:id/promociones", () => {
     const res = await request(buildApp()).put("/api/campanias/1/promociones").send({ promocionIds: [] });
 
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Guard de la VITRINA: qué productos muestra una campaña.
+ *
+ * La regla que sostiene todo el bloque: la vitrina NO es una promoción. Un
+ * producto puede estar en la vitrina de Navidad a precio de lista — si listar
+ * productos exigiera un descuento, "Navidad" tendría que inventar rebajas que
+ * el negocio no quiso dar.
+ */
+describe("PUT /api/campanias/:id/productos", () => {
+  function asociar(productIds) {
+    return request(buildApp())
+      .put("/api/campanias/1/productos")
+      .set("Authorization", authHeader)
+      .send({ productIds });
+  }
+
+  beforeEach(() => {
+    campaniaMock.findUnique.mockResolvedValue(conDetalle({ productos: [enVitrina()] }));
+    productMock.findMany.mockResolvedValue([{ id: 7 }, { id: 8 }]);
+    campaniaProductoMock.createMany.mockResolvedValue({ count: 2 });
+  });
+
+  it("reemplaza la lista completa en una transacción", async () => {
+    const res = await asociar([7, 8]);
+
+    expect(res.status).toBe(200);
+    expect(campaniaProductoMock.deleteMany).toHaveBeenCalledWith({ where: { campaniaId: 1 } });
+    expect(campaniaProductoMock.createMany.mock.calls[0][0].data).toEqual([
+      { campaniaId: 1, productId: 7 },
+      { campaniaId: 1, productId: 8 },
+    ]);
+  });
+
+  it("una lista vacía desasocia todo, sin borrar ningún producto", async () => {
+    // Desasociar NO borra el producto: sigue en el catálogo, sólo deja de estar
+    // en la vitrina de esta campaña.
+    campaniaMock.findUnique.mockResolvedValue(conDetalle());
+
+    const res = await asociar([]);
+
+    expect(res.status).toBe(200);
+    expect(campaniaProductoMock.deleteMany).toHaveBeenCalled();
+    expect(campaniaProductoMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un producto que ya no existe, nombrándolo, y no escribe nada", async () => {
+    productMock.findMany.mockResolvedValue([{ id: 7 }]);
+
+    const res = await asociar([7, 999]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("999");
+    expect(campaniaProductoMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza ids repetidos", async () => {
+    // Asociar dos veces el mismo producto explota contra la PK compuesta como
+    // un P2002 que no explica nada.
+    const res = await asociar([7, 7]);
+
+    expect(res.status).toBe(400);
+    expect(campaniaProductoMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rechaza más de 200 productos", async () => {
+    const doscientosUno = Array.from({ length: 201 }, (_, i) => i + 1);
+
+    const res = await asociar(doscientosUno);
+
+    expect(res.status).toBe(400);
+    expect(campaniaProductoMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("sin token responde 401", async () => {
+    const res = await request(buildApp())
+      .put("/api/campanias/1/productos")
+      .send({ productIds: [] });
+
+    expect(res.status).toBe(401);
+  });
+
+  it("responde el DETALLE completo, con la portada de cada producto", async () => {
+    // Devolver sólo los ids obligaría al editor a un segundo GET para pintar la
+    // vitrina que acaba de guardar.
+    const res = await asociar([7]);
+
+    expect(res.body.productos).toEqual([
+      {
+        id: 7,
+        nombre: "Termo Stanley",
+        sku: "YIMA-0007",
+        precio: "48000",
+        fotoPortada: "https://res.cloudinary.com/demo/termo.webp",
+        visibleEnCatalogo: true,
+        stock: 5,
+      },
+    ]);
+  });
+
+  it("un producto sin fotos emite fotoPortada null, no un undefined que se pierde en el JSON", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ productos: [enVitrina({ fotos: [] })] }),
+    );
+
+    const res = await asociar([7]);
+
+    expect(res.body.productos[0].fotoPortada).toBeNull();
+  });
+
+  it("audita el cambio con los ids que se guardaron", async () => {
+    await asociar([7, 8]);
+
+    expect(auditCreateMock).toHaveBeenCalled();
+    const { data } = auditCreateMock.mock.calls[0][0];
+    expect(data.accion).toBe("ACTUALIZAR_PRODUCTOS");
+    expect(data.entidad).toBe("Campania");
+  });
+
+  it("una campaña inexistente da 404 antes de tocar la vitrina", async () => {
+    campaniaMock.findUnique.mockResolvedValue(null);
+
+    const res = await asociar([7]);
+
+    expect(res.status).toBe(404);
+    expect(campaniaProductoMock.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/campanias/:id — el detalle trae la vitrina", () => {
+  it("emite productos[] con la forma que consume el editor", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({
+        productos: [enVitrina()],
+        promociones: [{ promocion: { id: 3, nombre: "Liquidación" } }],
+      }),
+    );
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.promociones).toEqual([{ id: 3, nombre: "Liquidación" }]);
+    expect(res.body.productos).toEqual([
+      {
+        id: 7,
+        nombre: "Termo Stanley",
+        sku: "YIMA-0007",
+        precio: "48000",
+        fotoPortada: "https://res.cloudinary.com/demo/termo.webp",
+        visibleEnCatalogo: true,
+        stock: 5,
+      },
+    ]);
+  });
+
+  it("una campaña sin vitrina emite un array vacío, no la clave ausente", async () => {
+    campaniaMock.findUnique.mockResolvedValue(conDetalle());
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.productos).toEqual([]);
+  });
+
+  it("una campaña inexistente da 404", async () => {
+    campaniaMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .get("/api/campanias/99")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("emite la intención del CTA cruda, que es lo que el editor edita", async () => {
+    // El PANEL recibe el modelo (tipo + id); el CATÁLOGO recibe la ruta ya
+    // resuelta. Son dos formas distintas del mismo dato a propósito: un
+    // `<select>` no puede editar una ruta armada.
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "Hogar" });
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toMatchObject({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 });
+  });
+
+  it("suma el NOMBRE de la referencia, para que el editor muestre qué eligió", async () => {
+    // Sin el nombre el formulario mostraría "categoría 3", o tendría que pedir
+    // el catálogo entero de categorías para traducir un id.
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 3 }),
+    );
+    categoriaMock.findUnique.mockResolvedValue({ id: 3, nombre: "Hogar" });
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.modalCtaReferencia).toEqual({ id: 3, nombre: "Hogar" });
+  });
+
+  it("con una referencia que ya no existe emite null, no un id colgado", async () => {
+    categoriaMock.findUnique.mockResolvedValue(null);
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ modalCtaTipo: "CATEGORIA", modalCtaReferenciaId: 999 }),
+    );
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.modalCtaReferencia).toBeNull();
+  });
+
+  it("un destino sin referencia emite la clave en null, sin consultar nada", async () => {
+    campaniaMock.findUnique.mockResolvedValue(conDetalle({ modalCtaTipo: "CATALOGO" }));
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toHaveProperty("modalCtaReferencia", null);
+    expect(categoriaMock.findUnique).not.toHaveBeenCalled();
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("con tipo PRODUCTO la referencia sale del producto", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ modalCtaTipo: "PRODUCTO", modalCtaReferenciaId: 12 }),
+    );
+    productMock.findUnique.mockResolvedValue({ id: 12, nombre: "Velador LED" });
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.modalCtaReferencia).toEqual({ id: 12, nombre: "Velador LED" });
+    expect(categoriaMock.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe("la vitrina en el duplicado y en el listado", () => {
+  it("duplicar COPIA la vitrina con el id nuevo", async () => {
+    campaniaMock.findUnique.mockResolvedValue(fila());
+    campaniaMock.create.mockResolvedValue(fila({ id: 2, estado: "BORRADOR" }));
+    campaniaProductoMock.findMany.mockResolvedValue([{ productId: 7 }, { productId: 8 }]);
+
+    const res = await request(buildApp())
+      .post("/api/campanias/1/duplicar")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(201);
+    expect(campaniaProductoMock.createMany.mock.calls[0][0].data).toEqual([
+      { campaniaId: 2, productId: 7 },
+      { campaniaId: 2, productId: 8 },
+    ]);
+  });
+
+  it("duplicar una campaña sin vitrina no escribe filas de más", async () => {
+    campaniaMock.findUnique.mockResolvedValue(fila());
+    campaniaMock.create.mockResolvedValue(fila({ id: 2 }));
+    campaniaProductoMock.findMany.mockResolvedValue([]);
+
+    await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
+
+    expect(campaniaProductoMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("duplicar NO copia las promociones — es deliberado", async () => {
+    // El duplicado nace en BORRADOR para armar la campaña del año que viene:
+    // arrastrarle los descuentos del año pasado sería decidir plata por el admin.
+    campaniaMock.findUnique.mockResolvedValue(fila());
+    campaniaMock.create.mockResolvedValue(fila({ id: 2 }));
+    campaniaProductoMock.findMany.mockResolvedValue([{ productId: 7 }]);
+
+    await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
+
+    expect(campaniaPromocionMock.createMany).not.toHaveBeenCalled();
+  });
+
+  it("el listado emite cantidadProductos, contada por la base", async () => {
+    // El panel no puede contar una relación que el listado no trae: son N
+    // consultas para pintar una grilla. El `_count` la resuelve en la misma.
+    campaniaMock.findMany.mockResolvedValue([fila({ _count: { productos: 4 } })]);
+
+    const res = await request(buildApp()).get("/api/campanias").set("Authorization", authHeader);
+
+    expect(campaniaMock.findMany.mock.calls[0][0].include).toEqual({
+      _count: { select: { productos: true } },
+    });
+    expect(res.body[0].cantidadProductos).toBe(4);
+  });
+
+  it("crear NO emite cantidadProductos: su fila no tiene _count y saldría un cero falso", async () => {
+    // `mapCampania` lo comparten crear/actualizar/cambiarEstado/duplicar/doodle,
+    // que escriben sin `_count`. Emitir la clave ahí devolvería 0 para una
+    // campaña con productos y la pantalla mostraría un cero que no es cierto.
+    campaniaMock.create.mockResolvedValue(fila({ id: 5 }));
+
+    const res = await request(buildApp())
+      .post("/api/campanias")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Navidad", tipo: "ESTACIONAL", desde: "2026-12-01", hasta: "2026-12-25" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).not.toHaveProperty("cantidadProductos");
   });
 });

@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
+import { exigirIdsExistentes } from "../lib/idsExistentes.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
@@ -263,23 +264,7 @@ export async function guardarItems(req, res, next) {
       throw httpError(400, "Hay un producto repetido en la lista.");
     }
 
-    if (ids.length > 0) {
-      const existentes = await prisma.product.findMany({
-        where: { id: { in: ids } },
-        select: { id: true },
-      });
-      // Se nombra el que falta en vez de comparar largos: el mensaje sirve
-      // para algo, y no depende de que la consulta devuelva exactamente el
-      // conjunto pedido.
-      const presentes = new Set(existentes.map((p) => p.id));
-      const faltantes = ids.filter((id) => !presentes.has(id));
-      if (faltantes.length > 0) {
-        throw httpError(
-          400,
-          `Estos productos ya no existen: ${faltantes.join(", ")}. Recargá la pantalla.`,
-        );
-      }
-    }
+    await exigirIdsExistentes(prisma.product, ids, { entidad: "Estos productos" });
 
     await prisma.$transaction(async (tx) => {
       await tx.promocionItem.deleteMany({ where: { promocionId: id } });

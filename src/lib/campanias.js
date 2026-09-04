@@ -97,6 +97,43 @@ export const ETIQUETA_ESTADO_TEMPORAL = {
 };
 
 /**
+ * A dónde puede llevar el botón del modal — la INTENCIÓN, no la ruta.
+ *
+ * La columna guardaba antes el CÓMO: una ruta escrita a mano y validada contra
+ * una whitelist de regex sincronizada con `frontend/src/App.jsx`. Eso tenía tres
+ * modos de falla mudos: la ruta de categoría no verificaba que la categoría
+ * existiera ni sobrevivía a un rename, `/coleccion?etiqueta=x` pasaba la
+ * validación aunque `Coleccion.jsx` nunca lea `etiqueta` (el botón caía en el
+ * catálogo entero), y quien opera el panel tenía que tipear una URL.
+ *
+ * Guardando el QUÉ, la ruta la arma el backend AL LEER: siempre apunta a algo
+ * que existe hoy, y un renombre de categoría se refleja solo.
+ */
+export const TIPOS_DESTINO_CTA = ["CAMPANIA", "CATALOGO", "CATEGORIA", "PRODUCTO"];
+
+/**
+ * Etiquetas de los destinos. Como las de tipo y estado, **es LA ÚNICA copia**:
+ * viajan por `GET /campanias/opciones` y el panel no tiene diccionario propio.
+ * Hay un test que afirma que todo destino tiene su etiqueta y que no sobra
+ * ninguna.
+ */
+export const ETIQUETA_DESTINO_CTA = {
+  CAMPANIA: "Los productos de la campaña",
+  CATALOGO: "Todo el catálogo",
+  CATEGORIA: "Una categoría",
+  PRODUCTO: "Un producto",
+};
+
+/**
+ * El texto del botón cuando el admin no escribió ninguno.
+ *
+ * Vive acá y no en el formulario porque el placeholder del editor no puede ser
+ * una copia manual de este string: es la regla 1 de la metodología —el dato
+ * derivado viaja en la respuesta—, y por eso `GET /campanias/opciones` lo emite.
+ */
+export const CTA_TEXTO_POR_DEFECTO = "Ver más";
+
+/**
  * Los tipos con su etiqueta, en la forma que consume el `<select>` del panel.
  *
  * Existe por el mismo motivo que `listaDeEstados` en `estadosOrden.js`: sin
@@ -116,6 +153,14 @@ export function listaDeEstadosCampania() {
   return ESTADOS_CAMPANIA.map((valor) => ({
     valor,
     etiqueta: ETIQUETA_ESTADO_CAMPANIA[valor] ?? valor,
+  }));
+}
+
+/** Ídem para los destinos del CTA. */
+export function listaDeDestinosCta() {
+  return TIPOS_DESTINO_CTA.map((valor) => ({
+    valor,
+    etiqueta: ETIQUETA_DESTINO_CTA[valor] ?? valor,
   }));
 }
 

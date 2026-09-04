@@ -51,6 +51,10 @@ router.get("/activas", limitadorLecturaPublica, authOpcional, campaniasControlle
 // frontend no tenga copia de las listas de tipos y estados.
 router.get("/opciones", requireAuth, campaniasController.opciones);
 
+// Ídem: cuántos días faltan hasta una fecha. El día lo cuenta el BACKEND, que
+// es el único que tiene la definición de "día" del sistema.
+router.get("/contador", requireAuth, campaniasController.contador);
+
 router.get("/", requireAuth, campaniasController.listar);
 router.post("/", requireAuth, campaniasController.crear);
 
@@ -60,6 +64,10 @@ router.patch("/:id/estado", requireAuth, campaniasController.cambiarEstado);
 // Qué promociones aplica la campaña mientras está activa. Apagar la campaña las
 // apaga a todas de una: la vigencia la heredan de acá, no la guardan.
 router.put("/:id/promociones", requireAuth, campaniasController.guardarPromociones);
+// La VITRINA: qué productos MUESTRA la campaña. Es una lista distinta de la de
+// promociones y no un subconjunto suyo — un producto puede estar en la vitrina
+// de Navidad a precio de lista.
+router.put("/:id/productos", requireAuth, campaniasController.guardarProductos);
 router.put("/:id/doodle", requireAuth, uploadDoodle.single("doodle"), campaniasController.guardarDoodle);
 router.delete("/:id/doodle", requireAuth, campaniasController.quitarDoodle);
 

@@ -1,6 +1,6 @@
 import { totalDeItems } from "../lib/dinero.js";
 import { etiquetaDeEstado } from "../lib/estadosOrden.js";
-import { urlDeFoto } from "./products.mapper.js";
+import { urlDeFoto } from "../lib/fotos.js";
 
 /**
  * Forma de respuesta de una orden.

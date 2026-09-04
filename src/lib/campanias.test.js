@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { inicioDelDiaArgentino } from "./horarioArgentino.js";
 import {
+  CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   ESTADOS_TEMPORALES,
+  ETIQUETA_DESTINO_CTA,
   ETIQUETA_TIPO,
   TIPOS_CAMPANIA,
+  TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
   estadoTemporal,
+  listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
   resolverEstadoCampania,
@@ -182,6 +186,36 @@ describe("los diccionarios que consume el panel", () => {
     // llamador descuidado no puede envenenar la fuente para el resto del
     // proceso. Mismo criterio que `listaDeEstados` en estadosOrden.js.
     expect(listaDeTipos()[0]).not.toBe(listaDeTipos()[0]);
+  });
+
+  it("listaDeDestinosCta emite valor + etiqueta de los cuatro destinos", () => {
+    // Es la fuente del `<select>` de "¿a dónde lleva el botón?". El panel no
+    // tiene copia: sin este diccionario, agregar un destino se toca en dos
+    // lugares y el modo de falla es MUDO — el backend lo acepta y el
+    // formulario no lo ofrece.
+    const destinos = listaDeDestinosCta();
+
+    expect(destinos).toHaveLength(TIPOS_DESTINO_CTA.length);
+    expect(destinos).toEqual([
+      { valor: "CAMPANIA", etiqueta: "Los productos de la campaña" },
+      { valor: "CATALOGO", etiqueta: "Todo el catálogo" },
+      { valor: "CATEGORIA", etiqueta: "Una categoría" },
+      { valor: "PRODUCTO", etiqueta: "Un producto" },
+    ]);
+  });
+
+  it("listaDeDestinosCta devuelve objetos NUEVOS en cada llamada", () => {
+    expect(listaDeDestinosCta()[0]).not.toBe(listaDeDestinosCta()[0]);
+  });
+
+  it("TODO destino tiene etiqueta, y no hay etiquetas sobrantes", () => {
+    expect(Object.keys(ETIQUETA_DESTINO_CTA).sort()).toEqual([...TIPOS_DESTINO_CTA].sort());
+  });
+
+  it("el texto por defecto del botón es un string no vacío", () => {
+    // Viaja al panel por `GET /campanias/opciones` para que el placeholder del
+    // editor NO sea una copia manual de este string.
+    expect(CTA_TEXTO_POR_DEFECTO).toBe("Ver más");
   });
 });
 

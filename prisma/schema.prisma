@@ -61,6 +61,9 @@ model Product {
   itemsOrden         ItemOrden[]
   /// En qué promociones participa, con su porcentaje propio en cada una.
   itemsPromocion     PromocionItem[]
+  /// En qué vitrinas de campaña aparece. NO implica descuento: un producto
+  /// puede estar en la vitrina de Navidad a precio de lista.
+  campanias          CampaniaProducto[]
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -238,6 +241,12 @@ model Campania {
   /// campaña las apaga a todas de una.
   promociones CampaniaPromocion[]
 
+  /// La VITRINA: qué productos muestra la campaña. Es una lista explícita y
+  /// SEPARADA de las promociones porque son dos preguntas distintas —"qué
+  /// muestro" y "qué descuento"— y Navidad necesita la primera sin la segunda:
+  /// los productos navideños se exhiben tengan o no rebaja.
+  productos   CampaniaProducto[]
+
   /// Modal estacional del catálogo público. `modalActivo` es el interruptor:
   /// una campaña puede estar activa por su Doodle y no querer interrumpir a
   /// nadie con un cartel.
@@ -245,10 +254,34 @@ model Campania {
   modalTitulo     String? @db.NVarChar(120)
   modalTexto      String? @db.NVarChar(1000)
   modalCtaTexto   String? @db.NVarChar(60)
-  /// Ruta INTERNA del sitio (`/coleccion`, `/coleccion/categoria/x`, …). Se
-  /// valida en el controller: un destino roto en un modal que se le muestra a
-  /// todo el mundo es peor que no tener modal.
-  modalCtaDestino String? @db.NVarChar(200)
+  /// A dónde lleva el botón: la INTENCIÓN, no la ruta.
+  ///
+  /// CAMPANIA | CATALOGO | CATEGORIA | PRODUCTO — la lista ejecutable vive en
+  /// `lib/campanias.js` (`TIPOS_DESTINO_CTA`), igual que `tipo` y `estado`.
+  /// `null` significa "el modal no lleva botón".
+  ///
+  /// Reemplazó a `modalCtaDestino`, que guardaba una ruta escrita a mano: esa
+  /// ruta no verificaba que la categoría existiera, no sobrevivía a un rename y
+  /// aceptaba querystrings que ninguna pantalla lee. La ruta ahora la ARMA el
+  /// backend al leer (`resolverDestinoCta`), así que siempre apunta a algo que
+  /// existe hoy.
+  modalCtaTipo String? @db.VarChar(20)
+  /// A QUÉ categoría o producto apunta el botón, según `modalCtaTipo`. Sólo
+  /// tiene sentido con CATEGORIA y PRODUCTO; con los otros tipos se fuerza a
+  /// `null`.
+  ///
+  /// ⚠️ **SIN FK, y es deliberado.** SQL Server trata `ON DELETE SET NULL` como
+  /// una acción de cascada más: una FK `Product → Campania (SET NULL)` sumada a
+  /// las dos que ya existen (`Campania → CampaniaProducto` y
+  /// `Product → CampaniaProducto`, las dos CASCADE) abriría dos caminos desde
+  /// `Product` hasta `CampaniaProducto` y la creación fallaría con el error
+  /// 1785. El razonamiento completo está anotado en
+  /// `prisma/migrations/20260904000000_agregar_vitrina_campania/migration.sql`.
+  ///
+  /// La integridad se resuelve en las dos puntas y no con una constraint: la
+  /// ESCRITURA exige que la referencia exista (`exigirReferenciaCta`) y la
+  /// LECTURA degrada a `/coleccion` si quedó colgada.
+  modalCtaReferenciaId Int?
   /// El día al que apunta el contador ("Faltan 18 días para la Primavera").
   /// Es SEPARADO de `hasta` a propósito: la campaña de Navidad corre del 25/11
   /// al 25/12 pero puede contar hacia el 25/12, y la de Primavera termina el 21
@@ -358,6 +391,29 @@ model CampaniaPromocion {
 
   @@id([campaniaId, promocionId])
   @@index([promocionId])
+}
+
+/// Producto DENTRO de la vitrina de una campaña: qué productos muestra.
+///
+/// Resuelve una pregunta que las promociones NO contestan. Una promoción define
+/// un descuento; la vitrina define una selección. "Navidad" quiere exhibir todos
+/// los productos navideños tengan o no rebaja, y con solo `CampaniaPromocion` la
+/// única forma de listarlos sería inventarles un descuento del 5 %.
+///
+/// Es una asociación PURA: no lleva porcentaje, ni orden, ni flag propio. Todo
+/// lo que se sepa del producto se lee del producto, y todo lo que se sepa de la
+/// vigencia se lee de la campaña. Una columna acá sería un tercer lugar donde
+/// guardar algo que ya tiene dueño.
+model CampaniaProducto {
+  campaniaId Int
+  campania   Campania @relation(fields: [campaniaId], references: [id], onDelete: Cascade)
+  productId  Int
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([campaniaId, productId])
+  @@index([productId])
 }
 
 model Usuario {

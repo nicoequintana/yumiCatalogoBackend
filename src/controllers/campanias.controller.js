@@ -1,16 +1,22 @@
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
+import { exigirIdsExistentes } from "../lib/idsExistentes.js";
+import { urlDeFoto } from "../lib/fotos.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
+import { rutaCategoria, rutaProducto } from "../lib/slug.js";
 import {
+  CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
+  TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
+  listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
   resolverEstadoCampania,
@@ -24,35 +30,28 @@ import {
  */
 export const LARGO_MAX_NOMBRE = 120;
 
+/**
+ * Tope de productos en la vitrina de una campaña. De producto, no técnico —
+ * mismo criterio y mismo número que `MAX_ITEMS_PROMOCION`: una vitrina de más
+ * de 200 productos no es una selección, es el catálogo entero.
+ */
+export const MAX_PRODUCTOS_CAMPANIA = 200;
+
 /** Espejan `@db.NVarChar(...)` de las columnas del modal, mismo criterio. */
 export const LARGO_MAX_MODAL_TITULO = 120;
 export const LARGO_MAX_MODAL_CTA = 60;
-export const LARGO_MAX_MODAL_DESTINO = 200;
 
 /**
- * Las rutas del sitio a las que un CTA puede llevar.
+ * La ruta a la que cae CUALQUIER destino que ya no se puede resolver.
  *
- * **El CTA navega DENTRO del sitio, punto.** Un modal que se le muestra a todo
- * el mundo es la superficie ideal para mandar tráfico a cualquier lado, y el
- * panel lo edita cualquiera con sesión: aceptar una URL absoluta convertiría
- * una campaña en un redirector abierto.
- *
- * `/catalogo/admin/*` queda AFUERA a propósito: el modal es del catálogo
- * público, y mandar a un visitante al login del panel no es un destino, es un
- * accidente.
- *
- * Espeja las rutas de `frontend/src/App.jsx` — sincronización manual, con el
- * modo de falla del lado seguro: una ruta nueva que falte acá se rechaza al
- * cargarla, con mensaje, en vez de publicarse rota.
+ * Es el catálogo entero: la pantalla que siempre existe y que nunca está vacía
+ * por culpa de un dato borrado. Un botón que lleva de más es infinitamente mejor
+ * que uno que lleva a un 404 o a una grilla en blanco.
  */
-const DESTINOS_VALIDOS = [
-  /^\/$/,
-  /^\/coleccion(\?[^\s]*)?$/,
-  /^\/coleccion\/categoria\/[a-z0-9-]+(\?[^\s]*)?$/,
-  /^\/producto\/[a-z0-9-]+$/i,
-  /^\/favoritos$/,
-  /^\/carrito$/,
-];
+const DESTINO_POR_DEFECTO = "/coleccion";
+
+/** Los dos destinos que apuntan a UNA fila concreta y por eso exigen su id. */
+const DESTINOS_CON_REFERENCIA = ["CATEGORIA", "PRODUCTO"];
 
 /** Formato de fecha que acepta la API: día argentino, sin hora. */
 const SOLO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
@@ -101,7 +100,11 @@ function mapCampania(campania, ahora) {
     modalTitulo: campania.modalTitulo,
     modalTexto: campania.modalTexto,
     modalCtaTexto: campania.modalCtaTexto,
-    modalCtaDestino: campania.modalCtaDestino,
+    // El PANEL recibe la INTENCIÓN cruda (tipo + id), que es lo que el
+    // formulario edita con dos `<select>`. El CATÁLOGO recibe la ruta ya
+    // resuelta (`aModalPublico`). Son dos formas del mismo dato a propósito.
+    modalCtaTipo: campania.modalCtaTipo,
+    modalCtaReferenciaId: campania.modalCtaReferenciaId,
     modalFechaObjetivo: campania.modalFechaObjetivo
       ? claveDiaArgentino(campania.modalFechaObjetivo)
       : null,
@@ -215,15 +218,44 @@ function parsearTextoOpcional(valor, campo, largoMax) {
 }
 
 /**
+ * A DÓNDE lleva el botón, como intención y no como ruta.
+ *
+ * Clave ausente = "no la toques", igual que `parsearFlagDoodle`: un PUT que solo
+ * cambia el nombre no puede quedarse sin botón. `null` explícito sí lo quita.
+ */
+function parsearTipoDestinoCta(body, actual) {
+  if (body?.modalCtaTipo === undefined) return actual?.modalCtaTipo ?? null;
+  if (body.modalCtaTipo === null) return null;
+  if (!TIPOS_DESTINO_CTA.includes(body.modalCtaTipo)) {
+    throw httpError(400, `El destino debe ser uno de: ${TIPOS_DESTINO_CTA.join(", ")}.`);
+  }
+  return body.modalCtaTipo;
+}
+
+/** Ídem para el id al que apunta. Misma semántica de clave ausente. */
+function parsearReferenciaCta(body, actual) {
+  if (body?.modalCtaReferenciaId === undefined) return actual?.modalCtaReferenciaId ?? null;
+  if (body.modalCtaReferenciaId === null) return null;
+  if (!Number.isInteger(body.modalCtaReferenciaId) || body.modalCtaReferenciaId <= 0) {
+    throw httpError(400, "La referencia del destino debe ser un id entero positivo.");
+  }
+  return body.modalCtaReferenciaId;
+}
+
+/**
  * Todo el bloque del modal, validado como una unidad.
  *
  * Se valida junto y no campo por campo porque las reglas son CRUZADAS: un modal
- * prendido exige título, y un CTA con texto exige destino. Un botón que no
- * lleva a ningún lado, o un cartel sin título, son cosas que el panel puede
- * guardar sin querer y que después ve todo el mundo.
+ * prendido exige título, un botón con texto exige destino, y un destino a una
+ * categoría o a un producto exige a CUÁL. Un botón que no lleva a ningún lado, o
+ * un cartel sin título, son cosas que el panel puede guardar sin querer y que
+ * después ve todo el mundo.
  *
  * Con el modal APAGADO no se exige nada: se pueden dejar los textos a medio
  * escribir y prenderlo después.
+ *
+ * Es SÍNCRONA: acá solo se valida la FORMA. Que la categoría o el producto
+ * existan de verdad lo verifica `exigirReferenciaCta`, que sí toca la base.
  */
 function parsearModal(body, actual = null) {
   const activo = parsearFlagDoodle(body, "modalActivo", actual?.modalActivo ?? false);
@@ -231,24 +263,28 @@ function parsearModal(body, actual = null) {
   const titulo = parsearTextoOpcional(body?.modalTitulo, "modalTitulo", LARGO_MAX_MODAL_TITULO);
   const texto = parsearTextoOpcional(body?.modalTexto, "modalTexto", LARGO_MAX_TEXTO);
   const ctaTexto = parsearTextoOpcional(body?.modalCtaTexto, "modalCtaTexto", LARGO_MAX_MODAL_CTA);
-  const ctaDestino = parsearTextoOpcional(
-    body?.modalCtaDestino,
-    "modalCtaDestino",
-    LARGO_MAX_MODAL_DESTINO,
-  );
 
-  if (ctaDestino !== null && !DESTINOS_VALIDOS.some((patron) => patron.test(ctaDestino))) {
-    throw httpError(
-      400,
-      "El destino del CTA tiene que ser una ruta del sitio (por ejemplo /coleccion o /coleccion/categoria/hogar).",
-    );
-  }
+  const ctaTipo = parsearTipoDestinoCta(body, actual);
+  // Con CAMPANIA, CATALOGO o sin destino, una referencia no significa nada: se
+  // fuerza a `null` en vez de guardarla. Dejarla escrita haría que volver a
+  // elegir CATEGORIA más adelante resucite un id viejo que nadie confirmó.
+  const ctaReferenciaId = DESTINOS_CON_REFERENCIA.includes(ctaTipo)
+    ? parsearReferenciaCta(body, actual)
+    : null;
 
   if (activo && !titulo) {
     throw httpError(400, "Un modal activo necesita un título.");
   }
-  if (ctaTexto !== null && ctaDestino === null) {
-    throw httpError(400, "El CTA tiene texto pero no tiene destino.");
+  if (ctaTexto !== null && ctaTipo === null) {
+    throw httpError(400, "El botón tiene texto pero no lleva a ningún lado.");
+  }
+  if (DESTINOS_CON_REFERENCIA.includes(ctaTipo) && ctaReferenciaId === null) {
+    throw httpError(
+      400,
+      ctaTipo === "CATEGORIA"
+        ? "Elegí la categoría a la que lleva el botón."
+        : "Elegí el producto al que lleva el botón.",
+    );
   }
 
   let fechaObjetivo = null;
@@ -263,9 +299,127 @@ function parsearModal(body, actual = null) {
     modalTitulo: titulo,
     modalTexto: texto,
     modalCtaTexto: ctaTexto,
-    modalCtaDestino: ctaDestino,
+    modalCtaTipo: ctaTipo,
+    modalCtaReferenciaId: ctaReferenciaId,
     modalFechaObjetivo: fechaObjetivo,
   };
+}
+
+/**
+ * Que la categoría o el producto elegidos EXISTAN.
+ *
+ * Se verifica al escribir además de degradar al leer, y las dos cosas hacen
+ * falta: la lectura protege al visitante de un dato que se borró DESPUÉS, y esta
+ * verificación le dice al panel, en el momento, que está por publicar un cartel
+ * que ya nace roto. Sin ella el admin guarda contento y el botón nunca lleva a
+ * donde eligió.
+ *
+ * Una sola consulta como máximo, y ninguna con los destinos que no llevan
+ * referencia.
+ */
+async function exigirReferenciaCta({ modalCtaTipo, modalCtaReferenciaId }) {
+  if (modalCtaTipo === "CATEGORIA") {
+    const categoria = await prisma.categoria.findUnique({
+      where: { id: modalCtaReferenciaId },
+      select: { id: true },
+    });
+    if (!categoria) throw httpError(400, "La categoría elegida ya no existe.");
+    return;
+  }
+
+  if (modalCtaTipo === "PRODUCTO") {
+    const producto = await prisma.product.findUnique({
+      where: { id: modalCtaReferenciaId },
+      select: { id: true },
+    });
+    if (!producto) throw httpError(400, "El producto elegido ya no existe.");
+  }
+}
+
+/**
+ * La INTENCIÓN guardada convertida en la RUTA de hoy.
+ *
+ * Acá está el motivo entero del cambio de modelo. Con la ruta persistida, el
+ * botón podía apuntar a una categoría renombrada, a un producto borrado o a un
+ * `?etiqueta=` que ninguna pantalla lee — y ninguno de esos tres casos daba
+ * error en ningún lado. Resolviendo en la lectura, la ruta se arma contra lo que
+ * existe AHORA y lo que no se puede resolver cae al catálogo.
+ *
+ * **Como máximo UNA consulta, y sólo cuando hace falta.** Esto corre en el único
+ * endpoint público del módulo, que el catálogo pide en cada carga de página:
+ * `CATALOGO` no toca la base, y ningún destino la toca dos veces.
+ */
+async function resolverDestinoCta(campania) {
+  const referenciaId = campania.modalCtaReferenciaId;
+
+  switch (campania.modalCtaTipo) {
+    case "CATALOGO":
+      return DESTINO_POR_DEFECTO;
+
+    case "CAMPANIA": {
+      // Con la vitrina vacía el botón manda al catálogo entero: llevar a una
+      // grilla en blanco es peor que llevar de más. Y "vacía" es "sin nada
+      // PUBLICADO" — una vitrina de productos ocultos o agotados se ve igual de
+      // vacía, porque `/coleccion` filtra por las mismas dos condiciones.
+      const publicados = await prisma.campaniaProducto.count({
+        where: {
+          campaniaId: campania.id,
+          product: { visibleEnCatalogo: true, stock: { gt: 0 } },
+        },
+      });
+      return publicados > 0 ? `${DESTINO_POR_DEFECTO}?campania=${campania.id}` : DESTINO_POR_DEFECTO;
+    }
+
+    case "CATEGORIA": {
+      if (!referenciaId) return DESTINO_POR_DEFECTO;
+      const categoria = await prisma.categoria.findUnique({
+        where: { id: referenciaId },
+        select: { nombre: true },
+      });
+      // ⚠️ `rutaCategoria` devuelve `null` cuando el nombre no deja slug: esa
+      // ruta no lleva id, así que no hay fallback numérico al que recurrir.
+      return (categoria && rutaCategoria(categoria)) || DESTINO_POR_DEFECTO;
+    }
+
+    case "PRODUCTO": {
+      if (!referenciaId) return DESTINO_POR_DEFECTO;
+      const producto = await prisma.product.findUnique({
+        where: { id: referenciaId },
+        select: { id: true, nombre: true, visibleEnCatalogo: true },
+      });
+      // Un producto OCULTO da 404 en su ficha pública: mandar ahí sería un
+      // botón roto. Uno AGOTADO no — su ficha sigue abriendo con el badge
+      // "Agotado", así que el stock no se mira acá.
+      return producto?.visibleEnCatalogo ? rutaProducto(producto) : DESTINO_POR_DEFECTO;
+    }
+
+    // Sin destino no hay botón. Un valor desconocido (una fila vieja, un tipo
+    // que se sacó de la lista) degrada al catálogo en vez de romper el modal.
+    default:
+      return campania.modalCtaTipo ? DESTINO_POR_DEFECTO : null;
+  }
+}
+
+/**
+ * El nombre de la categoría o el producto elegidos, para que el EDITOR pueda
+ * mostrar qué se eligió.
+ *
+ * Sin esto el formulario tendría que traducir un id a mano —o pedir el catálogo
+ * entero de categorías— para dibujar un `<select>` con la opción marcada.
+ * `null` cuando no hay referencia o cuando quedó colgada: la columna no lleva FK
+ * (ver el schema), así que un id que ya no existe es un caso real.
+ */
+async function leerReferenciaCta(campania) {
+  const id = campania.modalCtaReferenciaId;
+  if (!id) return null;
+
+  if (campania.modalCtaTipo === "CATEGORIA") {
+    return prisma.categoria.findUnique({ where: { id }, select: { id: true, nombre: true } });
+  }
+  if (campania.modalCtaTipo === "PRODUCTO") {
+    return prisma.product.findUnique({ where: { id }, select: { id: true, nombre: true } });
+  }
+  return null;
 }
 
 /**
@@ -279,7 +433,38 @@ function parsearModal(body, actual = null) {
  * acepta, el `<select>` no lo ofrece, y ningún test se pone rojo.
  */
 export function opciones(_req, res) {
-  res.json({ tipos: listaDeTipos(), estados: listaDeEstadosCampania() });
+  res.json({
+    tipos: listaDeTipos(),
+    estados: listaDeEstadosCampania(),
+    destinos: listaDeDestinosCta(),
+    // El default del texto del botón viaja en la respuesta y no se copia en el
+    // panel: es la regla 1 de la metodología. Un placeholder hecho a mano
+    // divergiría de lo que el cartel muestra, sin error y sin test rojo.
+    ctaTextoPorDefecto: CTA_TEXTO_POR_DEFECTO,
+  });
+}
+
+/**
+ * `GET /api/campanias/contador?hasta=YYYY-MM-DD` — cuántos días faltan.
+ *
+ * **Va declarada ANTES de `/:id`**, si no Express matchea "contador" como un id.
+ *
+ * El día lo cuenta el BACKEND y nunca el navegador: `horarioArgentino.js` es la
+ * única definición de "día" del sistema. Con el cálculo del lado del panel,
+ * alguien con el reloj mal puesto vería en el preview un número distinto del que
+ * el cartel le muestra al visitante.
+ */
+export function contador(req, res, next) {
+  try {
+    const diasFaltantes = diasHastaClave(req.query.hasta);
+    if (diasFaltantes === null) {
+      throw httpError(400, "La fecha debe tener el formato AAAA-MM-DD.");
+    }
+
+    res.json({ diasFaltantes });
+  } catch (err) {
+    next(err);
+  }
 }
 
 function idDeParams(req) {
@@ -292,6 +477,83 @@ async function buscarOFallar(id) {
   const campania = await prisma.campania.findUnique({ where: { id } });
   if (!campania) throw httpError(404, "Campaña no encontrada.");
   return campania;
+}
+
+/**
+ * La forma de lectura del DETALLE: la pantalla desde la que se edita la campaña.
+ *
+ * Es una constante nombrada y no un `include` inline porque la comparten dos
+ * caminos —`GET /:id` y la respuesta de `PUT /:id/productos`—, y divergir haría
+ * que la vitrina se vea al abrir la campaña y aparezca vacía al guardarla, con
+ * la suite en verde. Es la misma trampa que ya cobró `DETALLE_ORDEN_INCLUDE`.
+ *
+ * El LISTADO no lo usa: son N consultas para pintar una grilla.
+ *
+ * De la vitrina se traen sólo las columnas que el editor muestra, más la
+ * portada (`take: 1` sobre `fotos`, ordenadas): la ficha completa de 200
+ * productos sería traer el catálogo para dibujar una lista de chips.
+ */
+const DETALLE_INCLUDE = {
+  promociones: { select: { promocion: { select: { id: true, nombre: true } } } },
+  productos: {
+    select: {
+      product: {
+        select: {
+          id: true,
+          nombre: true,
+          sku: true,
+          precio: true,
+          visibleEnCatalogo: true,
+          stock: true,
+          fotos: {
+            select: { id: true, url: true, cloudinaryPublicId: true },
+            orderBy: { orden: "asc" },
+            take: 1,
+          },
+        },
+      },
+    },
+    // Por antigüedad de la asociación: el orden en que el admin fue armando la
+    // vitrina. `CampaniaProducto` no tiene columna de orden a propósito —
+    // sería un tercer lugar donde guardar algo que nadie pidió reordenar.
+    orderBy: { createdAt: "asc" },
+  },
+};
+
+async function leerDetalle(id) {
+  const campania = await prisma.campania.findUnique({ where: { id }, include: DETALLE_INCLUDE });
+  if (!campania) throw httpError(404, "Campaña no encontrada.");
+  return campania;
+}
+
+/**
+ * La campaña con sus dos relaciones: qué descuentos aplica y qué productos
+ * muestra. Son dos preguntas distintas y por eso viajan en dos claves.
+ *
+ * `precio` sale como string: `Decimal` de Prisma serializado crudo no es un
+ * número JSON que el panel pueda leer, y pasarlo a `Number` reintroduciría el
+ * float en la única parte del sistema que habla de plata.
+ */
+async function mapDetalle(campania, ahora) {
+  return {
+    ...mapCampania(campania, ahora),
+    // El nombre de lo que el CTA apunta. `null` explícito y no una clave
+    // ausente: el editor tiene que poder distinguir "no eligió nada" de "la
+    // referencia quedó colgada".
+    modalCtaReferencia: (await leerReferenciaCta(campania)) ?? null,
+    promociones: campania.promociones.map((a) => a.promocion),
+    productos: campania.productos.map(({ product }) => ({
+      id: product.id,
+      nombre: product.nombre,
+      sku: product.sku,
+      precio: product.precio.toString(),
+      // `null` explícito y no `undefined`: una clave ausente desaparece del
+      // JSON y el editor no puede distinguirla de un producto sin foto.
+      fotoPortada: product.fotos[0] ? urlDeFoto(product.fotos[0]) : null,
+      visibleEnCatalogo: product.visibleEnCatalogo,
+      stock: product.stock,
+    })),
+  };
 }
 
 /**
@@ -342,8 +604,12 @@ function aDoodlePublico(campania) {
  * El `texto` viaja CRUDO, con su marcador `{dias}` sin reemplazar: la
  * sustitución es presentación y la hace la pantalla, que es la que decide si el
  * número va resaltado. Lo que no puede salir del backend es el CÁLCULO.
+ *
+ * Es ASYNC porque el destino del CTA se RESUELVE contra la base (ver
+ * `resolverDestinoCta`): lo que se guarda es la intención, y la ruta se arma con
+ * lo que existe hoy.
  */
-function aModalPublico(campania, ahora) {
+async function aModalPublico(campania, ahora) {
   if (!campania) return null;
 
   const claveObjetivo = campania.modalFechaObjetivo
@@ -360,8 +626,11 @@ function aModalPublico(campania, ahora) {
     doodleUrl: campania.doodleUrl ?? null,
     titulo: campania.modalTitulo,
     texto: campania.modalTexto,
-    ctaTexto: campania.modalCtaTexto,
-    ctaDestino: campania.modalCtaDestino,
+    // Sin destino no hay botón, así que tampoco hay texto: emitir uno haría que
+    // la pantalla dibuje un botón que no lleva a ningún lado. Con destino y sin
+    // texto se usa el default, que sale de `lib/campanias.js` y no del panel.
+    ctaTexto: campania.modalCtaTipo ? (campania.modalCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
+    ctaDestino: await resolverDestinoCta(campania),
     diasFaltantes: claveObjetivo === null ? null : diasHastaClave(claveObjetivo, ahora),
   };
 }
@@ -387,16 +656,23 @@ export async function contextoActivo(req, res, next) {
     const activas = candidatas.filter((c) => resolverEstadoCampania(c, ahora).activa);
     const conDoodle = activas.filter((c) => c.doodleUrl);
 
+    // El modal es un recurso exclusivo igual que el logo —no se apilan dos
+    // carteles encima del catálogo— pero se resuelve APARTE: la campaña que
+    // manda el logo no tiene por qué ser la que manda el cartel.
+    //
+    // Se resuelve con `await` ANTES del literal y no adentro: `aModalPublico` es
+    // async, y una promesa dentro de un objeto que va a `res.json` sale
+    // serializada como `{}` — sin error, sin nada en la consola y con el cartel
+    // vacío en el catálogo.
+    const modal = await aModalPublico(
+      elegirPorPrioridad(activas.filter((c) => c.modalActivo && c.modalTitulo)),
+      ahora,
+    );
+
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),
       doodle: aDoodlePublico(elegirPorPrioridad(conDoodle.filter((c) => c.doodleEnCatalogo))),
-      // El modal es un recurso exclusivo igual que el logo —no se apilan dos
-      // carteles encima del catálogo— pero se resuelve APARTE: la campaña que
-      // manda el logo no tiene por qué ser la que manda el cartel.
-      modal: aModalPublico(
-        elegirPorPrioridad(activas.filter((c) => c.modalActivo && c.modalTitulo)),
-        ahora,
-      ),
+      modal,
     };
 
     if (esRequestDeAdmin(req)) {
@@ -433,9 +709,26 @@ export async function listar(req, res, next) {
       where.hasta = { gte: desde };
     }
 
-    const campanias = await prisma.campania.findMany({ where, orderBy: ORDEN_LISTADO });
+    const campanias = await prisma.campania.findMany({
+      where,
+      orderBy: ORDEN_LISTADO,
+      // Cuántos productos tiene la vitrina, contado por la base. Traer las
+      // filas para contarlas en memoria serían N consultas para pintar una
+      // grilla, que es exactamente lo que el listado evita.
+      include: { _count: { select: { productos: true } } },
+    });
 
-    res.json(campanias.map((campania) => mapCampania(campania, ahora)));
+    // `cantidadProductos` se agrega ACÁ y no en `mapCampania`: ese mapper lo
+    // comparten crear/actualizar/cambiarEstado/duplicar/guardarDoodle, que
+    // trabajan sobre una fila SIN `_count`. Emitirlo ahí haría que un
+    // `PATCH /:id/estado` sobre una campaña con 5 productos devuelva 0 y la
+    // pantalla muestre un cero que no es cierto.
+    res.json(
+      campanias.map((campania) => ({
+        ...mapCampania(campania, ahora),
+        cantidadProductos: campania._count.productos,
+      })),
+    );
   } catch (err) {
     next(err);
   }
@@ -444,20 +737,8 @@ export async function listar(req, res, next) {
 export async function obtenerPorId(req, res, next) {
   try {
     const id = idDeParams(req);
-    const campania = await prisma.campania.findUnique({
-      where: { id },
-      // El detalle SÍ trae sus promociones: es la pantalla desde la que se
-      // editan. El listado no, porque son N consultas para pintar una grilla.
-      include: {
-        promociones: { select: { promocion: { select: { id: true, nombre: true } } } },
-      },
-    });
-    if (!campania) throw httpError(404, "Campaña no encontrada.");
 
-    res.json({
-      ...mapCampania(campania, new Date()),
-      promociones: campania.promociones.map((a) => a.promocion),
-    });
+    res.json(await mapDetalle(await leerDetalle(id), new Date()));
   } catch (err) {
     next(err);
   }
@@ -476,6 +757,10 @@ export async function crear(req, res, next) {
       ...parsearModal(req.body),
       ...parsearRango(req.body),
     };
+
+    // Después de parsear y ANTES de escribir: la referencia del CTA es lo único
+    // del cuerpo que no se puede validar sin tocar la base.
+    await exigirReferenciaCta(datos);
 
     const campania = await prisma.campania.create({ data: datos });
 
@@ -510,6 +795,8 @@ export async function actualizar(req, res, next) {
       ...parsearModal(req.body, actual),
       ...parsearRango(req.body),
     };
+
+    await exigirReferenciaCta(datos);
 
     const campania = await prisma.campania.update({ where: { id }, data: datos });
 
@@ -573,36 +860,62 @@ export async function cambiarEstado(req, res, next) {
  * a subir el archivo. Es lo correcto (no duplica un binario idéntico en el CDN)
  * y tiene una consecuencia asumida: el borrado de una campaña solo puede
  * eliminar el archivo remoto si ninguna otra lo referencia.
+ *
+ * La VITRINA sí se copia: rearmar a mano la selección de productos del año
+ * pasado es justamente el trabajo que duplicar viene a ahorrar.
+ *
+ * Las PROMOCIONES no, y es deliberado: son plata. El duplicado nace en
+ * BORRADOR para armar la campaña que viene, y heredar los descuentos del año
+ * pasado sería tomar por el admin una decisión que nadie pidió — mismo criterio
+ * por el que el estado no se hereda.
  */
 export async function duplicar(req, res, next) {
   try {
     const id = idDeParams(req);
     const original = await buscarOFallar(id);
 
-    // Se enumeran los campos a copiar en vez de hacer spread con delete: así,
-    // una columna nueva en el modelo NO se cuela en el duplicado sin que
-    // alguien lo haya decidido acá.
-    const campania = await prisma.campania.create({
-      data: {
-        nombre: `${original.nombre} (copia)`.slice(0, LARGO_MAX_NOMBRE),
-        descripcion: original.descripcion,
-        tipo: original.tipo,
-        estado: "BORRADOR",
-        desde: original.desde,
-        hasta: original.hasta,
-        prioridad: original.prioridad,
-        doodleUrl: original.doodleUrl,
-        doodleCloudinaryPublicId: original.doodleCloudinaryPublicId,
-        doodleCloudinaryResourceType: original.doodleCloudinaryResourceType,
-        doodleEnCatalogo: original.doodleEnCatalogo,
-        doodleEnAdmin: original.doodleEnAdmin,
-        modalActivo: original.modalActivo,
-        modalTitulo: original.modalTitulo,
-        modalTexto: original.modalTexto,
-        modalCtaTexto: original.modalCtaTexto,
-        modalCtaDestino: original.modalCtaDestino,
-        modalFechaObjetivo: original.modalFechaObjetivo,
-      },
+    // En transacción: la copia y su vitrina son una sola cosa. Aplicada a
+    // medias dejaría una campaña nueva con la vitrina vacía y sin ningún aviso
+    // de que faltó la mitad.
+    const campania = await prisma.$transaction(async (tx) => {
+      // Se enumeran los campos a copiar en vez de hacer spread con delete: así,
+      // una columna nueva en el modelo NO se cuela en el duplicado sin que
+      // alguien lo haya decidido acá.
+      const copia = await tx.campania.create({
+        data: {
+          nombre: `${original.nombre} (copia)`.slice(0, LARGO_MAX_NOMBRE),
+          descripcion: original.descripcion,
+          tipo: original.tipo,
+          estado: "BORRADOR",
+          desde: original.desde,
+          hasta: original.hasta,
+          prioridad: original.prioridad,
+          doodleUrl: original.doodleUrl,
+          doodleCloudinaryPublicId: original.doodleCloudinaryPublicId,
+          doodleCloudinaryResourceType: original.doodleCloudinaryResourceType,
+          doodleEnCatalogo: original.doodleEnCatalogo,
+          doodleEnAdmin: original.doodleEnAdmin,
+          modalActivo: original.modalActivo,
+          modalTitulo: original.modalTitulo,
+          modalTexto: original.modalTexto,
+          modalCtaTexto: original.modalCtaTexto,
+          modalCtaTipo: original.modalCtaTipo,
+          modalCtaReferenciaId: original.modalCtaReferenciaId,
+          modalFechaObjetivo: original.modalFechaObjetivo,
+        },
+      });
+
+      const vitrina = await tx.campaniaProducto.findMany({
+        where: { campaniaId: original.id },
+        select: { productId: true },
+      });
+      if (vitrina.length > 0) {
+        await tx.campaniaProducto.createMany({
+          data: vitrina.map(({ productId }) => ({ campaniaId: copia.id, productId })),
+        });
+      }
+
+      return copia;
     });
 
     logAudit(req, {
@@ -802,20 +1115,7 @@ export async function guardarPromociones(req, res, next) {
       throw httpError(400, "Hay una promoción repetida en la lista.");
     }
 
-    if (promocionIds.length > 0) {
-      const existentes = await prisma.promocion.findMany({
-        where: { id: { in: promocionIds } },
-        select: { id: true },
-      });
-      const presentes = new Set(existentes.map((p) => p.id));
-      const faltantes = promocionIds.filter((valor) => !presentes.has(valor));
-      if (faltantes.length > 0) {
-        throw httpError(
-          400,
-          `Estas promociones ya no existen: ${faltantes.join(", ")}. Recargá la pantalla.`,
-        );
-      }
-    }
+    await exigirIdsExistentes(prisma.promocion, promocionIds, { entidad: "Estas promociones" });
 
     // En transacción: aplicada a medias dejaría la campaña con la mitad de las
     // promociones viejas y la mitad de las nuevas.
@@ -840,6 +1140,75 @@ export async function guardarPromociones(req, res, next) {
       select: { promocionId: true },
     });
     res.json({ promocionIds: asociadas.map((a) => a.promocionId) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PUT /api/campanias/:id/productos` — la VITRINA de la campaña.
+ *
+ * Qué productos MUESTRA la campaña, que es una pregunta distinta de qué
+ * descuentos aplica. "Navidad" quiere exhibir todos los productos navideños
+ * tengan o no rebaja: si listarlos exigiera una promoción, habría que inventar
+ * descuentos que el negocio no quiso dar.
+ *
+ * Es un REEMPLAZO de la lista completa, mismo criterio que `guardarPromociones`
+ * y que los items de una promoción: el panel edita el conjunto entero.
+ *
+ * ⚠️ Desasociar NO borra el producto: sigue en el catálogo con su stock, su
+ * precio y sus fotos. Sólo deja de estar en esta vitrina.
+ *
+ * A diferencia de `guardarPromociones`, responde el DETALLE completo y no la
+ * lista de ids: el editor pinta la vitrina con nombre, precio y portada, y
+ * devolverle ids lo obligaría a un segundo GET para dibujar lo que acaba de
+ * guardar. Mismo criterio que `PUT /promociones/:id/items`.
+ */
+export async function guardarProductos(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    await buscarOFallar(id);
+
+    const productIds = req.body?.productIds;
+    if (!Array.isArray(productIds)) {
+      throw httpError(400, "Enviá la lista de productos en `productIds`.");
+    }
+    if (productIds.length > MAX_PRODUCTOS_CAMPANIA) {
+      throw httpError(
+        400,
+        `Una campaña no puede mostrar más de ${MAX_PRODUCTOS_CAMPANIA} productos.`,
+      );
+    }
+    if (!productIds.every((valor) => Number.isInteger(valor) && valor > 0)) {
+      throw httpError(400, "Los ids de producto deben ser números enteros.");
+    }
+    // Un producto dos veces explota contra la PK compuesta como un P2002 que no
+    // explica nada, y encima después de haber borrado la vitrina anterior.
+    if (new Set(productIds).size !== productIds.length) {
+      throw httpError(400, "Hay un producto repetido en la lista.");
+    }
+
+    await exigirIdsExistentes(prisma.product, productIds, { entidad: "Estos productos" });
+
+    // En transacción: aplicada a medias dejaría la campaña con la mitad de la
+    // vitrina vieja y la mitad de la nueva.
+    await prisma.$transaction(async (tx) => {
+      await tx.campaniaProducto.deleteMany({ where: { campaniaId: id } });
+      if (productIds.length > 0) {
+        await tx.campaniaProducto.createMany({
+          data: productIds.map((productId) => ({ campaniaId: id, productId })),
+        });
+      }
+    });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_PRODUCTOS",
+      entidad: "Campania",
+      entidadId: id,
+      detalle: { productIds },
+    });
+
+    res.json(await mapDetalle(await leerDetalle(id), new Date()));
   } catch (err) {
     next(err);
   }

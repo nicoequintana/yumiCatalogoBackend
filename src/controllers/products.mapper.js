@@ -9,6 +9,7 @@
 
 import { calcularPrecio, estadoDePrecio } from "../lib/precios.js";
 import { precioConDescuento } from "../lib/precioEfectivo.js";
+import { urlDeFoto } from "../lib/fotos.js";
 
 export const PRODUCT_INCLUDE = {
   caracteristicas: true,
@@ -67,36 +68,6 @@ export const LIST_SELECT = {
   },
   _count: { select: { fotos: true } },
 };
-
-/**
- * Resuelve la URL pública de una foto.
- *
- * `foto.url` ya contiene la URL directa del CDN de Cloudinary para todo lo
- * subido por el catálogo. Las filas de seed/placeholder tampoco tienen
- * `cloudinaryPublicId` y conservan su URL original, así que el mismo `return`
- * las cubre.
- *
- * Antes había una rama intermedia que ruteaba las fotos legadas de Google Drive
- * por un proxy propio del backend (una URL cruda de Drive dispara
- * `net::ERR_BLOCKED_BY_ORB` en Chromium por el Content-Type ambiguo de su
- * redirect). Ese storage se retiró del proyecto: no quedaba ninguna foto
- * apoyada en él —327 de 327 en producción salen de Cloudinary— y sostenerlo
- * costaba 208 MB de dependencia en la imagen del contenedor.
- *
- * Sigue compartida por `mapProducto` y `mapProductoListado` —aunque hoy sea un
- * solo `return`— para que la portada de la grilla y la galería del detalle no
- * puedan divergir si vuelve a aparecer un segundo storage.
- *
- * Se exporta desde que apareció un TERCER consumidor: `ordenes.mapper.js`, que
- * emite la portada de cada línea del detalle de una orden. Escribirla ahí como
- * `item.product?.fotos?.[0]?.url` sería la cuarta copia de la misma regla, y el
- * único de los tres lugares que no se enteraría del día que vuelva un segundo
- * storage. Si aparece un cuarto consumidor, mudarla a `lib/fotos.js`.
- */
-export function urlDeFoto(foto) {
-  return foto.url;
-}
-
 
 /**
  * Los cuatro campos de costeo, o nada.
