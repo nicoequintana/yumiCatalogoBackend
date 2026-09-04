@@ -687,6 +687,38 @@ async function aModalPublico(campania, ahora) {
   };
 }
 
+/**
+ * La franja de la home, con TODO resuelto.
+ *
+ * Misma disciplina que `aModalPublico` y por el mismo motivo: el frontend no
+ * arma rutas ni cuenta días. `ctaDestino` sale del `switch` de intenciones
+ * contra lo que existe HOY, y `diasFaltantes` de la definición de "día" del
+ * sistema.
+ *
+ * ⚠️ Es `async` — el destino toca la base. Hay que resolverlo con `await` ANTES
+ * del literal que va a `res.json`: una promesa dentro de un objeto se serializa
+ * como `{}`, sin error y sin nada en la consola.
+ */
+async function aBannerPublico(campania, ahora) {
+  if (!campania) return null;
+
+  const claveObjetivo = campania.modalFechaObjetivo
+    ? claveDiaArgentino(campania.modalFechaObjetivo)
+    : null;
+
+  return {
+    campaniaId: campania.id,
+    // El arte de SU campaña, que puede no ser la del encabezado: los dos
+    // recursos se eligen aparte.
+    doodleUrl: campania.doodleUrl ?? null,
+    titulo: campania.bannerTitulo,
+    texto: campania.bannerTexto,
+    ctaTexto: campania.modalCtaTipo ? (campania.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
+    ctaDestino: await resolverDestinoCta(campania),
+    diasFaltantes: claveObjetivo === null ? null : diasHastaClave(claveObjetivo, ahora),
+  };
+}
+
 export async function contextoActivo(req, res, next) {
   try {
     const ahora = new Date();
@@ -721,10 +753,19 @@ export async function contextoActivo(req, res, next) {
       ahora,
     );
 
+    // Se filtra por `bannerTitulo` además del interruptor por la misma razón
+    // que el modal: un banner prendido y sin título es una franja rota, y el
+    // catálogo no es el lugar donde eso se descubre.
+    const banner = await aBannerPublico(
+      elegirPorPrioridad(activas.filter((c) => c.bannerEnHome && c.bannerTitulo)),
+      ahora,
+    );
+
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),
       doodle: aDoodlePublico(elegirPorPrioridad(conDoodle.filter((c) => c.doodleEnCatalogo))),
       modal,
+      banner,
     };
 
     if (esRequestDeAdmin(req)) {

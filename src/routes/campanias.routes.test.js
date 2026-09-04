@@ -533,6 +533,77 @@ describe("GET /api/campanias/activas — el modal", () => {
   });
 });
 
+describe("GET /api/campanias/activas — el banner de la home", () => {
+  async function bannerDe(campania) {
+    campaniaMock.findMany.mockResolvedValue([campania]);
+    const res = await request(buildApp()).get("/api/campanias/activas");
+    return res.body.banner;
+  }
+
+  const conBanner = (extra = {}) =>
+    fila({
+      bannerEnHome: true,
+      bannerTitulo: "Semana del Hogar",
+      bannerTexto: "Hasta 30 % en cocina.",
+      bannerCtaTexto: null,
+      modalCtaTipo: "CATALOGO",
+      ...extra,
+    });
+
+  it("sin ninguna campaña con banner prendido devuelve null, no un 404", async () => {
+    campaniaMock.findMany.mockResolvedValue([fila()]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.status).toBe(200);
+    expect(res.body.banner).toBeNull();
+  });
+
+  it("emite el título, el texto y el destino ya resuelto", async () => {
+    expect(await bannerDe(conBanner())).toMatchObject({
+      campaniaId: 1,
+      titulo: "Semana del Hogar",
+      texto: "Hasta 30 % en cocina.",
+      ctaDestino: "/coleccion",
+    });
+  });
+
+  it("aplica el default del texto del botón: el frontend no tiene copia", async () => {
+    expect((await bannerDe(conBanner())).ctaTexto).toBe("Ver más");
+  });
+
+  it("sin destino no hay botón, y entonces tampoco texto de botón", async () => {
+    const banner = await bannerDe(conBanner({ modalCtaTipo: null }));
+
+    expect(banner.ctaDestino).toBeNull();
+    expect(banner.ctaTexto).toBeNull();
+  });
+
+  it("cuenta los días contra la fecha objetivo, no el navegador", async () => {
+    const banner = await bannerDe(
+      conBanner({ modalFechaObjetivo: inicioDelDiaArgentino("2026-09-21") }),
+    );
+
+    // La suite está parada el 15/09/2026.
+    expect(banner.diasFaltantes).toBe(6);
+  });
+
+  it("elige por prioridad SOLO entre las que tienen el banner prendido", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      conBanner({ id: 7, prioridad: 1, bannerTitulo: "La del banner" }),
+      fila({ id: 9, prioridad: 99, bannerEnHome: false }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.banner).toMatchObject({ campaniaId: 7, titulo: "La del banner" });
+  });
+
+  it("un banner prendido sin título no se emite: saldría una franja rota", async () => {
+    expect(await bannerDe(conBanner({ bannerTitulo: null }))).toBeNull();
+  });
+});
+
 /**
  * El corazón del cambio: la campaña guarda la INTENCIÓN y el backend arma la
  * RUTA al leer.
