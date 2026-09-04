@@ -1843,3 +1843,79 @@ describe("la vitrina en el duplicado y en el listado", () => {
     expect(res.body).not.toHaveProperty("cantidadProductos");
   });
 });
+
+describe("El bloque del banner de la home", () => {
+  const base = {
+    nombre: "Primavera",
+    tipo: "ESTACIONAL",
+    desde: "2026-09-10",
+    hasta: "2026-09-20",
+  };
+
+  function crear(body) {
+    return request(buildApp()).post("/api/campanias").set("Authorization", authHeader).send(body);
+  }
+
+  it("un banner prendido necesita un título", async () => {
+    const res = await crear({ ...base, bannerEnHome: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Un banner activo necesita un título.");
+  });
+
+  it("apagado no exige nada: los textos a medio escribir se guardan", async () => {
+    campaniaMock.create.mockResolvedValue(fila({ bannerEnHome: false, bannerTitulo: null }));
+
+    const res = await crear({ ...base, bannerEnHome: false, bannerTexto: "a medio escribir" });
+
+    expect(res.status).toBe(201);
+    expect(campaniaMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ bannerEnHome: false, bannerTexto: "a medio escribir" }),
+      }),
+    );
+  });
+
+  it("el texto del banner topea en 200, no en los 1000 del cartel", async () => {
+    const res = await crear({ ...base, bannerTexto: "x".repeat(201) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("`bannerTexto` no puede superar los 200 caracteres.");
+  });
+
+  it("el título del banner topea en 120", async () => {
+    const res = await crear({ ...base, bannerTitulo: "x".repeat(121) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("`bannerTitulo` no puede superar los 120 caracteres.");
+  });
+
+  it("un texto de botón sin destino es un botón que no lleva a ningún lado", async () => {
+    const res = await crear({ ...base, bannerEnHome: true, bannerTitulo: "T", bannerCtaTexto: "Ver" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El botón del banner tiene texto pero no lleva a ningún lado.");
+  });
+
+  it("el detalle del panel emite las cuatro columnas", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({
+        bannerEnHome: true,
+        bannerTitulo: "Semana del Hogar",
+        bannerTexto: "Hasta 30 %.",
+        bannerCtaTexto: "Ver la selección",
+      }),
+    );
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body).toMatchObject({
+      bannerEnHome: true,
+      bannerTitulo: "Semana del Hogar",
+      bannerTexto: "Hasta 30 %.",
+      bannerCtaTexto: "Ver la selección",
+    });
+  });
+});

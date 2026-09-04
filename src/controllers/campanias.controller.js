@@ -41,6 +41,15 @@ export const MAX_PRODUCTOS_CAMPANIA = 200;
 export const LARGO_MAX_MODAL_TITULO = 120;
 export const LARGO_MAX_MODAL_CTA = 60;
 
+/** Espejan `@db.NVarChar(...)` de las columnas del banner, mismo criterio. */
+export const LARGO_MAX_BANNER_TITULO = 120;
+/**
+ * 200 y no `LARGO_MAX_TEXTO` (1000) como el cartel: el banner es una franja
+ * dentro del flujo de la home, no una tarjeta a pantalla completa.
+ */
+export const LARGO_MAX_BANNER_TEXTO = 200;
+export const LARGO_MAX_BANNER_CTA = 60;
+
 /**
  * La ruta a la que cae CUALQUIER destino que ya no se puede resolver.
  *
@@ -108,6 +117,10 @@ function mapCampania(campania, ahora) {
     modalFechaObjetivo: campania.modalFechaObjetivo
       ? claveDiaArgentino(campania.modalFechaObjetivo)
       : null,
+    bannerEnHome: campania.bannerEnHome,
+    bannerTitulo: campania.bannerTitulo,
+    bannerTexto: campania.bannerTexto,
+    bannerCtaTexto: campania.bannerCtaTexto,
   };
 }
 
@@ -302,6 +315,45 @@ function parsearModal(body, actual = null) {
     modalCtaTipo: ctaTipo,
     modalCtaReferenciaId: ctaReferenciaId,
     modalFechaObjetivo: fechaObjetivo,
+  };
+}
+
+/**
+ * El bloque del banner de la home, validado como una unidad.
+ *
+ * Mismo criterio cruzado que `parsearModal`: apagado no se exige nada —se
+ * pueden dejar los textos a medio escribir y prenderlo después—, y prendido se
+ * exige lo mínimo para que la franja no salga rota.
+ *
+ * **El destino NO se parsea acá.** Lo emite `parsearModal`, y es el de la
+ * CAMPAÑA: `modalCtaTipo` / `modalCtaReferenciaId` los comparten las dos
+ * superficies. Duplicarlos serían dos verdades que se desincronizan sin que
+ * nada falle. Consecuencia: este parser mira `modalCtaTipo` para saber si hay
+ * botón, pero nunca lo escribe.
+ */
+function parsearBanner(body, actual = null, ctaTipo = null) {
+  const enHome = parsearFlagDoodle(body, "bannerEnHome", actual?.bannerEnHome ?? false);
+
+  const titulo = parsearTextoOpcional(body?.bannerTitulo, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
+  const texto = parsearTextoOpcional(body?.bannerTexto, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
+  const ctaTexto = parsearTextoOpcional(
+    body?.bannerCtaTexto,
+    "bannerCtaTexto",
+    LARGO_MAX_BANNER_CTA,
+  );
+
+  if (enHome && !titulo) {
+    throw httpError(400, "Un banner activo necesita un título.");
+  }
+  if (ctaTexto !== null && ctaTipo === null) {
+    throw httpError(400, "El botón del banner tiene texto pero no lleva a ningún lado.");
+  }
+
+  return {
+    bannerEnHome: enHome,
+    bannerTitulo: titulo,
+    bannerTexto: texto,
+    bannerCtaTexto: ctaTexto,
   };
 }
 
@@ -746,6 +798,7 @@ export async function obtenerPorId(req, res, next) {
 
 export async function crear(req, res, next) {
   try {
+    const modal = parsearModal(req.body);
     const datos = {
       nombre: parsearNombre(req.body),
       descripcion: parsearDescripcion(req.body),
@@ -754,7 +807,8 @@ export async function crear(req, res, next) {
       prioridad: parsearPrioridad(req.body),
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", true),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", false),
-      ...parsearModal(req.body),
+      ...modal,
+      ...parsearBanner(req.body, null, modal.modalCtaTipo),
       ...parsearRango(req.body),
     };
 
@@ -783,6 +837,7 @@ export async function actualizar(req, res, next) {
     const id = idDeParams(req);
     const actual = await buscarOFallar(id);
 
+    const modal = parsearModal(req.body, actual);
     const datos = {
       nombre: parsearNombre(req.body),
       descripcion: parsearDescripcion(req.body),
@@ -792,7 +847,8 @@ export async function actualizar(req, res, next) {
       // Ausente = "no lo toques": cae al valor ACTUAL, no al default del alta.
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", actual.doodleEnCatalogo),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", actual.doodleEnAdmin),
-      ...parsearModal(req.body, actual),
+      ...modal,
+      ...parsearBanner(req.body, actual, modal.modalCtaTipo),
       ...parsearRango(req.body),
     };
 
@@ -902,6 +958,10 @@ export async function duplicar(req, res, next) {
           modalCtaTipo: original.modalCtaTipo,
           modalCtaReferenciaId: original.modalCtaReferenciaId,
           modalFechaObjetivo: original.modalFechaObjetivo,
+          bannerEnHome: original.bannerEnHome,
+          bannerTitulo: original.bannerTitulo,
+          bannerTexto: original.bannerTexto,
+          bannerCtaTexto: original.bannerCtaTexto,
         },
       });
 
