@@ -67,6 +67,17 @@ describe("parsearIdDeRuta", () => {
     expect(parsearIdDeRuta("0")).toBe(null);
     expect(parsearIdDeRuta("-5")).toBe(null);
   });
+
+  it("devuelve null para un id de puros dígitos que no se puede representar exacto", () => {
+    // Solo dígitos, así que la regex lo acepta, y `Number.isInteger` tampoco lo
+    // frena: `Number("99999999999999999999")` es un entero positivo. Pero no
+    // entra en un entero de 64 bits, y llegaba a Prisma. Verificado con curl:
+    // `GET /og/producto/99999999999999999999` respondía 500.
+    expect(parsearIdDeRuta("99999999999999999999")).toBe(null);
+    expect(parsearIdDeRuta("9007199254740993-set-de-cuchillos")).toBe(null);
+    // El último id representable exacto sigue siendo válido.
+    expect(parsearIdDeRuta("9007199254740991")).toBe(9007199254740991);
+  });
 });
 
 describe("rutaProducto", () => {

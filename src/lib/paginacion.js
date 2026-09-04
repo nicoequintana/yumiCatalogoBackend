@@ -1,3 +1,5 @@
+import { esEnteroSeguro } from "./enteroSeguro.js";
+
 /** Tamaño de página por defecto cuando la query no pide uno válido. */
 export const DEFAULT_PAGE_SIZE = 20;
 
@@ -30,8 +32,12 @@ export const MAX_PAGE_SIZE = 100;
  * @returns {{ page: number, pageSize: number }}
  */
 export function parsearPaginacion(query, { porDefecto = DEFAULT_PAGE_SIZE } = {}) {
+  // `esEnteroSeguro` y no `Number.isFinite`: `?page=1e21` es finito y entero,
+  // pero viaja como `skip` a Prisma y hace cortar al query engine — un 500 en
+  // el listado público, verificado con curl. `pageSize` no lo necesita porque
+  // ya se clampea a `MAX_PAGE_SIZE`. Ver `lib/enteroSeguro.js`.
   const pageParsed = Math.floor(Number(query.page));
-  const page = Number.isFinite(pageParsed) && pageParsed > 0 ? pageParsed : 1;
+  const page = esEnteroSeguro(pageParsed) && pageParsed > 0 ? pageParsed : 1;
 
   const pageSizeParsed = Math.floor(Number(query.pageSize));
   const pageSize =

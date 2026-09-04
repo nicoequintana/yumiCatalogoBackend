@@ -82,4 +82,31 @@ describe("ids no enteros — 404 sin consultar la base", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
     expect(updateMock).not.toHaveBeenCalled();
   });
+
+  // `Number.isInteger` no acota el RANGO: `Number("1e21")` es un entero
+  // positivo y pasaba la guarda, pero no entra en un entero de 64 bits y el
+  // query engine corta con un error sin `status` → 500 público. Verificado con
+  // curl: `GET /api/products/1e21` respondía 500 antes de este guard.
+  it("GET /api/products/1e21 responde 404, no 500, sin consultar Prisma", async () => {
+    const res = await request(buildApp()).get("/api/products/1e21");
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Producto no encontrado." });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/products/99999999999999999999 responde 404 sin consultar Prisma", async () => {
+    const res = await request(buildApp()).get("/api/products/99999999999999999999");
+
+    expect(res.status).toBe(404);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/products/1e21/favorito responde 404 sin tocar la base", async () => {
+    const res = await request(buildApp()).post("/api/products/1e21/favorito");
+
+    expect(res.status).toBe(404);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
 });

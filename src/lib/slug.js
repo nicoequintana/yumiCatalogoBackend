@@ -43,8 +43,13 @@ export function parsearIdDeRuta(param) {
   const match = /^(\d+)(?:-|$)/.exec(String(param));
   if (!match) return null;
 
+  // `Number.isSafeInteger` y no `Number.isInteger`: la regex ya garantizó que
+  // son puros dígitos, pero veinte dígitos siguen siendo un entero positivo para
+  // JavaScript y no entran en un entero de 64 bits. Ese id llegaba a Prisma y
+  // hacía responder 500 a `/og/producto/:idSlug`, que es público y lo visita un
+  // crawler. Espejo manual con el otro repo (ver el censo en CLAUDE.md).
   const id = Number(match[1]);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 export function rutaProducto(producto) {

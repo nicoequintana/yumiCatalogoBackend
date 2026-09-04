@@ -16,6 +16,7 @@ import { MAX_IDS_LISTADO, parsearIdsMasivos } from "./products.input.js";
 // de contrato que este refactor no necesita hacer.
 export { MAX_IDS_LISTADO };
 import { escaparLike } from "../lib/escaparLike.js";
+import { esEnteroSeguro, parsearIdEntero } from "../lib/enteroSeguro.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import {
   LIST_SELECT,
@@ -209,8 +210,8 @@ export function parsearIdsListado(valor) {
   const ids = [];
   const vistos = new Set();
   for (const crudo of crudos) {
-    const id = Number(crudo.trim());
-    if (!Number.isInteger(id) || id <= 0 || vistos.has(id)) continue;
+    const id = parsearIdEntero(crudo.trim());
+    if (id === null || vistos.has(id)) continue;
     vistos.add(id);
     ids.push(id);
   }
@@ -246,11 +247,18 @@ export function parsearIdsListado(valor) {
 async function resolverVitrina(valor, ahora) {
   if (valor === undefined) return undefined;
 
-  // `Number.isInteger`, mismo criterio que `categoria`: un `?campania=1.5` o un
-  // array (`?campania=1&campania=2`) no puede llegar a Prisma, que espera un
-  // Int y responde con un 500 en un endpoint público.
-  const id = Number(valor);
-  if (!Number.isInteger(id) || id <= 0) return { campania: null };
+  // `parsearIdEntero`, mismo criterio que `categoria`: un `?campania=1.5`, un
+  // array (`?campania=1&campania=2`) o un número fuera del rango representable
+  // (`?campania=1e21`) no puede llegar a Prisma, que espera un Int y responde
+  // con un 500 en un endpoint público.
+  //
+  // ⚠️ El guard de RANGO es la mitad que faltaba, y el comentario que estaba acá
+  // afirmaba que `Number.isInteger` ya la cubría: no la cubre. `Number("1e21")`
+  // es un entero positivo, pasaba, y `GET /api/products?campania=1e21`
+  // respondía 500 con su fila en `ErrorLog` (verificado con curl). Ver
+  // `lib/enteroSeguro.js`.
+  const id = parsearIdEntero(valor);
+  if (id === null) return { campania: null };
 
   const campania = await prisma.campania.findUnique({
     where: { id },
@@ -262,6 +270,19 @@ async function resolverVitrina(valor, ahora) {
   if (!campania || !resolverEstadoCampania(campania, ahora).activa) return { campania: null };
 
   return { campania: { id: campania.id, nombre: campania.nombre }, campaniaId: campania.id };
+}
+
+/**
+ * El valor absoluto más grande que entra en `Product.precio`, que es
+ * `Decimal(10, 0)`: diez dígitos, sin decimales. Espeja el schema — un filtro
+ * por encima de esto no puede matchear ninguna fila, y en el camino hace fallar
+ * la conversión a `numeric` con un 500.
+ */
+const MAX_PRECIO_FILTRABLE = 9_999_999_999;
+
+/** ¿Este número se puede comparar contra la columna `precio` sin desbordarla? */
+function esPrecioFiltrable(numero) {
+  return Number.isFinite(numero) && Math.abs(numero) <= MAX_PRECIO_FILTRABLE;
 }
 
 function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
@@ -285,11 +306,16 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   if (ids !== null) where.id = { in: ids };
 
   if (query.categoria !== undefined) {
-    // `Number.isInteger`, no `!Number.isNaN`: `categoriaId` es Int en el
-    // schema, y un float ("1.5") pasaba el chequeo de NaN y reventaba en
-    // Prisma con un 500 — en el endpoint público de browse.
+    // `esEnteroSeguro`, no `Number.isInteger` ni `!Number.isNaN`: `categoriaId`
+    // es Int en el schema, y tanto un float ("1.5") como un entero fuera del
+    // rango representable ("1e21") pasaban los chequeos anteriores y reventaban
+    // en Prisma con un 500 — en el endpoint público de browse.
+    //
+    // Se conserva a propósito el cero y los negativos, que hoy filtran y
+    // devuelven vacío: acotar por el rango de la columna cambiaría eso en
+    // "devolver el catálogo entero". Ver `lib/enteroSeguro.js`.
     const categoriaId = Number(query.categoria);
-    if (Number.isInteger(categoriaId)) where.categoriaId = categoriaId;
+    if (esEnteroSeguro(categoriaId)) where.categoriaId = categoriaId;
   }
 
   // `destacado=1` alimenta el bento de la home y de `/coleccion`: son cuatro
@@ -350,14 +376,21 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   // `Number.isFinite`, no `!Number.isNaN`: `"1e400"` da `Infinity`, que no es
   // NaN pero revienta contra el `Decimal` de Prisma con un 500. Un precio
   // fraccionario ("99.99") sigue siendo un filtro válido.
+  //
+  // Y `Number.isFinite` TAMPOCO alcanza: el tope de este filtro no es el de un
+  // entero de 64 bits sino el de la COLUMNA. `Product.precio` es
+  // `Decimal(10, 0)`, así que `?maxPrecio=10000000000` (y hasta
+  // `9999999999.9`) hace fallar la conversión con *"Arithmetic overflow error
+  // converting nvarchar to data type numeric"* — otro 500 en el listado
+  // público, verificado con curl.
   const rangoPrecio = {};
   if (query.minPrecio !== undefined) {
     const min = Number(query.minPrecio);
-    if (Number.isFinite(min)) rangoPrecio.gte = min;
+    if (esPrecioFiltrable(min)) rangoPrecio.gte = min;
   }
   if (query.maxPrecio !== undefined) {
     const max = Number(query.maxPrecio);
-    if (Number.isFinite(max)) rangoPrecio.lte = max;
+    if (esPrecioFiltrable(max)) rangoPrecio.lte = max;
   }
   if (Object.keys(rangoPrecio).length > 0) where.precio = rangoPrecio;
 
@@ -694,7 +727,7 @@ export async function obtenerPorId(req, res, next) {
     // `/:id`): un float ("1.5") no es NaN y llegaría a Prisma como filtro
     // sobre una columna Int → `PrismaClientValidationError` → 500 en un
     // endpoint público, en vez del mismo 404 que un id inexistente.
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
@@ -777,7 +810,7 @@ export async function obtenerPorId(req, res, next) {
 export async function compartir(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
@@ -807,7 +840,7 @@ export async function compartir(req, res, next) {
 export async function favorito(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const existe = await prisma.product.findUnique({ where: { id } });
     if (!existe) throw httpError(404, "Producto no encontrado.");
@@ -976,7 +1009,7 @@ export async function crear(req, res, next) {
 export async function actualizar(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const existente = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!existente) throw httpError(404, "Producto no encontrado.");
@@ -1222,7 +1255,7 @@ export async function actualizar(req, res, next) {
 export async function actualizarVisibilidad(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const { visibleEnCatalogo } = req.body;
     if (typeof visibleEnCatalogo !== "boolean") {
@@ -1273,7 +1306,7 @@ export async function actualizarVisibilidad(req, res, next) {
 export async function actualizarMerchandising(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const { destacado } = req.body;
 
@@ -1310,7 +1343,7 @@ export async function actualizarMerchandising(req, res, next) {
 export async function eliminar(req, res, next) {
   try {
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
@@ -1483,7 +1516,7 @@ export async function eliminarFoto(req, res, next) {
   try {
     const id = Number(req.params.id);
     const fotoId = Number(req.params.fotoId);
-    if (!Number.isInteger(id) || !Number.isInteger(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
+    if (!esEnteroSeguro(id) || !esEnteroSeguro(fotoId)) throw httpError(404, "Producto o foto no encontrados.");
 
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
@@ -1543,7 +1576,7 @@ export async function generarImagenes(req, res, next) {
     }
 
     const id = Number(req.params.id);
-    if (!Number.isInteger(id)) throw httpError(404, "Producto no encontrado.");
+    if (!esEnteroSeguro(id)) throw httpError(404, "Producto no encontrado.");
 
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
