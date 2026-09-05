@@ -125,6 +125,7 @@ function mapCampania(campania, ahora) {
     bannerTitulo: campania.bannerTitulo,
     bannerTexto: campania.bannerTexto,
     bannerCtaTexto: campania.bannerCtaTexto,
+    bannerColor: campania.bannerColor,
   };
 }
 
@@ -1104,6 +1105,7 @@ export async function duplicar(req, res, next) {
           bannerTitulo: original.bannerTitulo,
           bannerTexto: original.bannerTexto,
           bannerCtaTexto: original.bannerCtaTexto,
+          bannerColor: original.bannerColor,
         },
       });
 

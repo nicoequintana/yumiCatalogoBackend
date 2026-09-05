@@ -1461,6 +1461,20 @@ describe("POST /api/campanias/:id/duplicar", () => {
     expect(data.createdAt).toBeUndefined();
     expect(data.updatedAt).toBeUndefined();
   });
+
+  it("copia el color del slide", async () => {
+    // Mismo criterio que el destino del CTA: los campos se enumeran a mano, así
+    // que olvidarse de sumar uno nuevo deja el duplicado con el color perdido,
+    // sin que nada falle.
+    campaniaMock.findUnique.mockResolvedValue(fila({ bannerColor: "VERDE" }));
+    campaniaMock.create.mockResolvedValue(fila({ id: 2, bannerColor: "VERDE" }));
+
+    await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
+
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      bannerColor: "VERDE",
+    });
+  });
 });
 
 describe("PUT /api/campanias/:id/doodle", () => {
@@ -2114,5 +2128,18 @@ describe("El bloque del banner de la home", () => {
       bannerTexto: "Hasta 30 %.",
       bannerCtaTexto: "Ver la selección",
     });
+  });
+
+  it("el detalle del panel emite también el color guardado", async () => {
+    // Sin esto el editor reabre una campaña con VERDE guardado y el selector
+    // muestra el default (TERRACOTA) — el dato está en la base pero el panel
+    // nunca lo lee, sin ningún error.
+    campaniaMock.findUnique.mockResolvedValue(conDetalle({ bannerColor: "VERDE" }));
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.bannerColor).toBe("VERDE");
   });
 });
