@@ -13,9 +13,10 @@ import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js
  * al admin creyendo que eligió algo que no se ve, que es exactamente el modo
  * de falla que esta feature vino a eliminar.
  *
- * El frontend público lo espeja como `MAX_CATEGORIAS_HOME` en
- * `hooks/useCategoriasDestacadas.js` — sync manual entre repos, mismo criterio
- * que `botDetector.js` ↔ `nginx.conf`.
+ * El panel lo espeja como `MAX_CATEGORIAS_HOME` en
+ * `pages/admin/AdminCategorias.jsx` (sólo para el texto de ayuda y el
+ * contador; el tope real lo aplica este archivo) — sync manual entre repos,
+ * mismo criterio que `botDetector.js` ↔ `nginx.conf`.
  */
 export const MAX_CATEGORIAS_HOME = 3;
 
