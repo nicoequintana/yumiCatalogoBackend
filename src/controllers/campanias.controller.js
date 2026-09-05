@@ -13,11 +13,13 @@ import { rutaCategoria, rutaProducto } from "../lib/slug.js";
 import { condicionProductoConDescuento } from "../lib/precioEfectivo.js";
 import {
   COLOR_SLIDE_POR_DEFECTO,
+  COLORES_SLIDE,
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
   TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
+  listaDeColoresSlide,
   listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
@@ -370,11 +372,27 @@ function parsearBanner(body, actual = null, ctaTipo = null) {
     throw httpError(400, "El botón del banner tiene texto pero no lleva a ningún lado.");
   }
 
+  // Lista CERRADA, misma disciplina que `tipo`, `estado` y `modalCtaTipo`: un
+  // color libre deja elegir amarillo claro con título blanco encima, sin error
+  // y sin test rojo. `undefined` conserva el actual; `null` explícito vuelve al
+  // default de la lib.
+  let color = actual?.bannerColor ?? null;
+  if (body?.bannerColor !== undefined) {
+    if (body.bannerColor === null) {
+      color = null;
+    } else if (!COLORES_SLIDE.includes(body.bannerColor)) {
+      throw httpError(400, `El color del slide debe ser uno de: ${COLORES_SLIDE.join(", ")}.`);
+    } else {
+      color = body.bannerColor;
+    }
+  }
+
   return {
     bannerEnHome: enHome,
     bannerTitulo: titulo,
     bannerTexto: texto,
     bannerCtaTexto: ctaTexto,
+    bannerColor: color,
   };
 }
 
@@ -514,6 +532,8 @@ export function opciones(_req, res) {
     // panel: es la regla 1 de la metodología. Un placeholder hecho a mano
     // divergiría de lo que el cartel muestra, sin error y sin test rojo.
     ctaTextoPorDefecto: CTA_TEXTO_POR_DEFECTO,
+    // Los colores del slide: el panel no tiene copia, mismo criterio.
+    coloresSlide: listaDeColoresSlide(),
   });
 }
 

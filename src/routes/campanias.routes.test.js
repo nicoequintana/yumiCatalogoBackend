@@ -1171,6 +1171,23 @@ describe("POST /api/campanias — validaciones", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("rechaza un color de slide que no está en la lista", async () => {
+    const res = await crear({ ...valida, bannerColor: "FUCSIA" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/color/i);
+  });
+
+  it("acepta un color válido y lo guarda", async () => {
+    campaniaMock.create.mockResolvedValue(fila());
+
+    await crear({ ...valida, bannerColor: "VERDE" });
+
+    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
+      bannerColor: "VERDE",
+    });
+  });
 });
 
 describe("PUT /api/campanias/:id — los flags del Doodle se pueden cambiar", () => {
@@ -1258,6 +1275,20 @@ describe("GET /api/campanias/opciones — la fuente de los diccionarios", () => 
     const res = await request(buildApp()).get("/api/campanias/opciones");
 
     expect(res.status).toBe(401);
+  });
+
+  it("opciones emite los colores del slide: el panel no tiene copia", async () => {
+    const res = await request(buildApp())
+      .get("/api/campanias/opciones")
+      .set("Authorization", authHeader);
+
+    expect(res.body.coloresSlide).toEqual([
+      { valor: "TERRACOTA", etiqueta: "Terracota" },
+      { valor: "VERDE", etiqueta: "Verde" },
+      { valor: "OCRE", etiqueta: "Ocre" },
+      { valor: "TINTA", etiqueta: "Tinta" },
+      { valor: "ARENA", etiqueta: "Arena" },
+    ]);
   });
 
   it("NO se confunde con /:id — 'opciones' no se matchea como un id", async () => {
