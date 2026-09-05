@@ -116,6 +116,13 @@ function fila(extra = {}) {
     modalCtaTipo: null,
     modalCtaReferenciaId: null,
     modalFechaObjetivo: null,
+    // Última red antes de que `curl` contra la base real confirme la columna:
+    // sin estos cuatro defaults, un mapper que se olvida de leerlos pasaría
+    // en verde igual porque el mock nunca los trae de entrada.
+    bannerEnHome: false,
+    bannerTitulo: null,
+    bannerTexto: null,
+    bannerCtaTexto: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     // El listado lo pide con `include`, así que Prisma SIEMPRE lo devuelve ahí.
