@@ -57,7 +57,35 @@ function mapCategoria(categoria) {
     imagenUrl: categoria.imagenUrl ?? null,
     destacadaEnHome: categoria.destacadaEnHome ?? false,
     ordenHome: categoria.ordenHome ?? 0,
+    // Viaja SIEMPRE, en `null` cuando no hay: si la clave apareciera solo con
+    // ícono, cada pantalla tendría que distinguir "sin ícono" de "no vino".
+    icono: categoria.icono ?? null,
   };
+}
+
+/**
+ * Tope de `Categoria.icono` (`VarChar(40)`).
+ *
+ * El valor es el NOMBRE de un símbolo de Material Symbols, no una URL: no se
+ * valida acá contra una lista cerrada — un nombre inexistente se pinta como el
+ * propio texto adentro del círculo, y el círculo cae a la inicial. La lista
+ * acotada que sí restringe las opciones vive en el selector del panel.
+ */
+export const LARGO_MAX_ICONO = 40;
+
+/**
+ * Texto opcional acotado: vacío degrada a `null`, largo de más es 400.
+ * Mismo criterio que `parsearTextoOpcional` de `campanias.controller.js` —
+ * sin un tercer consumidor todavía no amerita mudarse a `lib/`.
+ */
+function parsearIcono(valor) {
+  if (valor === undefined || valor === null) return null;
+  if (typeof valor !== "string") throw httpError(400, "El icono debe ser texto.");
+  const icono = valor.trim();
+  if (icono.length > LARGO_MAX_ICONO) {
+    throw httpError(400, `El icono no puede superar los ${LARGO_MAX_ICONO} caracteres.`);
+  }
+  return icono || null;
 }
 
 /**
@@ -131,11 +159,13 @@ export async function crear(req, res, next) {
     const nombre = req.body?.nombre?.trim();
     if (!nombre) throw httpError(400, "El nombre de la categoría es obligatorio.");
 
+    const icono = parsearIcono(req.body?.icono);
+
     const existente = await prisma.categoria.findUnique({ where: { nombre } });
     if (existente) throw httpError(400, "Ya existe una categoría con ese nombre.");
 
     const categoria = await prisma.categoria.create({
-      data: { nombre },
+      data: { nombre, icono },
       include: { _count: { select: { productos: true } } },
     });
 
@@ -161,6 +191,8 @@ export async function actualizar(req, res, next) {
     const nombre = req.body?.nombre?.trim();
     if (!nombre) throw httpError(400, "El nombre de la categoría es obligatorio.");
 
+    const icono = parsearIcono(req.body?.icono);
+
     const actual = await prisma.categoria.findUnique({ where: { id } });
     if (!actual) throw httpError(404, "Categoría no encontrada.");
 
@@ -171,7 +203,7 @@ export async function actualizar(req, res, next) {
 
     const categoria = await prisma.categoria.update({
       where: { id },
-      data: { nombre },
+      data: { nombre, icono },
       include: { _count: { select: { productos: true } } },
     });
 

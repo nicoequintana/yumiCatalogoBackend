@@ -88,8 +88,32 @@ describe("GET /api/categorias (público)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([
-      { id: 1, nombre: "Velas", cantidadProductos: 3, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+      { id: 1, nombre: "Velas", cantidadProductos: 3, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null },
     ]);
+  });
+});
+
+describe("GET /api/categorias — icono", () => {
+  it("el listado emite el icono", async () => {
+    categoriaMock.findMany.mockResolvedValue([
+      { id: 1, nombre: "Hogar", icono: "chair", _count: { productos: 3 } },
+    ]);
+
+    const res = await request(buildApp()).get("/api/categorias");
+
+    expect(res.body[0].icono).toBe("chair");
+  });
+
+  it("una categoría sin icono lo emite como null, no undefined", async () => {
+    // La clave viaja SIEMPRE: si apareciera solo cuando hay ícono, el círculo
+    // tendría que distinguir "sin ícono" de "no vino en esta respuesta".
+    categoriaMock.findMany.mockResolvedValue([
+      { id: 1, nombre: "Hogar", icono: null, _count: { productos: 3 } },
+    ]);
+
+    const res = await request(buildApp()).get("/api/categorias");
+
+    expect(res.body[0]).toHaveProperty("icono", null);
   });
 });
 
@@ -111,7 +135,21 @@ describe("POST /api/categorias (protegido)", () => {
       .send({ nombre: "Velas" });
 
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ id: 5, nombre: "Velas", cantidadProductos: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 });
+    expect(res.body).toEqual({ id: 5, nombre: "Velas", cantidadProductos: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null });
+  });
+
+  it("guarda el icono al crear", async () => {
+    categoriaMock.findUnique.mockResolvedValue(null);
+    categoriaMock.create.mockResolvedValue({ id: 6, nombre: "Iluminación", icono: "lightbulb", _count: { productos: 0 } });
+
+    await request(buildApp())
+      .post("/api/categorias")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Iluminación", icono: "lightbulb" });
+
+    expect(categoriaMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ icono: "lightbulb" }) }),
+    );
   });
 });
 
@@ -133,7 +171,7 @@ describe("PUT /api/categorias/:id (protegido)", () => {
       .send({ nombre: "Aromas" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ id: 1, nombre: "Aromas", cantidadProductos: 2, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 });
+    expect(res.body).toEqual({ id: 1, nombre: "Aromas", cantidadProductos: 2, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null });
   });
 });
 
@@ -241,9 +279,9 @@ describe("GET /api/categorias — cantidadPublicados", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([
-      { id: 1, nombre: "Cocina", cantidadProductos: 10, cantidadPublicados: 3, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+      { id: 1, nombre: "Cocina", cantidadProductos: 10, cantidadPublicados: 3, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null },
       // Sin fila en el groupBy = cero publicados, no "sin dato".
-      { id: 2, nombre: "Hogar", cantidadProductos: 4, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0 },
+      { id: 2, nombre: "Hogar", cantidadProductos: 4, cantidadPublicados: 0, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null },
     ]);
   });
 
