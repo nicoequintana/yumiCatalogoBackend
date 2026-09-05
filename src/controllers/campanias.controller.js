@@ -690,21 +690,22 @@ async function aModalPublico(campania, ahora) {
 /**
  * La franja de la home, con TODO resuelto.
  *
- * Misma disciplina que `aModalPublico` y por el mismo motivo: el frontend no
- * arma rutas ni cuenta días. `ctaDestino` sale del `switch` de intenciones
- * contra lo que existe HOY, y `diasFaltantes` de la definición de "día" del
- * sistema.
+ * Misma disciplina que `aModalPublico`: el frontend no arma rutas. `ctaDestino`
+ * sale del `switch` de intenciones contra lo que existe HOY.
+ *
+ * ⚠️ **NO emite contador, y no es un olvido.** El único día objetivo que existe
+ * es `modalFechaObjetivo`, que es un campo DEL CARTEL: `SeccionBanner` tiene
+ * tres campos y ninguno es una fecha. Leerlo de prestado ataba dos superficies
+ * que el modelo declara independientes —interruptor propio, copy propio, largos
+ * de columna distintos a propósito— y le ponía al admin una píldora de días que
+ * no puede apagar sin editar la otra superficie.
  *
  * ⚠️ Es `async` — el destino toca la base. Hay que resolverlo con `await` ANTES
  * del literal que va a `res.json`: una promesa dentro de un objeto se serializa
  * como `{}`, sin error y sin nada en la consola.
  */
-async function aBannerPublico(campania, ahora) {
+async function aBannerPublico(campania) {
   if (!campania) return null;
-
-  const claveObjetivo = campania.modalFechaObjetivo
-    ? claveDiaArgentino(campania.modalFechaObjetivo)
-    : null;
 
   return {
     campaniaId: campania.id,
@@ -715,7 +716,6 @@ async function aBannerPublico(campania, ahora) {
     texto: campania.bannerTexto,
     ctaTexto: campania.modalCtaTipo ? (campania.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
     ctaDestino: await resolverDestinoCta(campania),
-    diasFaltantes: claveObjetivo === null ? null : diasHastaClave(claveObjetivo, ahora),
   };
 }
 
@@ -758,7 +758,6 @@ export async function contextoActivo(req, res, next) {
     // catálogo no es el lugar donde eso se descubre.
     const banner = await aBannerPublico(
       elegirPorPrioridad(activas.filter((c) => c.bannerEnHome && c.bannerTitulo)),
-      ahora,
     );
 
     const cuerpo = {

@@ -586,13 +586,21 @@ describe("GET /api/campanias/activas — el banner de la home", () => {
     expect(banner.ctaTexto).toBeNull();
   });
 
-  it("cuenta los días contra la fecha objetivo, no el navegador", async () => {
-    const banner = await bannerDe(
-      conBanner({ modalFechaObjetivo: inicioDelDiaArgentino("2026-09-21") }),
-    );
+  it("el banner NO emite diasFaltantes: el contador es del cartel", async () => {
+    // `modalFechaObjetivo` es un campo del CARTEL. El banner lo leía de prestado
+    // y le aparecía al admin una píldora de días que su sección no puede apagar.
+    campaniaMock.findMany.mockResolvedValue([
+      fila({
+        bannerEnHome: true,
+        bannerTitulo: "Primavera",
+        modalFechaObjetivo: new Date("2026-09-21T03:00:00.000Z"),
+      }),
+    ]);
 
-    // La suite está parada el 15/09/2026.
-    expect(banner.diasFaltantes).toBe(6);
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.status).toBe(200);
+    expect(res.body.banner).not.toHaveProperty("diasFaltantes");
   });
 
   it("elige por prioridad SOLO entre las que tienen el banner prendido", async () => {
