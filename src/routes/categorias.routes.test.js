@@ -151,6 +151,28 @@ describe("POST /api/categorias (protegido)", () => {
       expect.objectContaining({ data: expect.objectContaining({ icono: "lightbulb" }) }),
     );
   });
+
+  it("el icono topea en 40, el largo de la columna", async () => {
+    const res = await request(buildApp())
+      .post("/api/categorias")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Iluminación", icono: "x".repeat(41) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El icono no puede superar los 40 caracteres.");
+    expect(categoriaMock.create).not.toHaveBeenCalled();
+  });
+
+  it("un icono que no es texto es 400, no un P2000 de Prisma", async () => {
+    const res = await request(buildApp())
+      .post("/api/categorias")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Iluminación", icono: 12345 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El icono debe ser texto.");
+    expect(categoriaMock.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("PUT /api/categorias/:id (protegido)", () => {
@@ -172,6 +194,20 @@ describe("PUT /api/categorias/:id (protegido)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: 1, nombre: "Aromas", cantidadProductos: 2, imagenUrl: null, destacadaEnHome: false, ordenHome: 0, icono: null });
+  });
+
+  it("guarda el icono al actualizar", async () => {
+    categoriaMock.findUnique.mockResolvedValueOnce({ id: 1, nombre: "Velas", icono: null });
+    categoriaMock.update.mockResolvedValue({ id: 1, nombre: "Velas", icono: "lightbulb", _count: { productos: 2 } });
+
+    await request(buildApp())
+      .put("/api/categorias/1")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Velas", icono: "lightbulb" });
+
+    expect(categoriaMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ icono: "lightbulb" }) }),
+    );
   });
 });
 
