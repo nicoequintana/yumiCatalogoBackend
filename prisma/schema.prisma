@@ -150,6 +150,15 @@ model Categoria {
   imagenCloudinaryPublicId     String?
   imagenCloudinaryResourceType String?
 
+  /// El nombre de un símbolo de Material Symbols (ej. "chair") para el acceso
+  /// circular de la home. Sin archivo que subir y sin dependencia nueva: el
+  /// proyecto ya carga esa tipografía.
+  ///
+  /// No se usa `imagenUrl` para el círculo: a 56 px una foto de producto es un
+  /// recorte irreconocible. Sin ícono, el círculo cae a la inicial de la
+  /// categoría, así que una categoría recién creada nunca rompe la fila.
+  icono String? @db.VarChar(40)
+
   /// Selección para la home. Mismo par que `Anuncio` (`activo` + `orden`) y por
   /// el mismo motivo: `destacadaEnHome` permite sacar una categoría de la home
   /// sin perder su foto, y `ordenHome` lo reescribe entero la operación de
@@ -305,6 +314,27 @@ model Campania {
   /// completa.
   bannerTexto    String? @db.NVarChar(200)
   bannerCtaTexto String? @db.NVarChar(60)
+
+  /// El arte apaisado del slide, SEPARADO del Doodle y con su propio trío de
+  /// columnas. Son dos piezas distintas: el Doodle es cuadrado y reemplaza el
+  /// logo; esto llena el slide del carrusel (2,9:1 en móvil, 3,6:1 en
+  /// escritorio). Es OPCIONAL: sin arte, el slide cae al molde compuesto
+  /// —doodle + copy sobre `bannerColor`—, que es el único que puede usar el
+  /// slide automático de Ofertas, porque a ese no hay quién le diseñe una pieza.
+  ///
+  /// ⚠️ Hereda la trampa del Doodle: `duplicar` copia el `cloudinaryPublicId`
+  /// por REFERENCIA, así que dos campañas pueden apuntar al mismo archivo. El
+  /// borrado consulta si alguien más lo referencia antes de borrarlo.
+  bannerArteUrl                    String?
+  bannerArteCloudinaryPublicId     String?
+  bannerArteCloudinaryResourceType String?
+
+  /// El fondo del slide cuando no hay arte. TERRACOTA | VERDE | OCRE | TINTA |
+  /// ARENA — la lista ejecutable vive en `lib/campanias.js` (`COLORES_SLIDE`),
+  /// igual que `tipo` y `estado`. Es una lista CERRADA y no un color libre:
+  /// cada valor mapea a un par de tokens (fondo + texto encima) que ya
+  /// contrasta en los dos temas. `null` cae a `COLOR_SLIDE_POR_DEFECTO`.
+  bannerColor String? @db.VarChar(20)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

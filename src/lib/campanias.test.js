@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { inicioDelDiaArgentino } from "./horarioArgentino.js";
 import {
+  COLORES_SLIDE,
+  COLOR_SLIDE_POR_DEFECTO,
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   ESTADOS_TEMPORALES,
@@ -10,6 +12,7 @@ import {
   TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
   estadoTemporal,
+  listaDeColoresSlide,
   listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
@@ -273,5 +276,23 @@ describe("las listas canónicas", () => {
     const cruce = ESTADOS_CAMPANIA.filter((estado) => ESTADOS_TEMPORALES.includes(estado));
 
     expect(cruce).toEqual([]);
+  });
+});
+
+describe("colores del slide", () => {
+  it("son cinco valores cerrados y el default está entre ellos", () => {
+    // Lista CERRADA y no un picker libre: con color libre alguien elige
+    // amarillo claro, el titulo blanco desaparece, y no falla nada.
+    expect(COLORES_SLIDE).toEqual(["TERRACOTA", "VERDE", "OCRE", "TINTA", "ARENA"]);
+    expect(COLORES_SLIDE).toContain(COLOR_SLIDE_POR_DEFECTO);
+  });
+
+  it("cada color tiene etiqueta legible", () => {
+    const lista = listaDeColoresSlide();
+    expect(lista).toHaveLength(COLORES_SLIDE.length);
+    for (const item of lista) {
+      expect(item.etiqueta).toBeTruthy();
+      expect(item.etiqueta).not.toBe(item.valor);
+    }
   });
 });
