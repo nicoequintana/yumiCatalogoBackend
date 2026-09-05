@@ -3,6 +3,8 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 import {
   PORCENTAJE_MAX,
   PORCENTAJE_MIN,
+  condicionPromocionVigente,
+  condicionProductoConDescuento,
   esPorcentajeValido,
   precioConDescuento,
 } from "./precioEfectivo.js";
@@ -111,5 +113,40 @@ describe("esPorcentajeValido", () => {
     for (const invalido of [4, 51, 0, -5, 10.5, NaN, null, undefined, "10", {}, []]) {
       expect(esPorcentajeValido(invalido), `valor: ${invalido}`).toBe(false);
     }
+  });
+});
+
+describe("condicionPromocionVigente", () => {
+  const AHORA = new Date("2026-09-05T15:00:00.000Z");
+
+  it("exige la promoción activa y alguno de los DOS caminos de vigencia", () => {
+    const cond = condicionPromocionVigente(AHORA);
+
+    expect(cond.activa).toBe(true);
+    // Programación individual habilitada, o campaña HABILITADA que la incluya.
+    expect(cond.OR).toHaveLength(2);
+    expect(cond.OR[0].programaciones.some.habilitada).toBe(true);
+    expect(cond.OR[1].campanias.some.campania.estado).toBe("HABILITADA");
+  });
+
+  it("la frontera de fin es la MEDIANOCHE DE HOY, no el instante", () => {
+    // `hasta` guarda una medianoche argentina. Comparar contra `ahora`
+    // apagaría toda promo que termine hoy, a cualquier hora del día.
+    const cond = condicionPromocionVigente(AHORA);
+    const enFecha = cond.OR[0].programaciones.some;
+
+    expect(enFecha.desde.lte).toEqual(AHORA);
+    expect(enFecha.hasta.gte.getTime()).toBeLessThan(AHORA.getTime());
+    // La medianoche argentina son las 03:00 UTC.
+    expect(enFecha.hasta.gte.getUTCHours()).toBe(3);
+  });
+
+  it("condicionProductoConDescuento exige el item HABILITADO", () => {
+    // `habilitado: false` es la decisión persistida de un conflicto perdido:
+    // no puede volver por la puerta de atrás en el filtro del listado.
+    const cond = condicionProductoConDescuento(AHORA);
+
+    expect(cond.some.habilitado).toBe(true);
+    expect(cond.some.promocion.activa).toBe(true);
   });
 });

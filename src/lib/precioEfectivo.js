@@ -90,23 +90,60 @@ export function precioConDescuento(precio, porcentaje) {
 }
 
 /**
+ * El `where` de una promoción que se está aplicando AHORA.
+ *
+ * Extraída de `resolverDescuentos` para que el filtro `?conDescuento=1` del
+ * listado no la copie: sería la TERCERA copia de la regla de vigencia, y una
+ * regla duplicada se desincroniza sin que nada falle — el listado mostraría un
+ * producto como "en oferta" y el precio saldría de lista, o al revés.
+ *
+ * Una promoción se aplica por DOS caminos y el `OR` cubre los dos:
+ *
+ * - **programación individual**: habilitada y en fecha;
+ * - **dentro de una campaña**: la campaña HABILITADA y en fecha. De ahí sale
+ *   que apagar una campaña apague todas sus promociones de una.
+ *
+ * La frontera de fin es **la medianoche de HOY**, no el instante: `hasta` guarda
+ * una medianoche argentina, así que `hasta >= medianoche de hoy` significa "su
+ * último día es hoy o más adelante". Comparar contra `ahora` apagaría toda promo
+ * que termine hoy, a cualquier hora del día.
+ *
+ * @param {Date} [ahora]
+ */
+export function condicionPromocionVigente(ahora = new Date()) {
+  const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+  const enFecha = { desde: { lte: ahora }, hasta: { gte: medianocheDeHoy } };
+
+  return {
+    activa: true,
+    OR: [
+      { programaciones: { some: { habilitada: true, ...enFecha } } },
+      { campanias: { some: { campania: { estado: "HABILITADA", ...enFecha } } } },
+    ],
+  };
+}
+
+/**
+ * El filtro de RELACIÓN para `Product.itemsPromocion`: "este producto tiene un
+ * descuento vigente".
+ *
+ * ⚠️ Filtro por relación y NO una lista de ids. Resolver los ids primero y
+ * pasarlos como `id: { in: [...] }` revienta el límite de 2.100 parámetros de
+ * SQL Server en cuanto haya muchos productos rebajados, y sale como un 500
+ * opaco en el listado público.
+ *
+ * @param {Date} [ahora]
+ */
+export function condicionProductoConDescuento(ahora = new Date()) {
+  return { some: { habilitado: true, promocion: condicionPromocionVigente(ahora) } };
+}
+
+/**
  * Qué descuento le corresponde a cada uno de estos productos, AHORA.
  *
  * **UNA consulta por request, no una por producto.** Esto corre en cada listado
  * del catálogo —doce productos por página— y en cada ficha con sus
  * relacionados: resolver de a uno sería un N+1 en la pantalla que más se mira.
- *
- * Una promoción se aplica por DOS caminos, y el `OR` cubre los dos:
- *
- * - **programación individual**: habilitada y en fecha;
- * - **dentro de una campaña**: la campaña HABILITADA y en fecha. De ahí sale que
- *   apagar una campaña apague todas sus promociones de una, sin tocar ninguna.
- *
- * La frontera de fin es **la medianoche de HOY**, no el instante: `hasta` guarda
- * una medianoche argentina, así que `hasta >= medianoche de hoy` significa "su
- * último día es hoy o más adelante". Comparar contra `ahora` apagaría toda promo
- * que termine hoy, a cualquier hora del día. Misma frontera que la vigencia de
- * campaña.
  *
  * CONFLICTO SIN RESOLVER: si dos promociones alcanzan al mismo producto, **gana
  * el porcentaje MENOR**. El catálogo tiene que mostrar algo, y el menor nunca
@@ -124,22 +161,13 @@ export async function resolverDescuentos(prisma, productIds, ahora = new Date())
   // consulta al pedo contra la base en cada página vacía.
   if (!productIds?.length) return mapa;
 
-  const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
-  const enFecha = { desde: { lte: ahora }, hasta: { gte: medianocheDeHoy } };
-
   const items = await prisma.promocionItem.findMany({
     where: {
       productId: { in: productIds },
       // `habilitado: false` es la decisión persistida de un conflicto perdido:
       // no puede volver por la puerta de atrás en la resolución del precio.
       habilitado: true,
-      promocion: {
-        activa: true,
-        OR: [
-          { programaciones: { some: { habilitada: true, ...enFecha } } },
-          { campanias: { some: { campania: { estado: "HABILITADA", ...enFecha } } } },
-        ],
-      },
+      promocion: condicionPromocionVigente(ahora),
     },
     select: {
       productId: true,
