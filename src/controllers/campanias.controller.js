@@ -10,7 +10,9 @@ import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { rutaCategoria, rutaProducto } from "../lib/slug.js";
+import { condicionProductoConDescuento } from "../lib/precioEfectivo.js";
 import {
+  COLOR_SLIDE_POR_DEFECTO,
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
@@ -707,34 +709,68 @@ async function aModalPublico(campania, ahora) {
 }
 
 /**
- * La franja de la home, con TODO resuelto.
+ * Cuántas campañas entran al carrusel.
  *
- * Misma disciplina que `aModalPublico`: el frontend no arma rutas. `ctaDestino`
- * sale del `switch` de intenciones contra lo que existe HOY.
+ * Con cinco simultáneas el sexto slide no lo ve nadie, y el tope evita que una
+ * carga de datos rara produzca un carrusel de veinte.
+ */
+const MAX_SLIDES_CAMPANIA = 5;
+
+/**
+ * Una campaña, en la forma que consume el carrusel de la home.
  *
- * ⚠️ **NO emite contador, y no es un olvido.** El único día objetivo que existe
- * es `modalFechaObjetivo`, que es un campo DEL CARTEL: `SeccionBanner` tiene
- * tres campos y ninguno es una fecha. Leerlo de prestado ataba dos superficies
- * que el modelo declara independientes —interruptor propio, copy propio, largos
- * de columna distintos a propósito— y le ponía al admin una píldora de días que
- * no puede apagar sin editar la otra superficie.
+ * Misma disciplina que `aModalPublico`: el frontend no arma rutas ni elige
+ * defaults. `ctaDestino` sale del `switch` de intenciones contra lo que existe
+ * HOY, y `color` viene con su default ya aplicado.
+ *
+ * ⚠️ **NO emite contador.** El único día objetivo que existe es
+ * `modalFechaObjetivo`, que es un campo DEL CARTEL: leerlo acá ataba dos
+ * superficies que el modelo declara independientes.
  *
  * ⚠️ Es `async` — el destino toca la base. Hay que resolverlo con `await` ANTES
  * del literal que va a `res.json`: una promesa dentro de un objeto se serializa
  * como `{}`, sin error y sin nada en la consola.
  */
-async function aBannerPublico(campania) {
-  if (!campania) return null;
-
+async function aSlideCampania(campania) {
   return {
+    tipo: "CAMPANIA",
     campaniaId: campania.id,
-    // El arte de SU campaña, que puede no ser la del encabezado: los dos
-    // recursos se eligen aparte.
-    doodleUrl: campania.doodleUrl ?? null,
     titulo: campania.bannerTitulo,
     texto: campania.bannerTexto,
     ctaTexto: campania.modalCtaTipo ? (campania.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
     ctaDestino: await resolverDestinoCta(campania),
+    // La pieza apaisada, si la campaña la subió. `null` es un caso legítimo y
+    // la clave viaja igual para que el slide no tenga que distinguirlo de un
+    // olvido: sin arte cae al molde compuesto sobre `color`.
+    arteUrl: campania.bannerArteUrl ?? null,
+    // El arte de SU campaña, que puede no ser la del encabezado: los dos
+    // recursos se eligen aparte.
+    doodleUrl: campania.doodleUrl ?? null,
+    color: campania.bannerColor ?? COLOR_SLIDE_POR_DEFECTO,
+  };
+}
+
+/**
+ * El slide automático de ofertas, o `null` si no hay nada rebajado.
+ *
+ * **Lo arma el backend y no el frontend**, mismo criterio que `ctaDestino`: el
+ * conteo, el plural y la ruta son datos derivados. Nunca tiene arte —no hay
+ * quién se lo diseñe— así que es el caso que obliga a que el molde compuesto
+ * exista y sea el piso del componente.
+ */
+function aSlideOfertas(total) {
+  if (total <= 0) return null;
+
+  return {
+    tipo: "OFERTAS",
+    campaniaId: null,
+    titulo: "Ofertas de la semana",
+    texto: `${total} ${total === 1 ? "producto" : "productos"} con descuento`,
+    ctaTexto: "Ver ofertas",
+    ctaDestino: "/coleccion?conDescuento=1",
+    arteUrl: null,
+    doodleUrl: null,
+    color: "TINTA",
   };
 }
 
@@ -772,18 +808,45 @@ export async function contextoActivo(req, res, next) {
       ahora,
     );
 
-    // Se filtra por `bannerTitulo` además del interruptor por la misma razón
-    // que el modal: un banner prendido y sin título es una franja rota, y el
-    // catálogo no es el lugar donde eso se descubre.
-    const banner = await aBannerPublico(
-      elegirPorPrioridad(activas.filter((c) => c.bannerEnHome && c.bannerTitulo)),
-    );
+    // Las campañas con banner completo, de mayor a menor prioridad.
+    //
+    // El filtro por `bannerEnHome` Y `bannerTitulo` va ANTES de ordenar, por el
+    // mismo motivo por el que el modal filtra antes de `elegirPorPrioridad`: un
+    // banner prendido y sin título es una franja rota.
+    //
+    // A diferencia del modal, acá NO se usa `elegirPorPrioridad`: el carrusel
+    // muestra varias. El desempate por `id` descendente es el mismo criterio y
+    // por la misma razón — sin él, dos campañas con la misma prioridad podrían
+    // salir en distinto orden entre dos requests y el carrusel arrancaría en
+    // una distinta en cada carga.
+    const conBanner = activas
+      .filter((c) => c.bannerEnHome && c.bannerTitulo)
+      .sort((a, b) => b.prioridad - a.prioridad || b.id - a.id)
+      .slice(0, MAX_SLIDES_CAMPANIA);
+
+    // Cuántos productos PUBLICADOS tienen descuento vigente. Compone con las
+    // guardas públicas: un producto rebajado pero oculto o agotado no cuenta,
+    // porque el CTA lleva a una grilla que tampoco lo muestra.
+    const totalOfertas = await prisma.product.count({
+      where: {
+        visibleEnCatalogo: true,
+        stock: { gt: 0 },
+        itemsPromocion: condicionProductoConDescuento(ahora),
+      },
+    });
+
+    const slides = [
+      ...(await Promise.all(conBanner.map(aSlideCampania))),
+      // El automático va ÚLTIMO: las campañas son decisiones editoriales, esto
+      // es un agregado del sistema.
+      aSlideOfertas(totalOfertas),
+    ].filter(Boolean);
 
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),
       doodle: aDoodlePublico(elegirPorPrioridad(conDoodle.filter((c) => c.doodleEnCatalogo))),
       modal,
-      banner,
+      slides,
     };
 
     if (esRequestDeAdmin(req)) {

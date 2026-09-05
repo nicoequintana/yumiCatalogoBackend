@@ -23,7 +23,7 @@ const campaniaProductoMock = {
   findMany: vi.fn(),
   count: vi.fn(),
 };
-const productMock = { findMany: vi.fn(), findUnique: vi.fn() };
+const productMock = { findMany: vi.fn(), findUnique: vi.fn(), count: vi.fn() };
 const categoriaMock = { findUnique: vi.fn() };
 const transactionMock = vi.fn();
 const usuarioFindUniqueMock = vi.fn();
@@ -50,6 +50,7 @@ vi.mock("../lib/prisma.js", () => ({
     product: {
       findMany: (...a) => productMock.findMany(...a),
       findUnique: (...a) => productMock.findUnique(...a),
+      count: (...a) => productMock.count(...a),
     },
     categoria: { findUnique: (...a) => categoriaMock.findUnique(...a) },
     campaniaPromocion: {
@@ -123,6 +124,12 @@ function fila(extra = {}) {
     bannerTitulo: null,
     bannerTexto: null,
     bannerCtaTexto: null,
+    // Las tres columnas del arte y el color del slide: mismo criterio que el
+    // resto del fixture, agregadas recién con el carrusel de la Task 5.
+    bannerArteUrl: null,
+    bannerArteCloudinaryPublicId: null,
+    bannerArteCloudinaryResourceType: null,
+    bannerColor: null,
     createdAt: new Date("2026-09-01T00:00:00.000Z"),
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     // El listado lo pide con `include`, así que Prisma SIEMPRE lo devuelve ahí.
@@ -195,6 +202,9 @@ beforeEach(() => {
   // CAMPANIA caiga en `/coleccion` salvo que un test diga lo contrario.
   campaniaProductoMock.count.mockResolvedValue(0);
   productMock.findMany.mockResolvedValue([]);
+  // Sin ofertas por defecto: el slide automático solo aparece cuando un test
+  // dice explícitamente que hay productos con descuento.
+  productMock.count.mockResolvedValue(0);
   // Las referencias del CTA arrancan INEXISTENTES: así, un test que espere que
   // el destino resuelva tiene que decir explícitamente qué hay del otro lado.
   productMock.findUnique.mockResolvedValue(null);
@@ -540,82 +550,124 @@ describe("GET /api/campanias/activas — el modal", () => {
   });
 });
 
-describe("GET /api/campanias/activas — el banner de la home", () => {
-  async function bannerDe(campania) {
-    campaniaMock.findMany.mockResolvedValue([campania]);
+describe("GET /campanias/activas — slides", () => {
+  it("emite un slide por campaña con banner, ordenados por prioridad", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ id: 1, prioridad: 1, bannerEnHome: true, bannerTitulo: "Primavera" }),
+      fila({ id: 2, prioridad: 9, bannerEnHome: true, bannerTitulo: "Semana del Hogar" }),
+    ]);
+    productMock.count.mockResolvedValue(0);
+
     const res = await request(buildApp()).get("/api/campanias/activas");
-    return res.body.banner;
-  }
 
-  const conBanner = (extra = {}) =>
-    fila({
-      bannerEnHome: true,
-      bannerTitulo: "Semana del Hogar",
-      bannerTexto: "Hasta 30 % en cocina.",
-      bannerCtaTexto: null,
-      modalCtaTipo: "CATALOGO",
-      ...extra,
-    });
+    expect(res.body).not.toHaveProperty("banner");
+    expect(res.body.slides.map((s) => s.titulo)).toEqual(["Semana del Hogar", "Primavera"]);
+    expect(res.body.slides[0].tipo).toBe("CAMPANIA");
+  });
 
-  it("sin ninguna campaña con banner prendido devuelve null, no un 404", async () => {
-    campaniaMock.findMany.mockResolvedValue([fila()]);
+  it("agrega el slide de OFERTAS al final cuando hay productos con descuento", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ bannerEnHome: true, bannerTitulo: "Primavera" }),
+    ]);
+    productMock.count.mockResolvedValue(12);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    const ultimo = res.body.slides.at(-1);
+    expect(ultimo.tipo).toBe("OFERTAS");
+    expect(ultimo.campaniaId).toBeNull();
+    expect(ultimo.texto).toBe("12 productos con descuento");
+    expect(ultimo.ctaDestino).toBe("/coleccion?conDescuento=1");
+  });
+
+  it("con UN solo producto rebajado el texto va en singular", async () => {
+    campaniaMock.findMany.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(1);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides[0].texto).toBe("1 producto con descuento");
+  });
+
+  it("sin ofertas vigentes NO hay slide de OFERTAS", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ bannerEnHome: true, bannerTitulo: "Primavera" }),
+    ]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides.every((s) => s.tipo === "CAMPANIA")).toBe(true);
+  });
+
+  it("sin campañas y CON ofertas, el carrusel es solo el slide automático", async () => {
+    // Es la mitad que justifica el slide automático: sin él, un catálogo con
+    // doce productos rebajados y ninguna campaña no anuncia nada.
+    campaniaMock.findMany.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(12);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides).toHaveLength(1);
+    expect(res.body.slides[0].tipo).toBe("OFERTAS");
+  });
+
+  it("sin campañas y sin ofertas, slides es un array vacío", async () => {
+    // Vacío, NO 404 ni null: "no hay nada" es una respuesta normal y el sitio
+    // se comporta exactamente como antes de que este módulo existiera.
+    campaniaMock.findMany.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(0);
 
     const res = await request(buildApp()).get("/api/campanias/activas");
 
     expect(res.status).toBe(200);
-    expect(res.body.banner).toBeNull();
+    expect(res.body.slides).toEqual([]);
   });
 
-  it("emite el título, el texto y el destino ya resuelto", async () => {
-    expect(await bannerDe(conBanner())).toMatchObject({
-      campaniaId: 1,
-      titulo: "Semana del Hogar",
-      texto: "Hasta 30 % en cocina.",
-      ctaDestino: "/coleccion",
-    });
+  it("corta en MAX_SLIDES_CAMPANIA campañas", async () => {
+    campaniaMock.findMany.mockResolvedValue(
+      Array.from({ length: 8 }, (_, i) =>
+        fila({ id: i + 1, prioridad: i, bannerEnHome: true, bannerTitulo: `C${i}` }),
+      ),
+    );
+    productMock.count.mockResolvedValue(3);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides.filter((s) => s.tipo === "CAMPANIA")).toHaveLength(5);
+    expect(res.body.slides).toHaveLength(6); // 5 campañas + ofertas
   });
 
-  it("aplica el default del texto del botón: el frontend no tiene copia", async () => {
-    expect((await bannerDe(conBanner())).ctaTexto).toBe("Ver más");
+  it("una campaña sin color sale en el color por defecto", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ bannerEnHome: true, bannerTitulo: "Primavera", bannerColor: null }),
+    ]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides[0].color).toBe("TERRACOTA");
   });
 
-  it("sin destino no hay botón, y entonces tampoco texto de botón", async () => {
-    const banner = await bannerDe(conBanner({ modalCtaTipo: null }));
-
-    expect(banner.ctaDestino).toBeNull();
-    expect(banner.ctaTexto).toBeNull();
-  });
-
-  it("el banner NO emite diasFaltantes: el contador es del cartel", async () => {
-    // `modalFechaObjetivo` es un campo del CARTEL. El banner lo leía de prestado
-    // y le aparecía al admin una píldora de días que su sección no puede apagar.
+  it("el slide NO filtra infraestructura", async () => {
+    // `activas` es público: todo lo que viaje queda en un bundle que cualquiera
+    // lee. El publicId de Cloudinary y la nota interna no salen.
     campaniaMock.findMany.mockResolvedValue([
       fila({
         bannerEnHome: true,
         bannerTitulo: "Primavera",
-        modalFechaObjetivo: new Date("2026-09-21T03:00:00.000Z"),
+        descripcion: "nota interna del panel",
+        bannerArteCloudinaryPublicId: "campanias/abc123",
       }),
     ]);
+    productMock.count.mockResolvedValue(0);
 
     const res = await request(buildApp()).get("/api/campanias/activas");
+    const crudo = JSON.stringify(res.body);
 
-    expect(res.status).toBe(200);
-    expect(res.body.banner).not.toHaveProperty("diasFaltantes");
-  });
-
-  it("elige por prioridad SOLO entre las que tienen el banner prendido", async () => {
-    campaniaMock.findMany.mockResolvedValue([
-      conBanner({ id: 7, prioridad: 1, bannerTitulo: "La del banner" }),
-      fila({ id: 9, prioridad: 99, bannerEnHome: false }),
-    ]);
-
-    const res = await request(buildApp()).get("/api/campanias/activas");
-
-    expect(res.body.banner).toMatchObject({ campaniaId: 7, titulo: "La del banner" });
-  });
-
-  it("un banner prendido sin título no se emite: saldría una franja rota", async () => {
-    expect(await bannerDe(conBanner({ bannerTitulo: null }))).toBeNull();
+    expect(crudo).not.toContain("nota interna");
+    expect(crudo).not.toContain("campanias/abc123");
+    expect(crudo).not.toContain("CloudinaryPublicId");
   });
 });
 
