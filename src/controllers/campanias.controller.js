@@ -125,6 +125,10 @@ function mapCampania(campania, ahora) {
     bannerTitulo: campania.bannerTitulo,
     bannerTexto: campania.bannerTexto,
     bannerCtaTexto: campania.bannerCtaTexto,
+    // La pieza apaisada del slide. `null` es un caso legítimo —sin arte el
+    // slide cae al molde compuesto sobre `color`— y viaja igual para que el
+    // editor no confunda "no subió nada" con "me olvidé de mandarlo".
+    bannerArteUrl: campania.bannerArteUrl,
     bannerColor: campania.bannerColor,
   };
 }
@@ -1055,10 +1059,11 @@ export async function cambiarEstado(req, res, next) {
  * es el primer paso de "armar la campaña del año que viene", y que ese borrador
  * se publique solo porque heredó el estado sería un efecto que nadie pidió.
  *
- * El Doodle se copia POR REFERENCIA — el mismo `cloudinaryPublicId`, sin volver
- * a subir el archivo. Es lo correcto (no duplica un binario idéntico en el CDN)
- * y tiene una consecuencia asumida: el borrado de una campaña solo puede
- * eliminar el archivo remoto si ninguna otra lo referencia.
+ * El Doodle y el arte del banner se copian POR REFERENCIA — el mismo
+ * `cloudinaryPublicId`, sin volver a subir el archivo. Es lo correcto (no
+ * duplica un binario idéntico en el CDN) y tiene una consecuencia asumida: el
+ * borrado de una campaña solo puede eliminar el archivo remoto si ninguna otra
+ * lo referencia — ver `limpiarDoodleRemoto` y `limpiarArteRemoto`.
  *
  * La VITRINA sí se copia: rearmar a mano la selección de productos del año
  * pasado es justamente el trabajo que duplicar viene a ahorrar.
@@ -1105,6 +1110,9 @@ export async function duplicar(req, res, next) {
           bannerTitulo: original.bannerTitulo,
           bannerTexto: original.bannerTexto,
           bannerCtaTexto: original.bannerCtaTexto,
+          bannerArteUrl: original.bannerArteUrl,
+          bannerArteCloudinaryPublicId: original.bannerArteCloudinaryPublicId,
+          bannerArteCloudinaryResourceType: original.bannerArteCloudinaryResourceType,
           bannerColor: original.bannerColor,
         },
       });
@@ -1175,6 +1183,32 @@ async function limpiarDoodleRemoto(campania) {
 
   try {
     await eliminarArchivo(publicId, campania.doodleCloudinaryResourceType ?? "image");
+  } catch {
+    // Silencio deliberado — ver el comentario de arriba.
+  }
+}
+
+/**
+ * Borra del CDN el arte que quedó sin dueño.
+ *
+ * ⚠️ **EXCLUYE los compartidos.** `duplicar` copia el `bannerArteCloudinaryPublicId`
+ * por REFERENCIA, así que dos campañas pueden apuntar al mismo archivo: un
+ * borrado ciego deja a la otra con una URL de CDN en 404, sin ningún error de
+ * este lado. Misma trampa que el Doodle, otra columna.
+ */
+async function limpiarArteRemoto(campania) {
+  const publicId = campania?.bannerArteCloudinaryPublicId;
+  if (!publicId) return;
+
+  const compartido = await prisma.campania.findMany({
+    where: { bannerArteCloudinaryPublicId: publicId, id: { not: campania.id } },
+    select: { id: true },
+    take: 1,
+  });
+  if (compartido.length > 0) return;
+
+  try {
+    await eliminarArchivo(publicId, campania.bannerArteCloudinaryResourceType ?? "image");
   } catch {
     // Silencio deliberado — ver el comentario de arriba.
   }
@@ -1253,6 +1287,90 @@ export async function quitarDoodle(req, res, next) {
 
     logAudit(req, {
       accion: "QUITAR_DOODLE",
+      entidad: "Campania",
+      entidadId: id,
+      detalle: { nombre: campania.nombre },
+    });
+
+    res.json(mapCampania(campania, new Date()));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PUT /api/campanias/:id/arte` — sube o reemplaza la pieza apaisada del
+ * slide.
+ *
+ * Mismo patrón que `guardarDoodle`: multipart con un solo archivo, subir a
+ * Cloudinary → `update` → borrar el anterior. Invertir el orden dejaría el
+ * carrusel con una URL de CDN en 404 si el `update` fallara a mitad de camino.
+ */
+export async function guardarArte(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    if (!req.file) throw httpError(400, "No llegó ninguna imagen.");
+
+    // Defensa en profundidad (content sniffing), igual que `guardarDoodle`: el
+    // `fileFilter` de multer solo valida el mimetype DECLARADO por el cliente,
+    // que es falsificable.
+    if (
+      !ALLOWED_PHOTO_MIMES.includes(req.file.mimetype) ||
+      !contenidoCoincideConMime(req.file.buffer, req.file.mimetype)
+    ) {
+      throw httpError(400, "El contenido de la imagen no corresponde a un archivo JPG, PNG o WEBP válido.");
+    }
+
+    const actual = await buscarOFallar(id);
+
+    const subida = await subirArchivo(req.file.buffer, "image", carpetaCampanias());
+
+    const campania = await prisma.campania.update({
+      where: { id },
+      data: {
+        bannerArteUrl: subida.url,
+        bannerArteCloudinaryPublicId: subida.cloudinaryPublicId,
+        bannerArteCloudinaryResourceType: subida.cloudinaryResourceType,
+      },
+    });
+
+    // El anterior se borra DESPUÉS de que el nuevo quedó guardado, mismo motivo
+    // que `guardarDoodle`: al revés, un fallo del update dejaría la fila
+    // apuntando a un archivo ya borrado y el slide saldría roto.
+    await limpiarArteRemoto(actual);
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_ARTE",
+      entidad: "Campania",
+      entidadId: id,
+      detalle: { nombre: campania.nombre, bannerArteUrl: campania.bannerArteUrl },
+    });
+
+    res.json(mapCampania(campania, new Date()));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `DELETE /api/campanias/:id/arte` — quita la pieza; el slide vuelve al molde compuesto. */
+export async function quitarArte(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    const actual = await buscarOFallar(id);
+
+    const campania = await prisma.campania.update({
+      where: { id },
+      data: {
+        bannerArteUrl: null,
+        bannerArteCloudinaryPublicId: null,
+        bannerArteCloudinaryResourceType: null,
+      },
+    });
+
+    await limpiarArteRemoto(actual);
+
+    logAudit(req, {
+      accion: "QUITAR_ARTE",
       entidad: "Campania",
       entidadId: id,
       detalle: { nombre: campania.nombre },

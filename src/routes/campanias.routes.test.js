@@ -1475,6 +1475,27 @@ describe("POST /api/campanias/:id/duplicar", () => {
       bannerColor: "VERDE",
     });
   });
+
+  it("copia el arte del banner por referencia, sin volver a subir el archivo", async () => {
+    // Misma trampa que el Doodle: `duplicar` copia el `bannerArteCloudinaryPublicId`
+    // POR REFERENCIA, así que dos campañas pueden apuntar al mismo archivo. Es la
+    // consecuencia que `limpiarArteRemoto` tiene que resolver.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({
+        bannerArteUrl: "https://res.cloudinary.com/demo/arte.jpg",
+        bannerArteCloudinaryPublicId: "campanias/arte",
+        bannerArteCloudinaryResourceType: "image",
+      }),
+    );
+    campaniaMock.create.mockResolvedValue(fila({ id: 2 }));
+
+    await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
+
+    const { data } = campaniaMock.create.mock.calls[0][0];
+    expect(data.bannerArteUrl).toBe("https://res.cloudinary.com/demo/arte.jpg");
+    expect(data.bannerArteCloudinaryPublicId).toBe("campanias/arte");
+    expect(data.bannerArteCloudinaryResourceType).toBe("image");
+  });
 });
 
 describe("PUT /api/campanias/:id/doodle", () => {
@@ -1620,6 +1641,65 @@ describe("DELETE /api/campanias/:id/doodle", () => {
     await quitar();
 
     expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT / DELETE /api/campanias/:id/arte", () => {
+  it("guarda el arte y borra el archivo anterior", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ id: 7, bannerArteCloudinaryPublicId: "campanias/viejo" }),
+    );
+    campaniaMock.findMany.mockResolvedValue([]); // nadie más lo referencia
+    campaniaMock.update.mockResolvedValue(fila({ id: 7 }));
+
+    const res = await request(buildApp())
+      .put("/api/campanias/7/arte")
+      .set("Authorization", authHeader)
+      .attach("arte", PNG, { filename: "arte.png", contentType: "image/png" });
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("campanias/viejo", expect.anything());
+  });
+
+  it("NO borra un arte que otra campaña comparte", async () => {
+    // `duplicar` copia el publicId por REFERENCIA: dos campañas pueden apuntar
+    // al mismo archivo, y un borrado ciego deja la otra con un CDN en 404.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ id: 7, bannerArteCloudinaryPublicId: "campanias/compartido" }),
+    );
+    campaniaMock.findMany.mockResolvedValue([fila({ id: 9 })]); // otra lo usa
+
+    await request(buildApp())
+      .put("/api/campanias/7/arte")
+      .set("Authorization", authHeader)
+      .attach("arte", PNG, { filename: "arte.png", contentType: "image/png" });
+
+    expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("DELETE deja las tres columnas del arte en null", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ id: 7, bannerArteCloudinaryPublicId: "campanias/x" }),
+    );
+    campaniaMock.findMany.mockResolvedValue([]);
+    campaniaMock.update.mockResolvedValue(fila({ id: 7 }));
+
+    await request(buildApp()).delete("/api/campanias/7/arte").set("Authorization", authHeader);
+
+    expect(campaniaMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          bannerArteUrl: null,
+          bannerArteCloudinaryPublicId: null,
+          bannerArteCloudinaryResourceType: null,
+        },
+      }),
+    );
+  });
+
+  it("las dos rutas exigen auth", async () => {
+    expect((await request(buildApp()).put("/api/campanias/7/arte")).status).toBe(401);
+    expect((await request(buildApp()).delete("/api/campanias/7/arte")).status).toBe(401);
   });
 });
 
@@ -2141,5 +2221,19 @@ describe("El bloque del banner de la home", () => {
       .set("Authorization", authHeader);
 
     expect(res.body.bannerColor).toBe("VERDE");
+  });
+
+  it("el detalle del panel emite también el arte guardado", async () => {
+    // Sin esto la vista previa del editor recibe `arteUrl: null` siempre: el
+    // dato queda subido en Cloudinary pero el panel nunca lo ve.
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ bannerArteUrl: "https://res.cloudinary.com/demo/arte.jpg" }),
+    );
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.body.bannerArteUrl).toBe("https://res.cloudinary.com/demo/arte.jpg");
   });
 });

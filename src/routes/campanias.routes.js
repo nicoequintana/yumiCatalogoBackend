@@ -27,6 +27,23 @@ const uploadDoodle = multer({
   },
 });
 
+// Mismo storage y mismo `fileFilter` que el Doodle. Instancia propia (y no
+// compartida) para que el campo multipart que cada una espera —"doodle" o
+// "arte"— quede en el nombre de la variable, no en un parámetro que hay que
+// ir a buscar.
+const uploadArte = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FOTO_BYTES, files: 1 },
+  fileFilter(_req, file, cb) {
+    if (!ALLOWED_PHOTO_MIMES.includes(file.mimetype)) {
+      const err = new Error("Formato de imagen no permitido. Se aceptan JPG, PNG y WEBP.");
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  },
+});
+
 // Mismo techo que la cinta de anuncios (600/5min por IP) y por el mismo motivo:
 // el catálogo pide esto en cada carga de página, sin login y pegándole a la
 // base. 600 es holgadísimo para navegación humana y corta el flood.
@@ -70,6 +87,10 @@ router.put("/:id/promociones", requireAuth, campaniasController.guardarPromocion
 router.put("/:id/productos", requireAuth, campaniasController.guardarProductos);
 router.put("/:id/doodle", requireAuth, uploadDoodle.single("doodle"), campaniasController.guardarDoodle);
 router.delete("/:id/doodle", requireAuth, campaniasController.quitarDoodle);
+// La pieza apaisada del slide: mismo patrón multipart que el Doodle, ruta y
+// campo propios porque `PUT /:id` sigue siendo JSON puro.
+router.put("/:id/arte", requireAuth, uploadArte.single("arte"), campaniasController.guardarArte);
+router.delete("/:id/arte", requireAuth, campaniasController.quitarArte);
 
 router.get("/:id", requireAuth, campaniasController.obtenerPorId);
 router.put("/:id", requireAuth, campaniasController.actualizar);
