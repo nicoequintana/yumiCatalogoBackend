@@ -1983,6 +1983,34 @@ describe("El bloque del banner de la home", () => {
     expect(res.body.error).toBe("El botón del banner tiene texto pero no lleva a ningún lado.");
   });
 
+  it("rechaza el marcador {dias} en el texto del banner", async () => {
+    // Hoy `conDias` lo borraba en silencio: el admin escribía "Faltan {dias}
+    // dias", guardaba sin error, y el visitante leia "Faltan dias".
+    const res = await crear({
+      ...base,
+      bannerEnHome: true,
+      bannerTitulo: "Primavera",
+      bannerTexto: "Faltan {dias} dias",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/contador .*es del cartel/i);
+  });
+
+  it("el marcador {dias} SIGUE siendo válido en el texto del cartel", async () => {
+    // El cartel conserva su contador: tiene `modalFechaObjetivo` propio.
+    campaniaMock.create.mockResolvedValue(fila());
+
+    const res = await crear({
+      ...base,
+      modalActivo: true,
+      modalTitulo: "Primavera",
+      modalTexto: "Faltan {dias} dias",
+    });
+
+    expect(res.status).toBe(201);
+  });
+
   it("el detalle del panel emite las cuatro columnas", async () => {
     campaniaMock.findUnique.mockResolvedValue(
       conDetalle({

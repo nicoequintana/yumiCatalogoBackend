@@ -319,6 +319,22 @@ function parsearModal(body, actual = null) {
 }
 
 /**
+ * El marcador del contador. Vive en el cartel, que tiene `modalFechaObjetivo`;
+ * el banner no cuenta días, así que acá es un error de entrada y no un texto.
+ */
+const MARCADOR_DIAS = /\{dias\}/i;
+
+/** Rechaza el marcador del contador en un campo del banner. */
+function exigirSinMarcadorDeDias(texto, campo) {
+  if (texto && MARCADOR_DIAS.test(texto)) {
+    throw httpError(
+      400,
+      `El contador \`{dias}\` es del cartel, no del banner. Sacalo de \`${campo}\` o escribí los días a mano.`,
+    );
+  }
+}
+
+/**
  * El bloque del banner de la home, validado como una unidad.
  *
  * Mismo criterio cruzado que `parsearModal`: apagado no se exige nada —se
@@ -341,6 +357,9 @@ function parsearBanner(body, actual = null, ctaTipo = null) {
     "bannerCtaTexto",
     LARGO_MAX_BANNER_CTA,
   );
+
+  exigirSinMarcadorDeDias(titulo, "bannerTitulo");
+  exigirSinMarcadorDeDias(texto, "bannerTexto");
 
   if (enHome && !titulo) {
     throw httpError(400, "Un banner activo necesita un título.");
