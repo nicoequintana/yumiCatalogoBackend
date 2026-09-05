@@ -25,7 +25,7 @@ import {
   mapProductoListado,
   mapProductoParaN8n,
 } from "./products.mapper.js";
-import { resolverDescuentos } from "../lib/precioEfectivo.js";
+import { resolverDescuentos, condicionProductoConDescuento } from "../lib/precioEfectivo.js";
 import { resolverEstadoCampania } from "../lib/campanias.js";
 import { enviarPedidoDeImagenes, estaConfigurado as n8nEstaConfigurado } from "../services/n8n.service.js";
 import {
@@ -304,6 +304,19 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   // favoritos — "no vino en la respuesta" siempre quiso decir "no se puede
   // comprar", y pedir por id no cambia eso.
   if (ids !== null) where.id = { in: ids };
+
+  // "Lo que está rebajado AHORA". Compone con las guardas públicas igual que
+  // `ids` y que `campania`: un producto oculto o agotado no aparece por estar
+  // en oferta.
+  //
+  // La condición NO se escribe acá: sale de `lib/precioEfectivo.js`, que es la
+  // misma que resuelve el precio. Copiarla sería una tercera casa de la regla
+  // de vigencia, y una regla duplicada se desincroniza sin que nada falle.
+  //
+  // Alcanza con que el parámetro ESTÉ presente, mismo criterio que `destacado`.
+  if (query.conDescuento !== undefined) {
+    where.itemsPromocion = condicionProductoConDescuento();
+  }
 
   if (query.categoria !== undefined) {
     // `esEnteroSeguro`, no `Number.isInteger` ni `!Number.isNaN`: `categoriaId`
