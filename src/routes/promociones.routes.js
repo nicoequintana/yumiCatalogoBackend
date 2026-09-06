@@ -1,9 +1,27 @@
 import { Router } from "express";
+import multer from "multer";
 import * as promocionesController from "../controllers/promociones.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
+import { ALLOWED_PHOTO_MIMES, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
 
 const router = Router();
+
+// Instancia propia (y no compartida con campañas) para que el campo multipart
+// que espera —"arte"— quede en el nombre de la variable y no en un parámetro
+// que hay que ir a buscar. Mismo criterio que `uploadArte` de campanias.routes.
+const uploadArte = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FOTO_BYTES, files: 1 },
+  fileFilter(_req, file, cb) {
+    if (!ALLOWED_PHOTO_MIMES.includes(file.mimetype)) {
+      const err = new Error("Formato de imagen no permitido. Se aceptan JPG, PNG y WEBP.");
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  },
+});
 
 /**
  * ADMIN → Promociones. **Todo el módulo exige auth**: no hay ninguna lectura
@@ -38,6 +56,11 @@ router.post("/", requireAuth, promocionesController.crear);
 // También antes de `/:id`, por lo mismo.
 router.put("/:id/items", requireAuth, promocionesController.guardarItems);
 router.patch("/:id/items/:productId", requireAuth, promocionesController.cambiarEstadoItem);
+
+// La pieza apaisada del slide: mismo patrón multipart que el Doodle/arte de
+// campañas. Ruta y campo propios porque `PUT /:id` sigue siendo JSON puro.
+router.put("/:id/arte", requireAuth, uploadArte.single("arte"), promocionesController.guardarArte);
+router.delete("/:id/arte", requireAuth, promocionesController.quitarArte);
 
 router.get("/:id", requireAuth, promocionesController.obtenerPorId);
 router.put("/:id", requireAuth, promocionesController.actualizar);

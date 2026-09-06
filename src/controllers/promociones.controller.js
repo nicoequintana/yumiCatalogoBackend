@@ -10,6 +10,14 @@ import { detectarConflictos } from "../lib/conflictosPromociones.js";
 import { COLORES_SLIDE } from "../lib/campanias.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 import { LIST_SELECT } from "./products.mapper.js";
+import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
+import { contenidoCoincideConMime } from "../lib/magicBytes.js";
+import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
+// `carpetaCampanias` vive en el controller de campañas (no en el servicio de
+// Cloudinary, pese a lo que sugiere el nombre): el arte del banner de una
+// promoción es la MISMA pieza visual que el de una campaña —una franja
+// apaisada del carrusel de la home— así que comparte carpeta a propósito.
+import { carpetaCampanias } from "./campanias.controller.js";
 import {
   PORCENTAJE_MAX,
   PORCENTAJE_MIN,
@@ -443,6 +451,114 @@ export async function cambiarEstadoItem(req, res, next) {
     });
 
     res.json(mapPromocionDetalle(await buscarOFallar(id)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Borra el arte anterior en Cloudinary.
+ *
+ * ⚠️ A DIFERENCIA de `limpiarArteRemoto` de campañas, acá NO se consulta si
+ * otro lo comparte, y eso es correcto: las promociones **no tienen
+ * `duplicar`** (no existe ninguna ruta `POST /promociones/:id/duplicar`), que
+ * es la única operación que copia un `cloudinaryPublicId` por REFERENCIA. Sin
+ * ella, dos promociones no pueden apuntar al mismo archivo.
+ *
+ * El día que exista `POST /promociones/:id/duplicar`, esta función necesita la
+ * misma consulta de compartidos que la de campañas, o el borrado de una deja a
+ * la otra con una URL de CDN en 404 sin ningún error de este lado.
+ */
+async function limpiarArtePromocionRemoto(promocion) {
+  const publicId = promocion?.bannerArteCloudinaryPublicId;
+  if (!publicId) return;
+
+  try {
+    await eliminarArchivo(publicId, promocion.bannerArteCloudinaryResourceType ?? "image");
+  } catch {
+    // Silencio deliberado: un archivo huérfano en el CDN es mucho más barato
+    // que romperle al admin la operación que sí se guardó en la base.
+  }
+}
+
+/**
+ * `PUT /promociones/:id/arte` — la pieza apaisada del slide.
+ *
+ * Mismo patrón que `guardarDoodle`/`guardarArte` de campañas: multipart con un
+ * solo archivo, subir a Cloudinary → `update` → borrar el anterior. Invertir
+ * el orden dejaría el carrusel con una URL de CDN en 404 si el `update`
+ * fallara a mitad de camino.
+ */
+export async function guardarArte(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    if (!req.file) throw httpError(400, "No llegó ninguna imagen.");
+
+    // Defensa en profundidad (content sniffing): el `fileFilter` de multer
+    // solo valida el mimetype DECLARADO por el cliente, que es falsificable.
+    if (
+      !ALLOWED_PHOTO_MIMES.includes(req.file.mimetype) ||
+      !contenidoCoincideConMime(req.file.buffer, req.file.mimetype)
+    ) {
+      throw httpError(400, "El contenido de la imagen no corresponde a un archivo JPG, PNG o WEBP válido.");
+    }
+
+    const actual = await buscarOFallar(id);
+    const subida = await subirArchivo(req.file.buffer, "image", carpetaCampanias());
+
+    const promocion = await prisma.promocion.update({
+      where: { id },
+      data: {
+        bannerArteUrl: subida.url,
+        bannerArteCloudinaryPublicId: subida.cloudinaryPublicId,
+        bannerArteCloudinaryResourceType: subida.cloudinaryResourceType,
+      },
+      include: DETALLE_INCLUDE,
+    });
+
+    // El anterior se borra DESPUÉS de que el nuevo quedó guardado: al revés,
+    // un fallo del update dejaría la fila apuntando a un archivo ya borrado.
+    await limpiarArtePromocionRemoto(actual);
+
+    logAudit(req, {
+      accion: "ACTUALIZAR_ARTE",
+      entidad: "Promocion",
+      entidadId: id,
+      detalle: { nombre: promocion.nombre, bannerArteUrl: promocion.bannerArteUrl },
+    });
+
+    res.json(mapPromocionDetalle(promocion));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `DELETE /promociones/:id/arte` — el slide vuelve al molde compuesto. */
+export async function quitarArte(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    const actual = await buscarOFallar(id);
+
+    const promocion = await prisma.promocion.update({
+      where: { id },
+      data: {
+        bannerArteUrl: null,
+        bannerArteCloudinaryPublicId: null,
+        bannerArteCloudinaryResourceType: null,
+      },
+      include: DETALLE_INCLUDE,
+    });
+
+    await limpiarArtePromocionRemoto(actual);
+
+    logAudit(req, {
+      accion: "QUITAR_ARTE",
+      entidad: "Promocion",
+      entidadId: id,
+      detalle: { nombre: promocion.nombre },
+    });
+
+    res.json(mapPromocionDetalle(promocion));
   } catch (err) {
     next(err);
   }

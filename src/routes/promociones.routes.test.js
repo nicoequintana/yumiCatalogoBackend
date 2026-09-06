@@ -20,6 +20,13 @@ const ordenMock = { findMany: vi.fn() };
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
 const transactionMock = vi.fn();
+const subirArchivoMock = vi.fn();
+const eliminarArchivoMock = vi.fn();
+
+vi.mock("../services/cloudinary.service.js", () => ({
+  subirArchivo: (...args) => subirArchivoMock(...args),
+  eliminarArchivo: (...args) => eliminarArchivoMock(...args),
+}));
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -107,6 +114,12 @@ beforeEach(() => {
   productMock.findMany.mockResolvedValue([]);
   productMock.count.mockResolvedValue(0);
   ordenMock.findMany.mockResolvedValue([]);
+  subirArchivoMock.mockResolvedValue({
+    url: "https://res.cloudinary.com/demo/arte-nuevo.jpg",
+    cloudinaryPublicId: "test/campanias/arte-nuevo",
+    cloudinaryResourceType: "image",
+  });
+  eliminarArchivoMock.mockResolvedValue(undefined);
   transactionMock.mockImplementation(async (arg) =>
     typeof arg === "function"
       ? arg({
@@ -129,6 +142,8 @@ describe("seguridad", () => {
       ["post", "/api/promociones"],
       ["put", "/api/promociones/3"],
       ["put", "/api/promociones/3/items"],
+      ["put", "/api/promociones/3/arte"],
+      ["delete", "/api/promociones/3/arte"],
       ["delete", "/api/promociones/3"],
     ];
 
@@ -375,6 +390,131 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
         data: expect.objectContaining({ bannerTitulo: null }),
       }),
     );
+  });
+});
+
+describe("PUT /api/promociones/:id/arte y DELETE /api/promociones/:id/arte", () => {
+  /** Un JPEG mínimo: la firma real (`FF D8 FF`), para que `contenidoCoincideConMime` lo acepte. */
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+
+  function subir(buffer, nombre, tipo) {
+    return request(buildApp())
+      .put("/api/promociones/3/arte")
+      .set("Authorization", authHeader)
+      .attach("arte", buffer, { filename: nombre, contentType: tipo });
+  }
+
+  it("sube el arte y guarda las tres columnas", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3 }));
+    promocionMock.update.mockResolvedValue(promo({ id: 3, bannerArteUrl: "https://cdn/x.jpg" }));
+
+    const res = await subir(JPEG, "a.jpg", "image/jpeg");
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          bannerArteUrl: expect.any(String),
+          bannerArteCloudinaryPublicId: expect.any(String),
+          bannerArteCloudinaryResourceType: expect.any(String),
+        }),
+      }),
+    );
+  });
+
+  it("borra el archivo anterior en Cloudinary DESPUÉS de guardar el nuevo", async () => {
+    promocionMock.findUnique.mockResolvedValue(
+      promo({ id: 3, bannerArteCloudinaryPublicId: "test/campanias/viejo" }),
+    );
+    promocionMock.update.mockResolvedValue(promo({ id: 3, bannerArteUrl: "https://cdn/x.jpg" }));
+
+    const res = await subir(JPEG, "a.jpg", "image/jpeg");
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("test/campanias/viejo", "image");
+  });
+
+  it("una promoción sin arte previo no intenta borrar nada al subir uno nuevo", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3, bannerArteCloudinaryPublicId: null }));
+    promocionMock.update.mockResolvedValue(promo({ id: 3, bannerArteUrl: "https://cdn/x.jpg" }));
+
+    await subir(JPEG, "a.jpg", "image/jpeg");
+
+    expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("sin archivo responde 400", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3 }));
+
+    const res = await request(buildApp()).put("/api/promociones/3/arte").set("Authorization", authHeader);
+
+    expect(res.status).toBe(400);
+    expect(subirArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un tipo no permitido con 400, no con 500", async () => {
+    // Lo corta el `fileFilter` de multer. Sin el `err.status = 400` explícito,
+    // un MulterError sale por el error handler como 500 opaco.
+    const res = await subir(Buffer.from("GIF89a"), "a.gif", "image/gif");
+
+    expect(res.status).toBe(400);
+    expect(subirArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un archivo cuyos BYTES no son los de su mime declarado", async () => {
+    // Defensa en profundidad: el mimetype lo declara el cliente y es
+    // falsificable. Nada llega a Cloudinary sin que los bytes coincidan.
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3 }));
+
+    const res = await subir(Buffer.from("no soy una imagen"), "a.jpg", "image/jpeg");
+
+    expect(res.status).toBe(400);
+    expect(subirArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("una promoción inexistente da 404 y no sube nada", async () => {
+    promocionMock.findUnique.mockResolvedValue(null);
+
+    const res = await subir(JPEG, "a.jpg", "image/jpeg");
+
+    expect(res.status).toBe(404);
+    expect(subirArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("borra el arte y deja las tres columnas en null", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3, bannerArteCloudinaryPublicId: "pid" }));
+    promocionMock.update.mockResolvedValue(promo({ id: 3 }));
+
+    const res = await request(buildApp()).delete("/api/promociones/3/arte").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          bannerArteUrl: null,
+          bannerArteCloudinaryPublicId: null,
+          bannerArteCloudinaryResourceType: null,
+        },
+      }),
+    );
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("pid", "image");
+  });
+
+  it("una promoción sin arte no intenta borrar nada al quitarlo", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3, bannerArteCloudinaryPublicId: null }));
+    promocionMock.update.mockResolvedValue(promo({ id: 3 }));
+
+    await request(buildApp()).delete("/api/promociones/3/arte").set("Authorization", authHeader);
+
+    expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+
+  it("una promoción inexistente da 404 al quitar el arte", async () => {
+    promocionMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp()).delete("/api/promociones/99/arte").set("Authorization", authHeader);
+
+    expect(res.status).toBe(404);
   });
 });
 
