@@ -25,7 +25,11 @@ import {
   mapProductoListado,
   mapProductoParaN8n,
 } from "./products.mapper.js";
-import { resolverDescuentos, condicionProductoConDescuento } from "../lib/precioEfectivo.js";
+import {
+  resolverDescuentos,
+  condicionProductoConDescuento,
+  condicionPromocionVigente,
+} from "../lib/precioEfectivo.js";
 import { resolverEstadoCampania } from "../lib/campanias.js";
 import { enviarPedidoDeImagenes, estaConfigurado as n8nEstaConfigurado } from "../services/n8n.service.js";
 import {
@@ -316,6 +320,28 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   // Alcanza con que el parámetro ESTÉ presente, mismo criterio que `destacado`.
   if (query.conDescuento !== undefined) {
     where.itemsPromocion = condicionProductoConDescuento();
+  }
+
+  // "Los productos de ESTA promoción, que hoy tienen descuento". Es a donde
+  // manda el botón del slide de una promoción.
+  //
+  // La vigencia NO se escribe acá: sale de `lib/precioEfectivo.js`, la misma
+  // que resuelve el precio efectivo y que usa `?conDescuento`. Copiarla sería
+  // una tercera casa de la regla.
+  //
+  // Filtro por RELACIÓN y no una lista de ids: resolver los ids primero y
+  // pasarlos como `id: { in: [...] }` revienta el tope de 2.100 parámetros de
+  // SQL Server, y sale como un 500 opaco en el listado público.
+  //
+  // Una promoción inexistente o no vigente no matchea nada y devuelve VACÍO —
+  // "ninguno", nunca "todo el catálogo". Mismo criterio que `ids` y `campania`.
+  if (query.promocion !== undefined) {
+    const promocionId = parsearIdEntero(query.promocion);
+    if (promocionId !== null) {
+      where.itemsPromocion = {
+        some: { habilitado: true, promocionId, promocion: condicionPromocionVigente() },
+      };
+    }
   }
 
   if (query.categoria !== undefined) {
