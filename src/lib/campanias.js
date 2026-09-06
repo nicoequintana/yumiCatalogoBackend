@@ -151,6 +151,15 @@ export const COLORES_SLIDE = ["TERRACOTA", "VERDE", "OCRE", "TINTA", "ARENA"];
 /** El de la marca. Una campaña que no elige color sale en el color de YIMA. */
 export const COLOR_SLIDE_POR_DEFECTO = "TERRACOTA";
 
+/**
+ * El del slide de "Ofertas de la semana" — el único slide sin campaña detrás,
+ * así que no hay fila de la que leer un `bannerColor`. Vive acá, junto a
+ * `COLORES_SLIDE`, para que renombrar un valor de la lista sea imposible sin
+ * ver también este uso; un string suelto en el controller no ofrecía esa
+ * garantía y caía al color por defecto en silencio.
+ */
+export const COLOR_SLIDE_OFERTAS = "TINTA";
+
 const ETIQUETA_COLOR_SLIDE = {
   TERRACOTA: "Terracota",
   VERDE: "Verde",

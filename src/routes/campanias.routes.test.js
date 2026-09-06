@@ -1727,6 +1727,40 @@ describe("DELETE /api/campanias/:id", () => {
     expect(res.status).toBe(200);
     expect(auditCreateMock).toHaveBeenCalled();
   });
+
+  it("borra también el arte del banner, no solo el doodle", async () => {
+    // Antes de esta corrección `eliminar` solo llamaba a `limpiarDoodleRemoto`:
+    // el arte del slide quedaba huérfano en Cloudinary para siempre al borrar
+    // la campaña que lo tenía en exclusiva.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ bannerArteCloudinaryPublicId: "campanias/arte-huerfano" }),
+    );
+    campaniaMock.findMany.mockResolvedValue([]); // nadie más lo comparte
+    campaniaMock.delete.mockResolvedValue(fila());
+
+    const res = await request(buildApp())
+      .delete("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("campanias/doodle", "image");
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("campanias/arte-huerfano", "image");
+  });
+
+  it("NO borra el arte si otra campaña lo comparte por referencia", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ bannerArteCloudinaryPublicId: "campanias/arte-compartido" }),
+    );
+    campaniaMock.findMany.mockResolvedValue([{ id: 2 }]); // el duplicado
+    campaniaMock.delete.mockResolvedValue(fila());
+
+    const res = await request(buildApp())
+      .delete("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).not.toHaveBeenCalledWith("campanias/arte-compartido", "image");
+  });
 });
 
 /**

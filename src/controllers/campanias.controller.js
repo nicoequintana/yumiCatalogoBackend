@@ -12,6 +12,7 @@ import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib
 import { rutaCategoria, rutaProducto } from "../lib/slug.js";
 import { condicionProductoConDescuento } from "../lib/precioEfectivo.js";
 import {
+  COLOR_SLIDE_OFERTAS,
   COLOR_SLIDE_POR_DEFECTO,
   COLORES_SLIDE,
   CTA_TEXTO_POR_DEFECTO,
@@ -795,7 +796,7 @@ function aSlideOfertas(total) {
     ctaDestino: "/coleccion?conDescuento=1",
     arteUrl: null,
     doodleUrl: null,
-    color: "TINTA",
+    color: COLOR_SLIDE_OFERTAS,
   };
 }
 
@@ -1389,9 +1390,13 @@ export async function eliminar(req, res, next) {
 
     await prisma.campania.delete({ where: { id } });
 
-    // Después del delete: si la fila no se llegó a borrar, su Doodle sigue
-    // siendo el de una campaña viva y borrarlo la dejaría rota.
+    // Después del delete: si la fila no se llegó a borrar, su Doodle o su arte
+    // siguen siendo los de una campaña viva y borrarlos la dejaría rota. Las
+    // dos limpiezas van acá — no solo el Doodle — porque `duplicar` promete lo
+    // mismo para las dos columnas, y este es el único camino donde la fila
+    // desaparece para siempre: lo que no se borra acá queda huérfano.
     await limpiarDoodleRemoto(campania);
+    await limpiarArteRemoto(campania);
 
     logAudit(req, {
       accion: "ELIMINAR",
