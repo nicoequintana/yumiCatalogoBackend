@@ -1,3 +1,7 @@
+BEGIN TRY
+
+BEGIN TRAN;
+
 -- El banner de la home por promoción. Ocho columnas que espejan a Campania.
 -- Todas nullable (o con default) para que la migración no toque las filas
 -- existentes: una promoción vieja queda con bannerEnHome = 0 y sin banner,
@@ -10,3 +14,16 @@ ALTER TABLE [dbo].[Promocion] ADD [bannerColor] VARCHAR(20);
 ALTER TABLE [dbo].[Promocion] ADD [bannerArteUrl] NVARCHAR(1000);
 ALTER TABLE [dbo].[Promocion] ADD [bannerArteCloudinaryPublicId] NVARCHAR(1000);
 ALTER TABLE [dbo].[Promocion] ADD [bannerArteCloudinaryResourceType] NVARCHAR(1000);
+
+COMMIT TRAN;
+
+END TRY
+BEGIN CATCH
+
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRAN;
+END;
+THROW
+
+END CATCH
