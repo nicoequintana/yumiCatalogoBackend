@@ -7,6 +7,7 @@ import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { detectarConflictos } from "../lib/conflictosPromociones.js";
+import { COLORES_SLIDE } from "../lib/campanias.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 import { LIST_SELECT } from "./products.mapper.js";
 import {
@@ -79,6 +80,85 @@ function rechazarFechas(body) {
   }
 }
 
+const LARGO_MAX_BANNER_TITULO = 120;
+const LARGO_MAX_BANNER_TEXTO = 200;
+const LARGO_MAX_BANNER_CTA = 60;
+
+/** El marcador del contador es del cartel de campañas, no de un banner. */
+const MARCADOR_DIAS = /\{dias\}/i;
+
+function exigirSinMarcadorDeDias(texto, campo) {
+  if (texto && MARCADOR_DIAS.test(texto)) {
+    throw httpError(
+      400,
+      `El contador \`{dias}\` es del cartel de campañas, no del banner. Sacalo de \`${campo}\` o escribí los días a mano.`,
+    );
+  }
+}
+
+function parsearTextoBanner(valor, campo, largoMax) {
+  if (valor === undefined || valor === null) return null;
+  if (typeof valor !== "string") throw httpError(400, `\`${campo}\` debe ser texto.`);
+  const texto = valor.trim();
+  if (texto.length === 0) return null;
+  if (texto.length > largoMax) {
+    throw httpError(400, `\`${campo}\` no puede superar los ${largoMax} caracteres.`);
+  }
+  return texto;
+}
+
+/**
+ * El bloque del banner, validado como una unidad.
+ *
+ * Mismo criterio cruzado que `parsearBanner` de campañas: apagado no se exige
+ * nada —se pueden dejar los textos a medio escribir y prenderlo después— y
+ * prendido se exige lo mínimo para que la franja no salga rota.
+ *
+ * **El DESTINO no se parsea acá y no tiene columna.** Se deriva al leer, del id
+ * de la promoción. Guardar una ruta escrita a mano en una franja que ve todo el
+ * mundo y que edita cualquiera con sesión del panel es una superficie que este
+ * proyecto ya cerró una vez (ver el `modalCtaTipo` de campañas).
+ */
+function parsearBannerPromocion(body, actual) {
+  const enHome =
+    body?.bannerEnHome === undefined
+      ? (actual?.bannerEnHome ?? false)
+      : (() => {
+          if (typeof body.bannerEnHome !== "boolean") {
+            throw httpError(400, "`bannerEnHome` debe ser un booleano.");
+          }
+          return body.bannerEnHome;
+        })();
+
+  const titulo = parsearTextoBanner(body?.bannerTitulo, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
+  const texto = parsearTextoBanner(body?.bannerTexto, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
+  const ctaTexto = parsearTextoBanner(body?.bannerCtaTexto, "bannerCtaTexto", LARGO_MAX_BANNER_CTA);
+
+  exigirSinMarcadorDeDias(titulo, "bannerTitulo");
+  exigirSinMarcadorDeDias(texto, "bannerTexto");
+  exigirSinMarcadorDeDias(ctaTexto, "bannerCtaTexto");
+
+  if (enHome && !titulo) {
+    throw httpError(400, "Un banner activo necesita un título.");
+  }
+
+  let color = null;
+  if (body?.bannerColor !== undefined && body.bannerColor !== null) {
+    if (typeof body.bannerColor !== "string" || !COLORES_SLIDE.includes(body.bannerColor)) {
+      throw httpError(400, `\`bannerColor\` debe ser uno de: ${COLORES_SLIDE.join(", ")}.`);
+    }
+    color = body.bannerColor;
+  }
+
+  return {
+    bannerEnHome: enHome,
+    bannerTitulo: titulo,
+    bannerTexto: texto,
+    bannerCtaTexto: ctaTexto,
+    bannerColor: color,
+  };
+}
+
 /** La forma del LISTADO: sin items, que crecen sin techo. */
 function mapPromocionListado(promocion) {
   return {
@@ -105,6 +185,12 @@ function mapPromocionDetalle(promocion) {
     nombre: promocion.nombre,
     descripcion: promocion.descripcion,
     activa: promocion.activa,
+    bannerEnHome: promocion.bannerEnHome,
+    bannerTitulo: promocion.bannerTitulo ?? null,
+    bannerTexto: promocion.bannerTexto ?? null,
+    bannerCtaTexto: promocion.bannerCtaTexto ?? null,
+    bannerColor: promocion.bannerColor ?? null,
+    bannerArteUrl: promocion.bannerArteUrl ?? null,
     items: (promocion.items ?? []).map((item) => {
       const promocional = precioConDescuento(item.product.precio, item.porcentaje);
       return {
@@ -196,7 +282,12 @@ export async function actualizar(req, res, next) {
 
     const promocion = await prisma.promocion.update({
       where: { id },
-      data: { nombre: parsearNombre(req.body), descripcion: parsearDescripcion(req.body), activa },
+      data: {
+        nombre: parsearNombre(req.body),
+        descripcion: parsearDescripcion(req.body),
+        activa,
+        ...parsearBannerPromocion(req.body, actual),
+      },
       include: DETALLE_INCLUDE,
     });
 

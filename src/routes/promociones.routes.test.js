@@ -247,6 +247,74 @@ describe("POST /api/promociones — validaciones", () => {
   });
 });
 
+describe("PUT /api/promociones/:id — el banner de la home", () => {
+  it("guarda los textos, el color y el interruptor", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+    promocionMock.update.mockResolvedValue(
+      promo({ bannerEnHome: true, bannerTitulo: "Semana del Hogar" }),
+    );
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({
+        nombre: "Hogar",
+        bannerEnHome: true,
+        bannerTitulo: "Semana del Hogar",
+        bannerTexto: "Hasta 30% off",
+        bannerCtaTexto: "Ver ofertas",
+        bannerColor: "VERDE",
+      });
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          bannerEnHome: true,
+          bannerTitulo: "Semana del Hogar",
+          bannerTexto: "Hasta 30% off",
+          bannerCtaTexto: "Ver ofertas",
+          bannerColor: "VERDE",
+        }),
+      }),
+    );
+  });
+
+  it("rechaza el marcador {dias}, que es del cartel de campañas", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar", bannerTitulo: "Faltan {dias} días" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("{dias}");
+  });
+
+  it("un banner prendido sin título es 400", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar", bannerEnHome: true, bannerTitulo: "" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rechaza un color que no está en la lista cerrada", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar", bannerColor: "FUCSIA" });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("PUT /api/promociones/:id/items — los productos y sus porcentajes", () => {
   function guardar(items) {
     return request(buildApp())
