@@ -335,6 +335,15 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   //
   // Una promoción inexistente o no vigente no matchea nada y devuelve VACÍO —
   // "ninguno", nunca "todo el catálogo". Mismo criterio que `ids` y `campania`.
+  //
+  // ⚠️ Si además vino `?conDescuento=`, este bloque PISA el `where.itemsPromocion`
+  // de arriba en vez de combinarlo. Es SEGURO a propósito: la condición de acá
+  // (item habilitado + de ESTA promoción + promoción vigente) es un subconjunto
+  // ESTRICTO de la de `conDescuento` (item habilitado + vigencia de CUALQUIER
+  // promoción), así que pisar da el mismo resultado que un AND de las dos. Si el
+  // día de mañana `conDescuento` suma una tercera condición sobre
+  // `itemsPromocion` que NO sea subconjunto de esta, el pisado deja de ser
+  // inocuo y nadie lo va a notar sin rehacer este análisis.
   if (query.promocion !== undefined) {
     const promocionId = parsearIdEntero(query.promocion);
     if (promocionId !== null) {
