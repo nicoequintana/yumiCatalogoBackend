@@ -10,7 +10,10 @@ import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { rutaCategoria, rutaProducto } from "../lib/slug.js";
-import { condicionProductoConDescuento } from "../lib/precioEfectivo.js";
+import {
+  condicionProductoConDescuento,
+  condicionPromocionVigente,
+} from "../lib/precioEfectivo.js";
 import {
   COLOR_SLIDE_OFERTAS,
   COLOR_SLIDE_POR_DEFECTO,
@@ -774,6 +777,89 @@ async function aSlideCampania(campania) {
     doodleUrl: campania.doodleUrl ?? null,
     color: campania.bannerColor ?? COLOR_SLIDE_POR_DEFECTO,
   };
+}
+
+/**
+ * El slide de una PROMOCIÓN.
+ *
+ * Emite la misma forma que `aSlideCampania` —el componente no ramifica por
+ * origen— con tres diferencias que son de fondo:
+ *
+ * - `tipo: "PROMOCION"` y `campaniaId: null`: la clave que discrimina.
+ * - `doodleUrl` siempre `null`: una promoción no tiene Doodle. Sin arte cae al
+ *   molde compuesto sobre el color, igual que el slide de ofertas.
+ * - **`ctaDestino` se DERIVA del id**, no sale de ninguna columna. Guardar una
+ *   ruta escrita a mano en una franja que ve todo el mundo y que edita
+ *   cualquiera con sesión del panel es la superficie que campañas ya cerró con
+ *   `modalCtaTipo`; acá directamente no se abre.
+ *
+ * A diferencia de `aSlideCampania`, es SINCRÓNICA: no hay CTA que resolver
+ * contra la base, así que se exporta para poder probarla directo, sin pasar
+ * por la ruta.
+ */
+export function aSlidePromocion(promocion) {
+  return {
+    tipo: "PROMOCION",
+    campaniaId: null,
+    promocionId: promocion.id,
+    titulo: promocion.bannerTitulo,
+    texto: promocion.bannerTexto ?? null,
+    ctaTexto: promocion.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO,
+    ctaDestino: `/coleccion?promocion=${promocion.id}`,
+    arteUrl: promocion.bannerArteUrl ?? null,
+    doodleUrl: null,
+    color: promocion.bannerColor ?? COLOR_SLIDE_POR_DEFECTO,
+  };
+}
+
+/**
+ * Las promociones que hoy aportan un slide, ya ordenadas.
+ *
+ * CINCO condiciones, y el filtro va ANTES de ordenar y de cortar: filtrar
+ * después gastaría el cupo de cinco en candidatas incompletas.
+ *
+ * 1. Vigente según `condicionPromocionVigente`. ⚠️ NO se reescribe la condición
+ *    acá: esa función tiene DOS vías —programación propia, o pertenecer a una
+ *    campaña habilitada y en fecha— más `activa: true`. Escribirla a mano
+ *    dejaría afuera a las promociones que viven dentro de una campaña.
+ * 2. `bannerEnHome` prendido.
+ * 3. `bannerTitulo` cargado — mismo criterio que el banner de campaña.
+ * 4. Al menos un item habilitado: `PromocionItem.habilitado` se apaga cuando la
+ *    promoción PIERDE un conflicto sobre un producto y **no se reactiva sola**,
+ *    así que una promoción con todos los items apagados sigue vigente en el
+ *    calendario mientras no descuenta nada. Anunciarla mandaría al visitante a
+ *    una grilla vacía.
+ * 5. Sin campaña asociada: si `CampaniaPromocion` la vincula a una campaña, la
+ *    campaña es su vidriera y ya tiene su propio slide. Emitir los dos diría
+ *    dos veces lo mismo y gastaría dos de los cinco lugares.
+ *
+ *    ⚠️ Esta quinta condición deja MUERTA a propósito la segunda vía del `OR`
+ *    de `condicionPromocionVigente` (la de "pertenece a una campaña habilitada
+ *    y en fecha"): una promoción sin campañas nunca puede satisfacerla. No es
+ *    un error ni algo para "simplificar" — es la decisión de que la campaña es
+ *    la vidriera de sus promociones, así que una promoción DENTRO de una
+ *    campaña no emite slide propio. El spread se mantiene igual (en vez de
+ *    reescribir la condición a mano) para heredar sola cualquier cambio futuro
+ *    en la regla de vigencia por programación.
+ *
+ * Orden: `id` descendente, la más nueva primero. Es el único orden que el
+ * modelo permite sin inventar una columna de prioridad, y se decidió no
+ * inventarla (ver la spec).
+ */
+export async function slidesDePromociones(ahora) {
+  const promociones = await prisma.promocion.findMany({
+    where: {
+      ...condicionPromocionVigente(ahora),
+      bannerEnHome: true,
+      bannerTitulo: { not: null },
+      items: { some: { habilitado: true } },
+      campanias: { none: {} },
+    },
+    orderBy: { id: "desc" },
+    take: MAX_SLIDES_CAMPANIA,
+  });
+
+  return promociones.map(aSlidePromocion);
 }
 
 /**
