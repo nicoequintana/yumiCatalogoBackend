@@ -67,8 +67,9 @@ describe("GET /og/home", () => {
       "En YIMA reunimos productos útiles, innovadores y con diseño que simplifican tu rutina",
     );
     expect(res.text).toContain("Productos seleccionados");
-    expect(res.text).toContain("El Manifiesto YIMA");
-    expect(res.text).toContain("elegimos piezas que valen la pena tener cerca");
+    // El manifiesto se dejó de montar en la home (Task 19, 05/09/2026): dejarlo
+    // acá sería cloaking, así que ya no puede aparecer en este cuerpo.
+    expect(res.text).not.toContain("Manifiesto");
     // Grafo interno: un link a la colección, aunque no haya destacados.
     expect(res.text).toContain('href="https://yima.example.com/coleccion"');
   });

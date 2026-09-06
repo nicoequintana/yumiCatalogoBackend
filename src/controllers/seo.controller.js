@@ -148,7 +148,12 @@ function listaDeProductos(productos, frontendUrl) {
  * renderizador de Google veía la home real; ahora se lo desvía acá, y si
  * este texto queda desactualizado el crawler ve un `<h1>` que ya no existe
  * en la página — la forma más literal de violar esa regla. Al cambiar el
- * copy del hero o del manifiesto en el frontend, actualizar también acá.
+ * copy del hero en el frontend, actualizar también acá.
+ *
+ * El manifiesto (Task 19, 05/09/2026) se dejó de montar en `Catalogo.jsx`,
+ * así que sus constantes y su bloque acá se borraron con él: dejarlas habría
+ * sido servirle a Googlebot un `<h2>` que ninguna persona ve, exactamente el
+ * cloaking que este comentario advierte.
  */
 const HERO_TITULO = "Descubrí cosas que te hacen la vida más fácil.";
 const HERO_PARRAFO =
@@ -157,9 +162,6 @@ const HERO_PARRAFO =
 // `texto` completo de cada señal (nunca `textoCompacto`, que es solo para la
 // tarjeta angosta de móvil).
 const SENALES_CONFIANZA_SEO = ["Productos seleccionados", "Útiles", "Diferentes", "Para vos o para regalar"];
-const MANIFIESTO_TITULO = "El Manifiesto YIMA";
-const MANIFIESTO_PARRAFO =
-  "No vendemos productos: elegimos piezas que valen la pena tener cerca. Cada cosa que entra al catálogo pasó antes por la misma pregunta que te hacemos a vos — ¿esto suma o solo ocupa lugar? Encontrá lo que buscabas, y de paso, algo que no sabías que te hacía falta.";
 
 /**
  * Techo de destacados que se listan en el HTML de la home. Espeja
@@ -177,7 +179,7 @@ const MAX_DESTACADOS_SEO = 12;
  */
 const MIN_DESTACADOS_SEO = 4;
 
-function cuerpoHome(destacados, frontendUrl) {
+export function cuerpoHome(destacados, frontendUrl) {
   const senales = `<ul>${SENALES_CONFIANZA_SEO.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`;
 
   const seccionDestacados =
@@ -186,13 +188,13 @@ function cuerpoHome(destacados, frontendUrl) {
       : "";
 
   return [
+    // El orden espeja el de la home: primero lo que se puede comprar, y el
+    // relato de marca al final. El <h1> es el MISMO string que `Catalogo.jsx`.
+    seccionDestacados,
     `<h1>${escapeHtml(HERO_TITULO)}</h1>`,
     `<p>${escapeHtml(HERO_PARRAFO)}</p>`,
     senales,
     `<p><a href="${frontendUrl}/coleccion">Ver productos</a></p>`,
-    seccionDestacados,
-    `<h2>${escapeHtml(MANIFIESTO_TITULO)}</h2>`,
-    `<p>${escapeHtml(MANIFIESTO_PARRAFO)}</p>`,
   ]
     .filter(Boolean)
     .join("\n");
