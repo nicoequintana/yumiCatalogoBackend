@@ -11,11 +11,9 @@ import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js
 import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { rutaCategoria, rutaProducto } from "../lib/slug.js";
 import {
-  condicionProductoConDescuento,
   condicionPromocionVigente,
 } from "../lib/precioEfectivo.js";
 import {
-  COLOR_SLIDE_OFERTAS,
   COLOR_SLIDE_POR_DEFECTO,
   COLORES_SLIDE,
   CTA_TEXTO_POR_DEFECTO,
@@ -862,30 +860,6 @@ export async function slidesDePromociones(ahora) {
   return promociones.map(aSlidePromocion);
 }
 
-/**
- * El slide automático de ofertas, o `null` si no hay nada rebajado.
- *
- * **Lo arma el backend y no el frontend**, mismo criterio que `ctaDestino`: el
- * conteo, el plural y la ruta son datos derivados. Nunca tiene arte —no hay
- * quién se lo diseñe— así que es el caso que obliga a que el molde compuesto
- * exista y sea el piso del componente.
- */
-function aSlideOfertas(total) {
-  if (total <= 0) return null;
-
-  return {
-    tipo: "OFERTAS",
-    campaniaId: null,
-    titulo: "Ofertas de la semana",
-    texto: `${total} ${total === 1 ? "producto" : "productos"} con descuento`,
-    ctaTexto: "Ver ofertas",
-    ctaDestino: "/coleccion?conDescuento=1",
-    arteUrl: null,
-    doodleUrl: null,
-    color: COLOR_SLIDE_OFERTAS,
-  };
-}
-
 export async function contextoActivo(req, res, next) {
   try {
     const ahora = new Date();
@@ -936,17 +910,6 @@ export async function contextoActivo(req, res, next) {
       .sort((a, b) => b.prioridad - a.prioridad || b.id - a.id)
       .slice(0, MAX_SLIDES_CAMPANIA);
 
-    // Cuántos productos PUBLICADOS tienen descuento vigente. Compone con las
-    // guardas públicas: un producto rebajado pero oculto o agotado no cuenta,
-    // porque el CTA lleva a una grilla que tampoco lo muestra.
-    const totalOfertas = await prisma.product.count({
-      where: {
-        visibleEnCatalogo: true,
-        stock: { gt: 0 },
-        itemsPromocion: condicionProductoConDescuento(ahora),
-      },
-    });
-
     // El orden es una decisión de producto: la campaña tiene prioridad
     // EXPLÍCITA y la promoción no, así que el primer lugar va para lo que sí
     // se sabe ordenar. Consecuencia asumida: con cinco campañas con banner
@@ -954,19 +917,26 @@ export async function contextoActivo(req, res, next) {
     const slidesCampania = await Promise.all(conBanner.map(aSlideCampania));
     const slidesPromocion = await slidesDePromociones(ahora);
 
-    // El tope es GLOBAL sobre la lista concatenada, no uno por origen: seis
-    // franjas (cinco campañas + el sintético, como antes de esta tanda) es
-    // peor que cortar en cinco.
+    // El tope es GLOBAL sobre la lista concatenada, no uno por origen.
+    //
+    // ⚠️ NO HAY SLIDE SINTÉTICO. Hasta el 06/09/2026, cuando ninguna promoción
+    // tenía banner cargado, acá se agregaba uno armado por el backend
+    // ("Ofertas de la semana" + el conteo de productos rebajados) para que la
+    // home no quedara muda habiendo ofertas.
+    //
+    // Se eliminó por decisión de producto, y el motivo es el que originó toda
+    // esta feature: ese copy no lo eligió nadie. El carrusel es una vidriera
+    // EDITORIAL — lo que sale ahí lo decide una persona desde el panel. Una
+    // promoción activa sin banner cargado no aporta franja, punto.
+    //
+    // La home NO queda muda: los productos rebajados los sigue anunciando el
+    // riel "Ofertas de la semana" (`RielOfertas.jsx`), que es otra superficie
+    // y usa `?conDescuento=1`. Lo que desaparece es la franja que nadie
+    // escribió, no el anuncio de las ofertas.
+    //
+    // El guard vive en `campanias.routes.test.js` ("NINGÚN slide puede tener
+    // tipo OFERTAS").
     const slides = [...slidesCampania, ...slidesPromocion].slice(0, MAX_SLIDES_CAMPANIA);
-
-    // El sintético es el RESPALDO, no un agregado: se emite solo si ninguna
-    // promoción aportó slide. Si hay banners de promoción cargados, esos ya
-    // dicen lo que el sintético diría, y mejor; sin ellos la home no se queda
-    // muda. Por eso sigue yendo último, y solo si queda lugar.
-    if (slidesPromocion.length === 0 && slides.length < MAX_SLIDES_CAMPANIA) {
-      const ofertas = aSlideOfertas(totalOfertas);
-      if (ofertas) slides.push(ofertas);
-    }
 
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),

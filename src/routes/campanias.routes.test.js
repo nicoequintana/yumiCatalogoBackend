@@ -565,7 +565,45 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body.slides[0].tipo).toBe("CAMPANIA");
   });
 
-  it("agrega el slide de OFERTAS al final cuando hay productos con descuento", async () => {
+  // ⚠️ EL SLIDE SINTÉTICO DE OFERTAS SE ELIMINÓ EL 06/09/2026, y estos tests
+  // son su lápida: fijan que NO vuelva.
+  //
+  // Existió como respaldo: cuando ninguna promoción tenía banner cargado, el
+  // backend armaba un slide "Ofertas de la semana" con el conteo de productos
+  // rebajados. La idea era que la home nunca quedara muda habiendo ofertas.
+  //
+  // Se sacó por decisión de producto, y el motivo es el mismo que originó toda
+  // esta feature: ese copy no lo eligió nadie. El carrusel es una vidriera
+  // EDITORIAL — lo que sale ahí lo decide una persona desde el panel. Un slide
+  // que el sistema inventa con un título fijo es exactamente lo que se vino a
+  // resolver, no algo que convenga conservar como red.
+  //
+  // Los productos rebajados siguen anunciados en la home por el riel "Ofertas
+  // de la semana" (`RielOfertas.jsx`), que es otra superficie y no se tocó. La
+  // home no queda muda: queda sin franja que nadie escribió.
+  it("una promoción vigente SIN banner cargado no aporta ningún slide", async () => {
+    campaniaMock.findMany.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(12);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides).toEqual([]);
+  });
+
+  it("con ofertas vigentes pero sin banners, el carrusel queda VACÍO", async () => {
+    // Antes acá salía el sintético. Ahora no sale nada: sin banner cargado no
+    // hay franja, aunque haya doce productos rebajados.
+    campaniaMock.findMany.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(12);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides).toHaveLength(0);
+  });
+
+  it("NINGÚN slide puede tener tipo OFERTAS", async () => {
+    // El guard de la lápida: si alguien reintroduce el sintético, esto se cae.
     campaniaMock.findMany.mockResolvedValue([
       fila({ bannerEnHome: true, bannerTitulo: "Primavera" }),
     ]);
@@ -573,43 +611,8 @@ describe("GET /campanias/activas — slides", () => {
 
     const res = await request(buildApp()).get("/api/campanias/activas");
 
-    const ultimo = res.body.slides.at(-1);
-    expect(ultimo.tipo).toBe("OFERTAS");
-    expect(ultimo.campaniaId).toBeNull();
-    expect(ultimo.texto).toBe("12 productos con descuento");
-    expect(ultimo.ctaDestino).toBe("/coleccion?conDescuento=1");
-  });
-
-  it("con UN solo producto rebajado el texto va en singular", async () => {
-    campaniaMock.findMany.mockResolvedValue([]);
-    productMock.count.mockResolvedValue(1);
-
-    const res = await request(buildApp()).get("/api/campanias/activas");
-
-    expect(res.body.slides[0].texto).toBe("1 producto con descuento");
-  });
-
-  it("sin ofertas vigentes NO hay slide de OFERTAS", async () => {
-    campaniaMock.findMany.mockResolvedValue([
-      fila({ bannerEnHome: true, bannerTitulo: "Primavera" }),
-    ]);
-    productMock.count.mockResolvedValue(0);
-
-    const res = await request(buildApp()).get("/api/campanias/activas");
-
+    expect(res.body.slides.every((s) => s.tipo !== "OFERTAS")).toBe(true);
     expect(res.body.slides.every((s) => s.tipo === "CAMPANIA")).toBe(true);
-  });
-
-  it("sin campañas y CON ofertas, el carrusel es solo el slide automático", async () => {
-    // Es la mitad que justifica el slide automático: sin él, un catálogo con
-    // doce productos rebajados y ninguna campaña no anuncia nada.
-    campaniaMock.findMany.mockResolvedValue([]);
-    productMock.count.mockResolvedValue(12);
-
-    const res = await request(buildApp()).get("/api/campanias/activas");
-
-    expect(res.body.slides).toHaveLength(1);
-    expect(res.body.slides[0].tipo).toBe("OFERTAS");
   });
 
   it("sin campañas y sin ofertas, slides es un array vacío", async () => {
@@ -624,7 +627,7 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body.slides).toEqual([]);
   });
 
-  it("corta en MAX_SLIDES_CAMPANIA campañas, y sin lugar el sintético no entra", async () => {
+  it("corta en MAX_SLIDES_CAMPANIA campañas", async () => {
     campaniaMock.findMany.mockResolvedValue(
       Array.from({ length: 8 }, (_, i) =>
         fila({ id: i + 1, prioridad: i, bannerEnHome: true, bannerTitulo: `C${i}` }),
@@ -742,7 +745,7 @@ describe("GET /campanias/activas — slides de campaña y de promoción", () => 
     expect(res.body.slides).toHaveLength(5);
   });
 
-  it("NO emite el sintético de ofertas cuando una promoción aportó slide", async () => {
+  it("con una promoción con banner, no aparece ningún slide de más", async () => {
     campaniaMock.findMany.mockResolvedValue([]);
     promocionFindManyMock.mockResolvedValue([promocionParaSlide()]);
     productMock.count.mockResolvedValue(12);
@@ -752,14 +755,19 @@ describe("GET /campanias/activas — slides de campaña y de promoción", () => 
     expect(res.body.slides.some((s) => s.tipo === "OFERTAS")).toBe(false);
   });
 
-  it("SÍ emite el sintético cuando ninguna promoción aportó slide", async () => {
+  it("sin banners cargados el carrusel queda vacío, aunque haya ofertas", async () => {
+    // Este test afirmaba lo CONTRARIO hasta el 06/09/2026 ("SÍ emite el
+    // sintético cuando ninguna promoción aportó slide"). El sintético se
+    // eliminó: una promoción activa sin banner cargado no aporta franja, y el
+    // backend ya no inventa ninguna. Los cinco productos rebajados los sigue
+    // anunciando el riel de ofertas de la home, que es otra superficie.
     campaniaMock.findMany.mockResolvedValue([]);
     promocionFindManyMock.mockResolvedValue([]);
     productMock.count.mockResolvedValue(5);
 
     const res = await request(buildApp()).get("/api/campanias/activas");
 
-    expect(res.body.slides.at(-1).tipo).toBe("OFERTAS");
+    expect(res.body.slides).toEqual([]);
   });
 });
 
