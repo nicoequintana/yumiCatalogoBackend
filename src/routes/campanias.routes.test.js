@@ -655,7 +655,11 @@ describe("GET /campanias/activas — slides", () => {
 
   it("el slide NO filtra infraestructura", async () => {
     // `activas` es público: todo lo que viaje queda en un bundle que cualquiera
-    // lee. El publicId de Cloudinary y la nota interna no salen.
+    // lee. El publicId de Cloudinary y la nota interna no salen. Cubre las DOS
+    // fuentes del slide: `slidesDePromociones` hace su `findMany` SIN `select`
+    // (ver campanias.controller.js), así que hoy solo `aSlidePromocion`, con su
+    // literal explícito, es lo que evita que la fila entera de la promoción
+    // viaje — este test es el guard contra que eso deje de ser así.
     campaniaMock.findMany.mockResolvedValue([
       fila({
         bannerEnHome: true,
@@ -664,6 +668,18 @@ describe("GET /campanias/activas — slides", () => {
         bannerArteCloudinaryPublicId: "campanias/abc123",
       }),
     ]);
+    promocionFindManyMock.mockResolvedValue([
+      {
+        id: 3,
+        bannerTitulo: "Envío gratis",
+        bannerTexto: null,
+        bannerCtaTexto: null,
+        bannerArteUrl: null,
+        bannerColor: null,
+        descripcion: "nota interna de la promoción",
+        bannerArteCloudinaryPublicId: "promociones/xyz789",
+      },
+    ]);
     productMock.count.mockResolvedValue(0);
 
     const res = await request(buildApp()).get("/api/campanias/activas");
@@ -671,6 +687,7 @@ describe("GET /campanias/activas — slides", () => {
 
     expect(crudo).not.toContain("nota interna");
     expect(crudo).not.toContain("campanias/abc123");
+    expect(crudo).not.toContain("promociones/xyz789");
     expect(crudo).not.toContain("CloudinaryPublicId");
   });
 });
