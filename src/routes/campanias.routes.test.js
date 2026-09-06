@@ -624,7 +624,7 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body.slides).toEqual([]);
   });
 
-  it("corta en MAX_SLIDES_CAMPANIA campañas", async () => {
+  it("corta en MAX_SLIDES_CAMPANIA campañas, y sin lugar el sintético no entra", async () => {
     campaniaMock.findMany.mockResolvedValue(
       Array.from({ length: 8 }, (_, i) =>
         fila({ id: i + 1, prioridad: i, bannerEnHome: true, bannerTitulo: `C${i}` }),
@@ -634,8 +634,12 @@ describe("GET /campanias/activas — slides", () => {
 
     const res = await request(buildApp()).get("/api/campanias/activas");
 
+    // El tope pasó a ser GLOBAL (banner de promoción, task 5): antes corría
+    // solo sobre campañas y el sintético se sumaba aparte, así que con cinco
+    // campañas llenando el cupo todavía entraba un sexto slide de ofertas. Con
+    // el tope global no queda lugar: seis franjas es peor que cortar en cinco.
     expect(res.body.slides.filter((s) => s.tipo === "CAMPANIA")).toHaveLength(5);
-    expect(res.body.slides).toHaveLength(6); // 5 campañas + ofertas
+    expect(res.body.slides).toHaveLength(5);
   });
 
   it("una campaña sin color sale en el color por defecto", async () => {
@@ -668,6 +672,77 @@ describe("GET /campanias/activas — slides", () => {
     expect(crudo).not.toContain("nota interna");
     expect(crudo).not.toContain("campanias/abc123");
     expect(crudo).not.toContain("CloudinaryPublicId");
+  });
+});
+
+/**
+ * El banner de promoción (task 5) entra al mismo carrusel que el de campaña.
+ * `slidesDePromociones` y `aSlidePromocion` ya tienen su propio guard unitario
+ * en `campanias.controller.test.js`; acá se afirma el ENSAMBLE en la ruta:
+ * orden, tope global y la regla del sintético como respaldo.
+ */
+describe("GET /campanias/activas — slides de campaña y de promoción", () => {
+  function promocionParaSlide(extra = {}) {
+    return {
+      id: 3,
+      bannerTitulo: "Envío gratis en pedidos grandes",
+      bannerTexto: null,
+      bannerCtaTexto: null,
+      bannerArteUrl: null,
+      bannerColor: null,
+      ...extra,
+    };
+  }
+
+  it("pone las campañas primero y las promociones después", async () => {
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ bannerEnHome: true, bannerTitulo: "Primavera" }),
+    ]);
+    promocionFindManyMock.mockResolvedValue([promocionParaSlide()]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    const tipos = res.body.slides.map((s) => s.tipo);
+    expect(tipos.indexOf("CAMPANIA")).toBeLessThan(tipos.indexOf("PROMOCION"));
+  });
+
+  it("corta en cinco slides en total", async () => {
+    campaniaMock.findMany.mockResolvedValue(
+      Array.from({ length: 4 }, (_, i) =>
+        fila({ id: i + 1, prioridad: i, bannerEnHome: true, bannerTitulo: `C${i}` }),
+      ),
+    );
+    promocionFindManyMock.mockResolvedValue(
+      Array.from({ length: 3 }, (_, i) =>
+        promocionParaSlide({ id: i + 10, bannerTitulo: `P${i}` }),
+      ),
+    );
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides).toHaveLength(5);
+  });
+
+  it("NO emite el sintético de ofertas cuando una promoción aportó slide", async () => {
+    campaniaMock.findMany.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([promocionParaSlide()]);
+    productMock.count.mockResolvedValue(12);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides.some((s) => s.tipo === "OFERTAS")).toBe(false);
+  });
+
+  it("SÍ emite el sintético cuando ninguna promoción aportó slide", async () => {
+    campaniaMock.findMany.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([]);
+    productMock.count.mockResolvedValue(5);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides.at(-1).tipo).toBe("OFERTAS");
   });
 });
 

@@ -947,12 +947,26 @@ export async function contextoActivo(req, res, next) {
       },
     });
 
-    const slides = [
-      ...(await Promise.all(conBanner.map(aSlideCampania))),
-      // El automático va ÚLTIMO: las campañas son decisiones editoriales, esto
-      // es un agregado del sistema.
-      aSlideOfertas(totalOfertas),
-    ].filter(Boolean);
+    // El orden es una decisión de producto: la campaña tiene prioridad
+    // EXPLÍCITA y la promoción no, así que el primer lugar va para lo que sí
+    // se sabe ordenar. Consecuencia asumida: con cinco campañas con banner
+    // completo, ninguna promoción entra al carrusel.
+    const slidesCampania = await Promise.all(conBanner.map(aSlideCampania));
+    const slidesPromocion = await slidesDePromociones(ahora);
+
+    // El tope es GLOBAL sobre la lista concatenada, no uno por origen: seis
+    // franjas (cinco campañas + el sintético, como antes de esta tanda) es
+    // peor que cortar en cinco.
+    const slides = [...slidesCampania, ...slidesPromocion].slice(0, MAX_SLIDES_CAMPANIA);
+
+    // El sintético es el RESPALDO, no un agregado: se emite solo si ninguna
+    // promoción aportó slide. Si hay banners de promoción cargados, esos ya
+    // dicen lo que el sintético diría, y mejor; sin ellos la home no se queda
+    // muda. Por eso sigue yendo último, y solo si queda lugar.
+    if (slidesPromocion.length === 0 && slides.length < MAX_SLIDES_CAMPANIA) {
+      const ofertas = aSlideOfertas(totalOfertas);
+      if (ofertas) slides.push(ofertas);
+    }
 
     const cuerpo = {
       claveDia: claveDiaArgentino(ahora),
