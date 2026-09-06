@@ -14,14 +14,11 @@ import {
   condicionPromocionVigente,
 } from "../lib/precioEfectivo.js";
 import {
-  COLOR_SLIDE_POR_DEFECTO,
-  COLORES_SLIDE,
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   TIPOS_CAMPANIA,
   TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
-  listaDeColoresSlide,
   listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
@@ -54,7 +51,6 @@ export const LARGO_MAX_BANNER_TITULO = 120;
  * dentro del flujo de la home, no una tarjeta a pantalla completa.
  */
 export const LARGO_MAX_BANNER_TEXTO = 200;
-export const LARGO_MAX_BANNER_CTA = 60;
 
 /**
  * La ruta a la que cae CUALQUIER destino que ya no se puede resolver.
@@ -126,12 +122,15 @@ function mapCampania(campania, ahora) {
     bannerEnHome: campania.bannerEnHome,
     bannerTitulo: campania.bannerTitulo,
     bannerTexto: campania.bannerTexto,
-    bannerCtaTexto: campania.bannerCtaTexto,
     // La pieza apaisada del slide. `null` es un caso legítimo —sin arte el
-    // slide cae al molde compuesto sobre `color`— y viaja igual para que el
-    // editor no confunda "no subió nada" con "me olvidé de mandarlo".
+    // slide cae al molde compuesto, que va en el color de marca— y viaja igual
+    // para que el editor no confunda "no subió nada" con "me olvidé de
+    // mandarlo".
+    //
+    // ⚠️ `bannerCtaTexto` y `bannerColor` NO se emiten: son columnas inertes
+    // desde el 06/09/2026 y el editor no tiene dónde mostrarlas. Emitir un
+    // campo que el PUT ya no puede escribir es como vuelve un borrado a medias.
     bannerArteUrl: campania.bannerArteUrl,
-    bannerColor: campania.bannerColor,
   };
 }
 
@@ -355,19 +354,20 @@ function exigirSinMarcadorDeDias(texto, campo) {
  * **El destino NO se parsea acá.** Lo emite `parsearModal`, y es el de la
  * CAMPAÑA: `modalCtaTipo` / `modalCtaReferenciaId` los comparten las dos
  * superficies. Duplicarlos serían dos verdades que se desincronizan sin que
- * nada falle. Consecuencia: este parser mira `modalCtaTipo` para saber si hay
- * botón, pero nunca lo escribe.
+ * nada falle.
+ *
+ * ⚠️ **`bannerCtaTexto` y `bannerColor` NO se leen ni se escriben** desde el
+ * 06/09/2026: con el slide entero convertido en enlace, el copy del CTA es fijo
+ * en el componente y el molde sin arte va siempre en el color de marca. Un body
+ * que todavía los traiga —una pestaña vieja del panel— se ACEPTA y se ignora:
+ * un 400 por un campo que hoy no significa nada dejaría trabado un guardado que
+ * en realidad es válido.
  */
-function parsearBanner(body, actual = null, ctaTipo = null) {
+function parsearBanner(body, actual = null) {
   const enHome = parsearFlagDoodle(body, "bannerEnHome", actual?.bannerEnHome ?? false);
 
   const titulo = parsearTextoOpcional(body?.bannerTitulo, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
   const texto = parsearTextoOpcional(body?.bannerTexto, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
-  const ctaTexto = parsearTextoOpcional(
-    body?.bannerCtaTexto,
-    "bannerCtaTexto",
-    LARGO_MAX_BANNER_CTA,
-  );
 
   exigirSinMarcadorDeDias(titulo, "bannerTitulo");
   exigirSinMarcadorDeDias(texto, "bannerTexto");
@@ -375,31 +375,11 @@ function parsearBanner(body, actual = null, ctaTipo = null) {
   if (enHome && !titulo) {
     throw httpError(400, "Un banner activo necesita un título.");
   }
-  if (ctaTexto !== null && ctaTipo === null) {
-    throw httpError(400, "El botón del banner tiene texto pero no lleva a ningún lado.");
-  }
-
-  // Lista CERRADA, misma disciplina que `tipo`, `estado` y `modalCtaTipo`: un
-  // color libre deja elegir amarillo claro con título blanco encima, sin error
-  // y sin test rojo. `undefined` conserva el actual; `null` explícito vuelve al
-  // default de la lib.
-  let color = actual?.bannerColor ?? null;
-  if (body?.bannerColor !== undefined) {
-    if (body.bannerColor === null) {
-      color = null;
-    } else if (!COLORES_SLIDE.includes(body.bannerColor)) {
-      throw httpError(400, `El color del slide debe ser uno de: ${COLORES_SLIDE.join(", ")}.`);
-    } else {
-      color = body.bannerColor;
-    }
-  }
 
   return {
     bannerEnHome: enHome,
     bannerTitulo: titulo,
     bannerTexto: texto,
-    bannerCtaTexto: ctaTexto,
-    bannerColor: color,
   };
 }
 
@@ -539,8 +519,6 @@ export function opciones(_req, res) {
     // panel: es la regla 1 de la metodología. Un placeholder hecho a mano
     // divergiría de lo que el cartel muestra, sin error y sin test rojo.
     ctaTextoPorDefecto: CTA_TEXTO_POR_DEFECTO,
-    // Los colores del slide: el panel no tiene copia, mismo criterio.
-    coloresSlide: listaDeColoresSlide(),
   });
 }
 
@@ -746,13 +724,19 @@ const MAX_SLIDES_CAMPANIA = 5;
 /**
  * Una campaña, en la forma que consume el carrusel de la home.
  *
- * Misma disciplina que `aModalPublico`: el frontend no arma rutas ni elige
- * defaults. `ctaDestino` sale del `switch` de intenciones contra lo que existe
- * HOY, y `color` viene con su default ya aplicado.
+ * Misma disciplina que `aModalPublico`: el frontend no arma rutas. `ctaDestino`
+ * sale del `switch` de intenciones contra lo que existe HOY.
  *
  * ⚠️ **NO emite contador.** El único día objetivo que existe es
  * `modalFechaObjetivo`, que es un campo DEL CARTEL: leerlo acá ataba dos
  * superficies que el modelo declara independientes.
+ *
+ * ⚠️ **NO emite `ctaTexto` ni `color`** desde el 06/09/2026. El slide entero es
+ * el enlace: el copy de la señal ("Ver más") es fijo en `SlideCampania` y el
+ * molde sin arte va siempre en el color de marca. Emitirlos sería payload
+ * muerto, que en esta misma feature ya costó un bug. La señal de "¿hay
+ * destino?" la sigue dando `ctaDestino`, que `resolverDestinoCta` deja en `null`
+ * exactamente cuando no hay `modalCtaTipo`.
  *
  * ⚠️ Es `async` — el destino toca la base. Hay que resolverlo con `await` ANTES
  * del literal que va a `res.json`: una promesa dentro de un objeto se serializa
@@ -764,16 +748,14 @@ async function aSlideCampania(campania) {
     campaniaId: campania.id,
     titulo: campania.bannerTitulo,
     texto: campania.bannerTexto,
-    ctaTexto: campania.modalCtaTipo ? (campania.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
     ctaDestino: await resolverDestinoCta(campania),
     // La pieza apaisada, si la campaña la subió. `null` es un caso legítimo y
     // la clave viaja igual para que el slide no tenga que distinguirlo de un
-    // olvido: sin arte cae al molde compuesto sobre `color`.
+    // olvido: sin arte cae al molde compuesto.
     arteUrl: campania.bannerArteUrl ?? null,
     // El arte de SU campaña, que puede no ser la del encabezado: los dos
     // recursos se eligen aparte.
     doodleUrl: campania.doodleUrl ?? null,
-    color: campania.bannerColor ?? COLOR_SLIDE_POR_DEFECTO,
   };
 }
 
@@ -785,11 +767,14 @@ async function aSlideCampania(campania) {
  *
  * - `tipo: "PROMOCION"` y `campaniaId: null`: la clave que discrimina.
  * - `doodleUrl` siempre `null`: una promoción no tiene Doodle. Sin arte cae al
- *   molde compuesto sobre el color, igual que el slide de ofertas.
+ *   molde compuesto, que va en el color de marca.
  * - **`ctaDestino` se DERIVA del id**, no sale de ninguna columna. Guardar una
  *   ruta escrita a mano en una franja que ve todo el mundo y que edita
  *   cualquiera con sesión del panel es la superficie que campañas ya cerró con
  *   `modalCtaTipo`; acá directamente no se abre.
+ *
+ * Tampoco emite `ctaTexto` ni `color`, por el mismo motivo que
+ * `aSlideCampania`: dejaron de ser decisiones editables el 06/09/2026.
  *
  * A diferencia de `aSlideCampania`, es SINCRÓNICA: no hay CTA que resolver
  * contra la base, así que se exporta para poder probarla directo, sin pasar
@@ -802,11 +787,9 @@ export function aSlidePromocion(promocion) {
     promocionId: promocion.id,
     titulo: promocion.bannerTitulo,
     texto: promocion.bannerTexto ?? null,
-    ctaTexto: promocion.bannerCtaTexto ?? CTA_TEXTO_POR_DEFECTO,
     ctaDestino: `/coleccion?promocion=${promocion.id}`,
     arteUrl: promocion.bannerArteUrl ?? null,
     doodleUrl: null,
-    color: promocion.bannerColor ?? COLOR_SLIDE_POR_DEFECTO,
   };
 }
 
@@ -1026,7 +1009,7 @@ export async function crear(req, res, next) {
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", true),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", false),
       ...modal,
-      ...parsearBanner(req.body, null, modal.modalCtaTipo),
+      ...parsearBanner(req.body, null),
       ...parsearRango(req.body),
     };
 
@@ -1066,7 +1049,7 @@ export async function actualizar(req, res, next) {
       doodleEnCatalogo: parsearFlagDoodle(req.body, "doodleEnCatalogo", actual.doodleEnCatalogo),
       doodleEnAdmin: parsearFlagDoodle(req.body, "doodleEnAdmin", actual.doodleEnAdmin),
       ...modal,
-      ...parsearBanner(req.body, actual, modal.modalCtaTipo),
+      ...parsearBanner(req.body, actual),
       ...parsearRango(req.body),
     };
 
@@ -1180,11 +1163,11 @@ export async function duplicar(req, res, next) {
           bannerEnHome: original.bannerEnHome,
           bannerTitulo: original.bannerTitulo,
           bannerTexto: original.bannerTexto,
-          bannerCtaTexto: original.bannerCtaTexto,
           bannerArteUrl: original.bannerArteUrl,
           bannerArteCloudinaryPublicId: original.bannerArteCloudinaryPublicId,
           bannerArteCloudinaryResourceType: original.bannerArteCloudinaryResourceType,
-          bannerColor: original.bannerColor,
+          // `bannerCtaTexto` y `bannerColor` quedan AFUERA a propósito: son
+          // columnas inertes y copiarlas propagaría un dato que nadie lee.
         },
       });
 

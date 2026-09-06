@@ -7,7 +7,6 @@ import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { detectarConflictos } from "../lib/conflictosPromociones.js";
-import { COLORES_SLIDE } from "../lib/campanias.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 import { LIST_SELECT } from "./products.mapper.js";
 import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
@@ -90,7 +89,6 @@ function rechazarFechas(body) {
 
 const LARGO_MAX_BANNER_TITULO = 120;
 const LARGO_MAX_BANNER_TEXTO = 200;
-const LARGO_MAX_BANNER_CTA = 60;
 
 /** El marcador del contador es del cartel de campañas, no de un banner. */
 const MARCADOR_DIAS = /\{dias\}/i;
@@ -136,19 +134,24 @@ function parsearCampoTextoBanner(body, actual, campo, largoMax) {
  * nada —se pueden dejar los textos a medio escribir y prenderlo después— y
  * prendido se exige lo mínimo para que la franja no salga rota.
  *
- * **Los cinco campos —título, texto, cta, color y el interruptor— caen al
- * valor de `actual` cuando el body no trae la clave.** Es lo que hace seguro
- * un PUT parcial: un `PUT` que solo cambia `nombre` (o los `items`) no puede
- * vaciar el banner de paso. `campanias.controller.js` (`parsearBanner`,
- * ~L360-403) preserva el color de la misma forma pero NO preserva
- * `bannerTitulo`/`bannerTexto`/`bannerCtaTexto` —arrastra el mismo bug que
- * este archivo cierra acá—; **acá se preservan los cuatro A PROPÓSITO**, es
- * la dirección segura y no hay motivo para replicar el hueco.
+ * **Los tres campos —título, texto y el interruptor— caen al valor de `actual`
+ * cuando el body no trae la clave.** Es lo que hace seguro un PUT parcial: un
+ * `PUT` que solo cambia `nombre` (o los `items`) no puede vaciar el banner de
+ * paso. `campanias.controller.js` (`parsearBanner`) NO preserva
+ * `bannerTitulo`/`bannerTexto` —arrastra el mismo bug que este archivo cierra
+ * acá—; **acá se preservan A PROPÓSITO**, es la dirección segura y no hay
+ * motivo para replicar el hueco.
  *
  * **El DESTINO no se parsea acá y no tiene columna.** Se deriva al leer, del id
  * de la promoción. Guardar una ruta escrita a mano en una franja que ve todo el
  * mundo y que edita cualquiera con sesión del panel es una superficie que este
  * proyecto ya cerró una vez (ver el `modalCtaTipo` de campañas).
+ *
+ * ⚠️ **`bannerCtaTexto` y `bannerColor` NO se leen ni se escriben** desde el
+ * 06/09/2026, misma regla que en campañas: el slide entero es el enlace, su
+ * copy es fijo en `SlideCampania` y el molde sin arte va en el color de marca.
+ * Un body que todavía los traiga se ACEPTA y se ignora — un 400 por un campo
+ * que hoy no significa nada trabaría un guardado que en realidad es válido.
  */
 function parsearBannerPromocion(body, actual) {
   const enHome =
@@ -163,33 +166,18 @@ function parsearBannerPromocion(body, actual) {
 
   const titulo = parsearCampoTextoBanner(body, actual, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
   const texto = parsearCampoTextoBanner(body, actual, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
-  const ctaTexto = parsearCampoTextoBanner(body, actual, "bannerCtaTexto", LARGO_MAX_BANNER_CTA);
 
   exigirSinMarcadorDeDias(titulo, "bannerTitulo");
   exigirSinMarcadorDeDias(texto, "bannerTexto");
-  exigirSinMarcadorDeDias(ctaTexto, "bannerCtaTexto");
 
   if (enHome && !titulo) {
     throw httpError(400, "Un banner activo necesita un título.");
-  }
-
-  let color = actual?.bannerColor ?? null;
-  if (body?.bannerColor !== undefined) {
-    if (body.bannerColor === null) {
-      color = null;
-    } else if (typeof body.bannerColor !== "string" || !COLORES_SLIDE.includes(body.bannerColor)) {
-      throw httpError(400, `\`bannerColor\` debe ser uno de: ${COLORES_SLIDE.join(", ")}.`);
-    } else {
-      color = body.bannerColor;
-    }
   }
 
   return {
     bannerEnHome: enHome,
     bannerTitulo: titulo,
     bannerTexto: texto,
-    bannerCtaTexto: ctaTexto,
-    bannerColor: color,
   };
 }
 
@@ -222,8 +210,8 @@ function mapPromocionDetalle(promocion) {
     bannerEnHome: promocion.bannerEnHome,
     bannerTitulo: promocion.bannerTitulo ?? null,
     bannerTexto: promocion.bannerTexto ?? null,
-    bannerCtaTexto: promocion.bannerCtaTexto ?? null,
-    bannerColor: promocion.bannerColor ?? null,
+    // `bannerCtaTexto` y `bannerColor` NO se emiten: columnas inertes desde el
+    // 06/09/2026, el editor no tiene dónde mostrarlas y el PUT no las escribe.
     bannerArteUrl: promocion.bannerArteUrl ?? null,
     items: (promocion.items ?? []).map((item) => {
       const promocional = precioConDescuento(item.product.precio, item.porcentaje);

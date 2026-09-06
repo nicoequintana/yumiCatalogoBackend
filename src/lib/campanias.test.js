@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { inicioDelDiaArgentino } from "./horarioArgentino.js";
+import * as libCampanias from "./campanias.js";
 import {
-  COLORES_SLIDE,
-  COLOR_SLIDE_POR_DEFECTO,
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
   ESTADOS_TEMPORALES,
@@ -12,7 +11,6 @@ import {
   TIPOS_DESTINO_CTA,
   elegirPorPrioridad,
   estadoTemporal,
-  listaDeColoresSlide,
   listaDeDestinosCta,
   listaDeEstadosCampania,
   listaDeTipos,
@@ -279,20 +277,24 @@ describe("las listas canónicas", () => {
   });
 });
 
-describe("colores del slide", () => {
-  it("son cinco valores cerrados y el default está entre ellos", () => {
-    // Lista CERRADA y no un picker libre: con color libre alguien elige
-    // amarillo claro, el titulo blanco desaparece, y no falla nada.
-    expect(COLORES_SLIDE).toEqual(["TERRACOTA", "VERDE", "OCRE", "TINTA", "ARENA"]);
-    expect(COLORES_SLIDE).toContain(COLOR_SLIDE_POR_DEFECTO);
+describe("el color del slide dejó de existir como decisión", () => {
+  it("la lib no exporta ninguna lista de colores del slide", () => {
+    // Guard de un BORRADO, no de una constante. Con el slide entero convertido
+    // en enlace (06/09/2026) el molde sin arte pasó a ser siempre el color de
+    // marca: la lista cerrada, su default y el armador del diccionario de
+    // `/campanias/opciones` se fueron los tres.
+    //
+    // El guard afirma la AUSENCIA porque el modo de falla de reintroducirlos es
+    // mudo: alguien vuelve a exportar `COLORES_SLIDE` para un selector nuevo, el
+    // frontend deja de tener dónde consumirlo, y no falla nada.
+    expect(libCampanias).not.toHaveProperty("COLORES_SLIDE");
+    expect(libCampanias).not.toHaveProperty("COLOR_SLIDE_POR_DEFECTO");
+    expect(libCampanias).not.toHaveProperty("listaDeColoresSlide");
   });
 
-  it("cada color tiene etiqueta legible", () => {
-    const lista = listaDeColoresSlide();
-    expect(lista).toHaveLength(COLORES_SLIDE.length);
-    for (const item of lista) {
-      expect(item.etiqueta).toBeTruthy();
-      expect(item.etiqueta).not.toBe(item.valor);
-    }
+  it("el texto por defecto del CTA sigue vivo: es del CARTEL, que sí se edita", () => {
+    // Se borró el del BANNER (`bannerCtaTexto`), no el del modal: son dos
+    // superficies distintas y el cartel conserva su campo editable.
+    expect(CTA_TEXTO_POR_DEFECTO).toBe("Ver más");
   });
 });

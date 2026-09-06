@@ -290,7 +290,7 @@ describe("POST /api/promociones — validaciones", () => {
 });
 
 describe("PUT /api/promociones/:id — el banner de la home", () => {
-  it("guarda los textos, el color y el interruptor", async () => {
+  it("guarda los textos y el interruptor", async () => {
     promocionMock.findUnique.mockResolvedValue(promo());
     promocionMock.update.mockResolvedValue(
       promo({ bannerEnHome: true, bannerTitulo: "Semana del Hogar" }),
@@ -304,8 +304,6 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
         bannerEnHome: true,
         bannerTitulo: "Semana del Hogar",
         bannerTexto: "Hasta 30% off",
-        bannerCtaTexto: "Ver ofertas",
-        bannerColor: "VERDE",
       });
 
     expect(res.status).toBe(200);
@@ -315,8 +313,6 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
           bannerEnHome: true,
           bannerTitulo: "Semana del Hogar",
           bannerTexto: "Hasta 30% off",
-          bannerCtaTexto: "Ver ofertas",
-          bannerColor: "VERDE",
         }),
       }),
     );
@@ -345,18 +341,26 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rechaza un color que no está en la lista cerrada", async () => {
+  it("un body con bannerColor o bannerCtaTexto ya no cambia nada", async () => {
+    // Dejaron de ser decisiones editables (06/09/2026): el slide entero es el
+    // enlace, su copy es fijo y el molde sin arte va en el color de marca. El
+    // body se ACEPTA —una pestaña vieja del panel los sigue mandando— pero no
+    // llega al `data`: las dos columnas quedan inertes con lo que ya tenían.
     promocionMock.findUnique.mockResolvedValue(promo());
+    promocionMock.update.mockResolvedValue(promo());
 
     const res = await request(buildApp())
       .put("/api/promociones/3")
       .set("Authorization", authHeader)
-      .send({ nombre: "Hogar", bannerColor: "FUCSIA" });
+      .send({ nombre: "Hogar", bannerColor: "FUCSIA", bannerCtaTexto: "Ver ofertas" });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const { data } = promocionMock.update.mock.calls[0][0];
+    expect(data).not.toHaveProperty("bannerColor");
+    expect(data).not.toHaveProperty("bannerCtaTexto");
   });
 
-  it("un PUT parcial (solo `nombre`) conserva título, texto, cta y color ya guardados", async () => {
+  it("un PUT parcial (solo `nombre`) conserva título y texto ya guardados", async () => {
     // Clave AUSENTE del body = "no lo toques". Sin esto, cualquier edición de
     // nombre o de items que no reenvíe el banner completo lo vacía, mismo bug
     // que `AdminCategorias.jsx` vaciando `icono` al renombrar sin mandarlo.
@@ -364,8 +368,6 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
       promo({
         bannerTitulo: "Semana del Hogar",
         bannerTexto: "Hasta 30% off",
-        bannerCtaTexto: "Ver ofertas",
-        bannerColor: "OCRE",
       }),
     );
     promocionMock.update.mockResolvedValue(promo());
@@ -381,8 +383,6 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
         data: expect.objectContaining({
           bannerTitulo: "Semana del Hogar",
           bannerTexto: "Hasta 30% off",
-          bannerCtaTexto: "Ver ofertas",
-          bannerColor: "OCRE",
         }),
       }),
     );

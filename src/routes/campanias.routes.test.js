@@ -118,14 +118,18 @@ function fila(extra = {}) {
     modalCtaReferenciaId: null,
     modalFechaObjetivo: null,
     // Última red antes de que `curl` contra la base real confirme la columna:
-    // sin estos cuatro defaults, un mapper que se olvida de leerlos pasaría
-    // en verde igual porque el mock nunca los trae de entrada.
+    // sin estos defaults, un mapper que se olvida de leerlos pasaría en verde
+    // igual porque el mock nunca los trae de entrada.
     bannerEnHome: false,
     bannerTitulo: null,
     bannerTexto: null,
+    // `bannerCtaTexto` y `bannerColor` SIGUEN en el fixture aunque nadie los
+    // lea: la columna existe en la base y el mock tiene que parecerse a la
+    // fila real, o los guards de "no se emiten" probarían contra un objeto que
+    // nunca los tuvo — un test que no puede fallar cuando la regla se rompe.
     bannerCtaTexto: null,
-    // Las tres columnas del arte y el color del slide: mismo criterio que el
-    // resto del fixture, agregadas recién con el carrusel de la Task 5.
+    // Las tres columnas del arte: mismo criterio que el resto del fixture,
+    // agregadas con el carrusel de la Task 5.
     bannerArteUrl: null,
     bannerArteCloudinaryPublicId: null,
     bannerArteCloudinaryResourceType: null,
@@ -645,15 +649,30 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body.slides).toHaveLength(5);
   });
 
-  it("una campaña sin color sale en el color por defecto", async () => {
+  it("el slide no lleva color ni texto de botón, aunque la fila los traiga", async () => {
+    // 06/09/2026: el slide entero pasó a ser el enlace, así que el copy del CTA
+    // es fijo en el componente y el molde sin arte va siempre en el color de
+    // marca. Las dos columnas quedaron INERTES en la base (como
+    // `Foto.driveFileId`), y este guard afirma que no se leen ni siquiera
+    // cuando una fila vieja las trae cargadas: un payload que nadie consume ya
+    // costó un bug en esta misma feature.
     campaniaMock.findMany.mockResolvedValue([
-      fila({ bannerEnHome: true, bannerTitulo: "Primavera", bannerColor: null }),
+      fila({
+        bannerEnHome: true,
+        bannerTitulo: "Primavera",
+        bannerColor: "VERDE",
+        bannerCtaTexto: "Ver la selección",
+        modalCtaTipo: "CATALOGO",
+      }),
     ]);
     productMock.count.mockResolvedValue(0);
 
     const res = await request(buildApp()).get("/api/campanias/activas");
 
-    expect(res.body.slides[0].color).toBe("TERRACOTA");
+    expect(res.body.slides[0]).not.toHaveProperty("color");
+    expect(res.body.slides[0]).not.toHaveProperty("ctaTexto");
+    // El destino SÍ sigue viajando: es lo que decide si el slide es un enlace.
+    expect(res.body.slides[0].ctaDestino).toBe("/coleccion");
   });
 
   it("el slide NO filtra infraestructura", async () => {
@@ -1272,21 +1291,20 @@ describe("POST /api/campanias — validaciones", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rechaza un color de slide que no está en la lista", async () => {
-    const res = await crear({ ...valida, bannerColor: "FUCSIA" });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/color/i);
-  });
-
-  it("acepta un color válido y lo guarda", async () => {
+  it("un body con bannerColor o bannerCtaTexto ya no cambia nada", async () => {
+    // Dejaron de ser decisiones editables (06/09/2026): el parser no los lee y
+    // la escritura no los toca. Se acepta el body en vez de rechazarlo —una
+    // pestaña vieja del panel los sigue mandando y no tiene por qué comerse un
+    // 400 por un campo que hoy no significa nada—, pero NO llegan al `data`:
+    // la columna queda con lo que ya tenía.
     campaniaMock.create.mockResolvedValue(fila());
 
-    await crear({ ...valida, bannerColor: "VERDE" });
+    const res = await crear({ ...valida, bannerColor: "FUCSIA", bannerCtaTexto: "Ver" });
 
-    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
-      bannerColor: "VERDE",
-    });
+    expect(res.status).toBe(201);
+    const { data } = campaniaMock.create.mock.calls[0][0];
+    expect(data).not.toHaveProperty("bannerColor");
+    expect(data).not.toHaveProperty("bannerCtaTexto");
   });
 });
 
@@ -1377,18 +1395,15 @@ describe("GET /api/campanias/opciones — la fuente de los diccionarios", () => 
     expect(res.status).toBe(401);
   });
 
-  it("opciones emite los colores del slide: el panel no tiene copia", async () => {
+  it("opciones YA NO emite colores del slide: dejó de ser una elección", async () => {
+    // El molde sin arte va siempre en el color de marca desde que el slide
+    // entero es el enlace. Un diccionario que el panel no consume es payload
+    // muerto, y payload muerto ya costó un bug en esta feature.
     const res = await request(buildApp())
       .get("/api/campanias/opciones")
       .set("Authorization", authHeader);
 
-    expect(res.body.coloresSlide).toEqual([
-      { valor: "TERRACOTA", etiqueta: "Terracota" },
-      { valor: "VERDE", etiqueta: "Verde" },
-      { valor: "OCRE", etiqueta: "Ocre" },
-      { valor: "TINTA", etiqueta: "Tinta" },
-      { valor: "ARENA", etiqueta: "Arena" },
-    ]);
+    expect(res.body).not.toHaveProperty("coloresSlide");
   });
 
   it("NO se confunde con /:id — 'opciones' no se matchea como un id", async () => {
@@ -1562,18 +1577,22 @@ describe("POST /api/campanias/:id/duplicar", () => {
     expect(data.updatedAt).toBeUndefined();
   });
 
-  it("copia el color del slide", async () => {
-    // Mismo criterio que el destino del CTA: los campos se enumeran a mano, así
-    // que olvidarse de sumar uno nuevo deja el duplicado con el color perdido,
-    // sin que nada falle.
-    campaniaMock.findUnique.mockResolvedValue(fila({ bannerColor: "VERDE" }));
-    campaniaMock.create.mockResolvedValue(fila({ id: 2, bannerColor: "VERDE" }));
+  it("NO copia las dos columnas inertes del banner", async () => {
+    // `duplicar` enumera los campos a mano justamente para que nada se cuele
+    // sin que alguien lo haya decidido. `bannerColor` y `bannerCtaTexto` dejaron
+    // de tener consumidor (06/09/2026): arrastrarlos al duplicado sería
+    // propagar un dato que ninguna pantalla lee, y haría creer que la elección
+    // todavía existe.
+    campaniaMock.findUnique.mockResolvedValue(
+      fila({ bannerColor: "VERDE", bannerCtaTexto: "Ver la selección" }),
+    );
+    campaniaMock.create.mockResolvedValue(fila({ id: 2 }));
 
     await request(buildApp()).post("/api/campanias/1/duplicar").set("Authorization", authHeader);
 
-    expect(campaniaMock.create.mock.calls[0][0].data).toMatchObject({
-      bannerColor: "VERDE",
-    });
+    const { data } = campaniaMock.create.mock.calls[0][0];
+    expect(data).not.toHaveProperty("bannerColor");
+    expect(data).not.toHaveProperty("bannerCtaTexto");
   });
 
   it("copia el arte del banner por referencia, sin volver a subir el archivo", async () => {
@@ -2287,11 +2306,16 @@ describe("El bloque del banner de la home", () => {
     expect(res.body.error).toBe("`bannerTitulo` no puede superar los 120 caracteres.");
   });
 
-  it("un texto de botón sin destino es un botón que no lleva a ningún lado", async () => {
+  it("el texto del botón ya no se valida contra el destino: dejó de existir", async () => {
+    // Existía un 400 ("El botón del banner tiene texto pero no lleva a ningún
+    // lado") que cruzaba `bannerCtaTexto` con `modalCtaTipo`. Sin campo no hay
+    // cruce posible, y una pestaña vieja del panel que todavía mande el texto no
+    // puede quedarse trabada en un error por un dato que hoy se ignora.
+    campaniaMock.create.mockResolvedValue(fila());
+
     const res = await crear({ ...base, bannerEnHome: true, bannerTitulo: "T", bannerCtaTexto: "Ver" });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("El botón del banner tiene texto pero no lleva a ningún lado.");
+    expect(res.status).toBe(201);
   });
 
   it("rechaza el marcador {dias} en el texto del banner", async () => {
@@ -2322,13 +2346,12 @@ describe("El bloque del banner de la home", () => {
     expect(res.status).toBe(201);
   });
 
-  it("el detalle del panel emite las cuatro columnas", async () => {
+  it("el detalle del panel emite las columnas que el editor todavía edita", async () => {
     campaniaMock.findUnique.mockResolvedValue(
       conDetalle({
         bannerEnHome: true,
         bannerTitulo: "Semana del Hogar",
         bannerTexto: "Hasta 30 %.",
-        bannerCtaTexto: "Ver la selección",
       }),
     );
 
@@ -2340,21 +2363,23 @@ describe("El bloque del banner de la home", () => {
       bannerEnHome: true,
       bannerTitulo: "Semana del Hogar",
       bannerTexto: "Hasta 30 %.",
-      bannerCtaTexto: "Ver la selección",
     });
   });
 
-  it("el detalle del panel emite también el color guardado", async () => {
-    // Sin esto el editor reabre una campaña con VERDE guardado y el selector
-    // muestra el default (TERRACOTA) — el dato está en la base pero el panel
-    // nunca lo lee, sin ningún error.
-    campaniaMock.findUnique.mockResolvedValue(conDetalle({ bannerColor: "VERDE" }));
+  it("el detalle NO emite el color ni el texto del botón, aunque estén guardados", async () => {
+    // Son columnas inertes desde el 06/09/2026. Emitirlas le daría al editor un
+    // dato que no tiene dónde mostrar y que el PUT tampoco puede volver a
+    // escribir: la forma en que un campo borrado a medias vuelve como bug.
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ bannerColor: "VERDE", bannerCtaTexto: "Ver la selección" }),
+    );
 
     const res = await request(buildApp())
       .get("/api/campanias/1")
       .set("Authorization", authHeader);
 
-    expect(res.body.bannerColor).toBe("VERDE");
+    expect(res.body).not.toHaveProperty("bannerColor");
+    expect(res.body).not.toHaveProperty("bannerCtaTexto");
   });
 
   it("el detalle del panel emite también el arte guardado", async () => {

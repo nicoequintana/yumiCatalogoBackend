@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { COLOR_SLIDE_POR_DEFECTO, CTA_TEXTO_POR_DEFECTO } from "../lib/campanias.js";
 
 const promocionFindManyMock = vi.fn();
 
@@ -23,8 +22,6 @@ describe("slides de promoción", () => {
       id: 12,
       bannerTitulo: "Semana del Hogar",
       bannerTexto: "Hasta 30% off",
-      bannerCtaTexto: "Ver ofertas",
-      bannerColor: "VERDE",
       bannerArteUrl: "https://cdn/x.jpg",
     });
 
@@ -35,18 +32,27 @@ describe("slides de promoción", () => {
       titulo: "Semana del Hogar",
       ctaDestino: "/coleccion?promocion=12",
       doodleUrl: null,
-      color: "VERDE",
     });
   });
 
-  it("sin color elegido cae al color de marca, no a transparente", () => {
-    const slide = aSlidePromocion({ id: 1, bannerTitulo: "X", bannerColor: null });
-    expect(slide.color).toBe(COLOR_SLIDE_POR_DEFECTO);
-  });
+  it("el slide NO lleva color ni texto de botón: los dos dejaron de ser editables", () => {
+    // Payload muerto es lo que ya costó un bug en esta misma feature: el slide
+    // entero es el enlace y su copy es fijo en el componente, así que emitir
+    // `ctaTexto` sería un dato que nadie lee. Y el molde sin arte va siempre en
+    // el color de marca, que es una decisión de presentación del frontend.
+    //
+    // Las columnas `bannerCtaTexto` / `bannerColor` siguen en la base (inertes,
+    // como `Foto.driveFileId`): este guard afirma que NO se leen, incluso
+    // cuando una fila vieja todavía las trae cargadas.
+    const slide = aSlidePromocion({
+      id: 1,
+      bannerTitulo: "X",
+      bannerCtaTexto: "Ver ofertas",
+      bannerColor: "VERDE",
+    });
 
-  it("sin texto de botón cae al default, como las campañas", () => {
-    const slide = aSlidePromocion({ id: 1, bannerTitulo: "X", bannerCtaTexto: null });
-    expect(slide.ctaTexto).toBe(CTA_TEXTO_POR_DEFECTO);
+    expect(slide).not.toHaveProperty("ctaTexto");
+    expect(slide).not.toHaveProperty("color");
   });
 });
 

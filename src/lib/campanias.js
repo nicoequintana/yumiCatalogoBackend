@@ -133,39 +133,19 @@ export const ETIQUETA_DESTINO_CTA = {
  */
 export const CTA_TEXTO_POR_DEFECTO = "Ver más";
 
-/**
- * Los fondos posibles de un slide sin arte.
+/*
+ * ⚠️ ACÁ VIVÍA `COLORES_SLIDE` — la lista cerrada de fondos del slide — con su
+ * default y el armador del diccionario de `GET /campanias/opciones`.
  *
- * **Lista CERRADA, no un selector de color libre.** Cada valor mapea a un PAR
- * de tokens del sistema (fondo + texto encima) que ya está probado en los dos
- * temas: con un picker libre alguien elige amarillo claro, el título blanco
- * desaparece, y no hay error, ni warning, ni test rojo. El par se resuelve en
- * el frontend (`SlideCampania`); acá vive la lista ejecutable, igual que
- * `TIPOS_CAMPANIA` y `ESTADOS_CAMPANIA`.
+ * Se fueron los tres el 06/09/2026, cuando el slide entero pasó a ser el
+ * enlace: sin botón adentro, el molde sin arte va SIEMPRE en el color de marca
+ * y no hay nada que elegir. Las columnas `Campania.bannerColor` y
+ * `Promocion.bannerColor` siguen en la base, INERTES —nadie las lee ni las
+ * escribe—, mismo criterio que `Foto.driveFileId`.
  *
- * SQL Server vía Prisma no tiene enums: la columna es `VarChar(20)` y quien
- * valida es el código.
+ * El guard de la ausencia vive en `campanias.test.js`: reintroducir la lista
+ * sin un consumidor real falla mudo.
  */
-export const COLORES_SLIDE = ["TERRACOTA", "VERDE", "OCRE", "TINTA", "ARENA"];
-
-/** El de la marca. Una campaña que no elige color sale en el color de YIMA. */
-export const COLOR_SLIDE_POR_DEFECTO = "TERRACOTA";
-
-const ETIQUETA_COLOR_SLIDE = {
-  TERRACOTA: "Terracota",
-  VERDE: "Verde",
-  OCRE: "Ocre",
-  TINTA: "Tinta",
-  ARENA: "Arena",
-};
-
-/** Para `GET /campanias/opciones`: el panel no tiene copia de esta lista. */
-export function listaDeColoresSlide() {
-  return COLORES_SLIDE.map((valor) => ({
-    valor,
-    etiqueta: ETIQUETA_COLOR_SLIDE[valor] ?? valor,
-  }));
-}
 
 /**
  * Los tipos con su etiqueta, en la forma que consume el `<select>` del panel.
