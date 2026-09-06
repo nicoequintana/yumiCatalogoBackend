@@ -313,6 +313,69 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("un PUT parcial (solo `nombre`) conserva título, texto, cta y color ya guardados", async () => {
+    // Clave AUSENTE del body = "no lo toques". Sin esto, cualquier edición de
+    // nombre o de items que no reenvíe el banner completo lo vacía, mismo bug
+    // que `AdminCategorias.jsx` vaciando `icono` al renombrar sin mandarlo.
+    promocionMock.findUnique.mockResolvedValue(
+      promo({
+        bannerTitulo: "Semana del Hogar",
+        bannerTexto: "Hasta 30% off",
+        bannerCtaTexto: "Ver ofertas",
+        bannerColor: "OCRE",
+      }),
+    );
+    promocionMock.update.mockResolvedValue(promo());
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar" });
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          bannerTitulo: "Semana del Hogar",
+          bannerTexto: "Hasta 30% off",
+          bannerCtaTexto: "Ver ofertas",
+          bannerColor: "OCRE",
+        }),
+      }),
+    );
+  });
+
+  it("un PUT parcial sobre un banner ya prendido con título no explota en 400", async () => {
+    promocionMock.findUnique.mockResolvedValue(
+      promo({ bannerEnHome: true, bannerTitulo: "Semana del Hogar" }),
+    );
+    promocionMock.update.mockResolvedValue(promo({ bannerEnHome: true, bannerTitulo: "Semana del Hogar" }));
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("`bannerTitulo: null` explícito SÍ borra el título (ausente ≠ null)", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ bannerTitulo: "Semana del Hogar" }));
+    promocionMock.update.mockResolvedValue(promo({ bannerTitulo: null }));
+
+    const res = await request(buildApp())
+      .put("/api/promociones/3")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Hogar", bannerTitulo: null });
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ bannerTitulo: null }),
+      }),
+    );
+  });
 });
 
 describe("PUT /api/promociones/:id/items — los productos y sus porcentajes", () => {

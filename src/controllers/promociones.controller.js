@@ -108,11 +108,34 @@ function parsearTextoBanner(valor, campo, largoMax) {
 }
 
 /**
+ * Un campo de texto del banner en un PUT PARCIAL: clave AUSENTE del body es
+ * "no lo toques" (cae a `actual`), clave presente —con `null`, `""` o texto—
+ * es una escritura explícita y pasa por `parsearTextoBanner`.
+ *
+ * `parsearTextoBanner` sola no alcanza para esa distinción: devuelve `null`
+ * tanto para "no vino" como para "vino vacío", así que hay que mirar el
+ * `undefined` ANTES de llamarla, no después.
+ */
+function parsearCampoTextoBanner(body, actual, campo, largoMax) {
+  if (body?.[campo] === undefined) return actual?.[campo] ?? null;
+  return parsearTextoBanner(body[campo], campo, largoMax);
+}
+
+/**
  * El bloque del banner, validado como una unidad.
  *
  * Mismo criterio cruzado que `parsearBanner` de campañas: apagado no se exige
  * nada —se pueden dejar los textos a medio escribir y prenderlo después— y
  * prendido se exige lo mínimo para que la franja no salga rota.
+ *
+ * **Los cinco campos —título, texto, cta, color y el interruptor— caen al
+ * valor de `actual` cuando el body no trae la clave.** Es lo que hace seguro
+ * un PUT parcial: un `PUT` que solo cambia `nombre` (o los `items`) no puede
+ * vaciar el banner de paso. `campanias.controller.js` (`parsearBanner`,
+ * ~L360-403) preserva el color de la misma forma pero NO preserva
+ * `bannerTitulo`/`bannerTexto`/`bannerCtaTexto` —arrastra el mismo bug que
+ * este archivo cierra acá—; **acá se preservan los cuatro A PROPÓSITO**, es
+ * la dirección segura y no hay motivo para replicar el hueco.
  *
  * **El DESTINO no se parsea acá y no tiene columna.** Se deriva al leer, del id
  * de la promoción. Guardar una ruta escrita a mano en una franja que ve todo el
@@ -130,9 +153,9 @@ function parsearBannerPromocion(body, actual) {
           return body.bannerEnHome;
         })();
 
-  const titulo = parsearTextoBanner(body?.bannerTitulo, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
-  const texto = parsearTextoBanner(body?.bannerTexto, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
-  const ctaTexto = parsearTextoBanner(body?.bannerCtaTexto, "bannerCtaTexto", LARGO_MAX_BANNER_CTA);
+  const titulo = parsearCampoTextoBanner(body, actual, "bannerTitulo", LARGO_MAX_BANNER_TITULO);
+  const texto = parsearCampoTextoBanner(body, actual, "bannerTexto", LARGO_MAX_BANNER_TEXTO);
+  const ctaTexto = parsearCampoTextoBanner(body, actual, "bannerCtaTexto", LARGO_MAX_BANNER_CTA);
 
   exigirSinMarcadorDeDias(titulo, "bannerTitulo");
   exigirSinMarcadorDeDias(texto, "bannerTexto");
@@ -142,12 +165,15 @@ function parsearBannerPromocion(body, actual) {
     throw httpError(400, "Un banner activo necesita un título.");
   }
 
-  let color = null;
-  if (body?.bannerColor !== undefined && body.bannerColor !== null) {
-    if (typeof body.bannerColor !== "string" || !COLORES_SLIDE.includes(body.bannerColor)) {
+  let color = actual?.bannerColor ?? null;
+  if (body?.bannerColor !== undefined) {
+    if (body.bannerColor === null) {
+      color = null;
+    } else if (typeof body.bannerColor !== "string" || !COLORES_SLIDE.includes(body.bannerColor)) {
       throw httpError(400, `\`bannerColor\` debe ser uno de: ${COLORES_SLIDE.join(", ")}.`);
+    } else {
+      color = body.bannerColor;
     }
-    color = body.bannerColor;
   }
 
   return {
