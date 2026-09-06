@@ -3,12 +3,21 @@ import request from "supertest";
 import express from "express";
 
 const findUniqueMock = vi.fn();
+const findManyMock = vi.fn(async () => []);
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {     // Sin promociones vigentes, que es el caso normal y el que deja el precio
     // igual al de lista. Ver `lib/precioEfectivo.js`.
     promocionItem: { findMany: async () => [] },
-product: { findUnique: (...args) => findUniqueMock(...args) } },
+    product: {
+      findUnique: (...args) => findUniqueMock(...args),
+      // `obtenerRelacionados`, que el cuerpo del crawler usa desde el
+      // 06/09/2026 para servir el mismo "También te puede interesar" que la
+      // ficha. Sin esta línea el endpoint tira 500 — lo atraparon estos tests,
+      // no los unitarios de `seo.cuerpo.js`.
+      findMany: (...args) => findManyMock(...args),
+    },
+  },
 }));
 
 const { default: ogRouter } = await import("./og.routes.js");
@@ -112,7 +121,14 @@ describe("GET /og/producto/:idSlug — producto visible", () => {
     expect(res.text).toContain("Taco de madera");
     expect(res.text).toContain("Acero inoxidable");
     expect(res.text).toContain("Material");
-    expect(res.text).toContain("Etiqueta: Nuevo");
+    // La etiqueta PELADA. Este test afirmaba "Etiqueta: Nuevo" hasta el
+    // 06/09/2026: ese prefijo no existe en la ficha, que la muestra con
+    // `<Badge>`. Era la propia regla de cloaking incumplida por el test que la
+    // custodia.
+    expect(res.text).toContain(">Nuevo<");
+    expect(res.text).not.toContain("Etiqueta:");
+    // Y la categoría NO viaja: la ficha no la muestra en ningún lado.
+    expect(res.text).not.toContain("Categoría:");
   });
 
   it("emite los bloques JSON-LD de Product y BreadcrumbList", async () => {

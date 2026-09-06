@@ -600,7 +600,10 @@ export async function etiquetas(req, res, next) {
  * así que traer su contenido comercial completo era peso muerto en CADA
  * apertura de ficha.
  */
-async function obtenerRelacionados(producto, { esAdmin }) {
+// Exportada desde el 06/09/2026 para que `seo.cuerpo.js` sirva los MISMOS
+// relacionados que la ficha (regla de cloaking). Duplicar el cálculo sería una
+// segunda casa de la regla de "qué producto se parece a cuál".
+export async function obtenerRelacionados(producto, { esAdmin }) {
   const { categoriaId, etiqueta } = producto;
   if (!categoriaId && !etiqueta) return [];
 

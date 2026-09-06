@@ -6,6 +6,7 @@ import { jsonLdProducto, jsonLdBreadcrumb, jsonLdOrganizacion, jsonLdColeccion }
 import { parsearIdDeRuta, rutaProducto, rutaCategoria, slugify } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";
 import { cuerpoProducto } from "./seo.cuerpo.js";
+import { obtenerRelacionados } from "./products.controller.js";
 import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 
@@ -91,6 +92,14 @@ export async function servirSeoProducto(req, res, next) {
     // efectivo y el porcentaje — así que este HTML y su JSON-LD tienen que
     // mostrar exactamente eso. Servirle el precio de lista a Google mientras la
     // página muestra otro es la definición del problema que la regla evita.
+    // REGLA DE CLOAKING, segunda punta: la ficha cierra con "También te puede
+    // interesar", así que el crawler tiene que verlos. Se pide la MISMA función
+    // que usa la ficha (`obtenerRelacionados`, exportada desde
+    // `products.controller.js`) y no una consulta propia: dos cálculos de "qué
+    // producto se parece a cuál" divergirían sin que nada falle. Siempre en
+    // vista pública — este HTML se le sirve a un bot anónimo.
+    const relacionados = await obtenerRelacionados(producto, { esAdmin: false });
+
     const descuentos = await resolverDescuentos(prisma, [producto.id]);
     const vigente = descuentos.get(producto.id) ?? null;
     const efectivo = vigente ? precioConDescuento(producto.precio, vigente.porcentaje) : null;
@@ -112,7 +121,7 @@ export async function servirSeoProducto(req, res, next) {
         }),
         jsonLdBreadcrumb(producto, { frontendUrl }),
       ],
-      cuerpo: cuerpoProducto(producto, { descuento }),
+      cuerpo: cuerpoProducto({ ...producto, relacionados }, { descuento }),
     });
 
     res.status(200).type("html").send(html);
