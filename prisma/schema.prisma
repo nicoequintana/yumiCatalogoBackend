@@ -362,6 +362,32 @@ model Promocion {
   descripcion String? @db.NVarChar(1000)
   activa      Boolean @default(true)
 
+  /// EL BANNER DE LA HOME. Espeja columna por columna al de `Campania`, con los
+  /// mismos nombres y los mismos largos, para que `SlideCampania` reciba la
+  /// misma forma venga de donde venga y no tenga que ramificar por origen.
+  ///
+  /// El interruptor es PROPIO y no un reflejo de `activa`: se puede tener la
+  /// promoción descontando y el banner todavía sin publicar.
+  bannerEnHome   Boolean @default(false)
+  bannerTitulo   String? @db.NVarChar(120)
+  /// NVarChar(200): es una franja de una o dos líneas, no una tarjeta.
+  bannerTexto    String? @db.NVarChar(200)
+  bannerCtaTexto String? @db.NVarChar(60)
+  /// Lista cerrada de cinco valores en `lib/campanias.js`. Nullable y SIN
+  /// default en la base a propósito: el default vive en un solo lado.
+  bannerColor String? @db.VarChar(20)
+
+  /// El arte apaisado del slide. Mismo trío que el Doodle y que la imagen de
+  /// `Categoria`. Sin arte, el slide cae al molde compuesto sobre `bannerColor`.
+  ///
+  /// ⚠️ A DIFERENCIA de `Campania`, su borrado NO consulta compartidos: las
+  /// promociones no tienen `duplicar`, así que dos promociones no pueden
+  /// apuntar al mismo archivo. El día que exista `POST /promociones/:id/duplicar`
+  /// esto deja de valer y hay que sumar la consulta, como en `limpiarArteRemoto`.
+  bannerArteUrl                    String?
+  bannerArteCloudinaryPublicId     String?
+  bannerArteCloudinaryResourceType String?
+
   items          PromocionItem[]
   programaciones ProgramacionPromocion[]
   campanias      CampaniaPromocion[]
