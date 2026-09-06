@@ -571,6 +571,13 @@ export async function eliminar(req, res, next) {
 
     await prisma.promocion.delete({ where: { id } });
 
+    // Después del delete, mismo criterio que `eliminar` de campañas: este es
+    // el único camino donde la fila desaparece para siempre, así que el arte
+    // que no se borre acá queda huérfano en Cloudinary. Al revés (arte antes
+    // que fila) un fallo del delete dejaría el CDN sin el archivo y la base
+    // todavía apuntándole.
+    await limpiarArtePromocionRemoto(promocion);
+
     logAudit(req, {
       accion: "ELIMINAR",
       entidad: "Promocion",

@@ -166,6 +166,33 @@ describe("seguridad", () => {
   });
 });
 
+describe("DELETE /api/promociones/:id", () => {
+  // Mismo criterio que "DELETE /api/promociones/:id/arte": el archivo remoto
+  // se borra DESPUÉS de que la fila se fue, y solo si había uno.
+  it("borra el arte en Cloudinary de una promoción CON arte", async () => {
+    promocionMock.findUnique.mockResolvedValue(
+      promo({ id: 3, bannerArteCloudinaryPublicId: "pid", bannerArteCloudinaryResourceType: "image" }),
+    );
+    promocionMock.delete.mockResolvedValue(promo({ id: 3 }));
+
+    const res = await request(buildApp()).delete("/api/promociones/3").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.delete).toHaveBeenCalledWith({ where: { id: 3 } });
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("pid", "image");
+  });
+
+  it("una promoción SIN arte no intenta borrar nada en Cloudinary", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3, bannerArteCloudinaryPublicId: null }));
+    promocionMock.delete.mockResolvedValue(promo({ id: 3 }));
+
+    const res = await request(buildApp()).delete("/api/promociones/3").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/promociones", () => {
   it("emite cada promoción con cuántos productos tiene y si está programada", async () => {
     // Son las dos preguntas que se hacen mirando la lista: a cuántos alcanza, y
