@@ -39,7 +39,14 @@ model Product {
   /// forzarlo a entero perdería la mitad del rango útil.
   coeficiente        Decimal?         @db.Decimal(5, 2)
   etiquetaId         Int?
-  etiqueta           Etiqueta?        @relation(fields: [etiquetaId], references: [id], onDelete: NoAction)
+  /// `onUpdate: NoAction` va EXPLÍCITO, a diferencia de `categoriaId`, que lo
+  /// deja implícito y por eso su FK quedó en `ON UPDATE CASCADE`. Acá la
+  /// migración escribió `ON UPDATE NO ACTION`, y sin declararlo el schema
+  /// diría otra cosa que la base: el próximo `migrate dev` propondría un ALTER
+  /// fantasma. En la práctica las dos reglas se comportan igual —`Etiqueta.id`
+  /// es IDENTITY y nunca se actualiza—, así que lo que se corrige es la
+  /// divergencia, no el comportamiento.
+  etiqueta           Etiqueta?        @relation(fields: [etiquetaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   fraseComercial     String?
   porQueLoVasAQuerer String?          @db.NVarChar(Max)
   tePasaEsto         String?          @db.NVarChar(Max)
