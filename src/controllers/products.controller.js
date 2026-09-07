@@ -595,17 +595,15 @@ export async function resumen(req, res, next) {
 export const STOCK_BAJO_UMBRAL = 3;
 
 /**
- * GET /products/etiquetas — las etiquetas EN USO, para el filtro del listado
- * del admin.
+ * GET /products/etiquetas — TODAS las etiquetas creadas, para el filtro del
+ * listado del admin.
  *
- * **Devuelve las que tienen al menos un producto, NO todas las creadas**, y es
- * deliberado: ofrecer en el filtro una etiqueta sin productos manda al operador
- * a una grilla vacía — la misma trampa que `cantidadProductos` vs
- * `cantidadPublicados` en Categorías. El ABM completo vive en
- * `GET /etiquetas`, que sí las trae todas.
- *
- * Desde que `Etiqueta` es una tabla, la consulta es un `some` sobre la relación
- * en vez del `distinct` sobre la columna que había cuando era texto libre.
+ * **Devuelve todas, no solo las que ya tienen productos**: una etiqueta recién
+ * creada tiene que poder usarse como filtro aunque todavía no tenga nada
+ * cargado, si no, es invisible en el único lugar donde serviría para
+ * encontrarla. Lo que evita la sorpresa de una grilla vacía no es ocultar la
+ * opción — es sumarle el conteo (`cantidadProductos`), así "Primavera (0)" ya
+ * avisa de antemano.
  *
  * Requiere auth: enumera datos del panel (incluye etiquetas de productos
  * ocultos), y el catálogo público no la necesita.
@@ -613,12 +611,17 @@ export const STOCK_BAJO_UMBRAL = 3;
 export async function etiquetas(req, res, next) {
   try {
     const filas = await prisma.etiqueta.findMany({
-      where: { productos: { some: {} } },
-      select: { id: true, nombre: true },
+      select: { id: true, nombre: true, _count: { select: { productos: true } } },
       orderBy: [{ nombre: "asc" }, { id: "asc" }],
     });
 
-    res.json({ etiquetas: filas });
+    res.json({
+      etiquetas: filas.map(({ id, nombre, _count }) => ({
+        id,
+        nombre,
+        cantidadProductos: _count.productos,
+      })),
+    });
   } catch (err) {
     next(err);
   }

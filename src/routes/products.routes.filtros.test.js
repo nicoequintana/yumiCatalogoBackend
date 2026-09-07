@@ -180,13 +180,14 @@ describe("GET /api/products/etiquetas", () => {
     expect(etiquetaFindManyMock).not.toHaveBeenCalled();
   });
 
-  // Sigue devolviendo las EN USO, no todas las creadas: ofrecer en el filtro
-  // una etiqueta sin productos manda al operador a una grilla vacía. Misma
-  // trampa que `cantidadProductos` vs `cantidadPublicados` en Categorías.
-  it("devuelve solo las etiquetas EN USO, con id y nombre", async () => {
+  // Ahora devuelve TODAS las etiquetas creadas, no solo las EN USO: una
+  // etiqueta recién creada tiene que poder usarse para filtrar aunque
+  // todavía no tenga productos. Lo que evita la grilla vacía sorpresa es el
+  // conteo al lado del nombre, no la ausencia de la opción.
+  it("devuelve todas las etiquetas creadas, con id, nombre y cantidadProductos", async () => {
     etiquetaFindManyMock.mockResolvedValue([
-      { id: 2, nombre: "Exclusivo" },
-      { id: 5, nombre: "Nuevo" },
+      { id: 2, nombre: "Exclusivo", _count: { productos: 3 } },
+      { id: 5, nombre: "Nuevo", _count: { productos: 0 } },
     ]);
 
     const res = await request(buildApp())
@@ -196,14 +197,32 @@ describe("GET /api/products/etiquetas", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       etiquetas: [
-        { id: 2, nombre: "Exclusivo" },
-        { id: 5, nombre: "Nuevo" },
+        { id: 2, nombre: "Exclusivo", cantidadProductos: 3 },
+        { id: 5, nombre: "Nuevo", cantidadProductos: 0 },
       ],
     });
     expect(etiquetaFindManyMock).toHaveBeenCalledWith({
-      where: { productos: { some: {} } },
-      select: { id: true, nombre: true },
+      select: { id: true, nombre: true, _count: { select: { productos: true } } },
       orderBy: [{ nombre: "asc" }, { id: "asc" }],
+    });
+  });
+
+  // El punto entero del cambio: una etiqueta sin productos SÍ viene, con
+  // cantidadProductos en 0, para poder usarla como filtro recién creada.
+  it("incluye una etiqueta con 0 productos", async () => {
+    etiquetaFindManyMock.mockResolvedValue([
+      { id: 9, nombre: "Primavera", _count: { productos: 0 } },
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/products/etiquetas")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.etiquetas).toContainEqual({
+      id: 9,
+      nombre: "Primavera",
+      cantidadProductos: 0,
     });
   });
 });
