@@ -1519,6 +1519,51 @@ export async function actualizarVisibilidadMasiva(req, res, next) {
 }
 
 /**
+ * Asigna o quita una etiqueta a varios productos de una sola vez, desde los
+ * checkbox del listado del admin. Mismo molde que `actualizarVisibilidadMasiva`:
+ * un único `updateMany`, sin nada por producto que decidir.
+ *
+ * `etiquetaId: null` SACA la etiqueta de todos los seleccionados — es un caso
+ * legítimo, no un error. La ausencia del campo sí lo es: a diferencia del PUT
+ * de un producto (donde `undefined` significa "no la toques", porque el PUT es
+ * parcial), acá no hay "no tocar" que valga — esta acción existe justamente
+ * para tocar la etiqueta, así que un body sin el campo es un 400.
+ */
+export async function actualizarEtiquetaMasiva(req, res, next) {
+  try {
+    const ids = parsearIdsMasivos(req.body?.ids);
+    const { etiquetaId } = req.body ?? {};
+    if (etiquetaId === undefined) {
+      throw httpError(400, "El campo 'etiquetaId' es obligatorio.");
+    }
+    // `parsearEtiquetaId` ya valida los tres estados y verifica que la fila
+    // exista (la FK es `NO ACTION`): un id borrado en el medio da 400, no un
+    // `P2003` que el handler traduciría a un 500 opaco.
+    const etiquetaIdParseado = await parsearEtiquetaId(prisma, etiquetaId);
+
+    const { count } = await prisma.product.updateMany({
+      where: { id: { in: ids } },
+      data: { etiquetaId: etiquetaIdParseado },
+    });
+
+    // Un renglón de auditoría POR PRODUCTO, no uno por lote: mismo criterio
+    // que `actualizarVisibilidadMasiva`.
+    for (const id of ids) {
+      logAudit(req, {
+        accion: "ACTUALIZAR_ETIQUETA",
+        entidad: "Producto",
+        entidadId: id,
+        detalle: { etiquetaId: etiquetaIdParseado, masivo: true },
+      });
+    }
+
+    res.json({ actualizados: count });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * Elimina varios productos seleccionados en el listado del admin.
  *
  * **Este endpoint es parcial POR DISEÑO, y esa es su razón de existir.**

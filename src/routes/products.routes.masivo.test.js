@@ -31,6 +31,7 @@ const findUniqueMock = vi.fn();
 const deleteMock = vi.fn();
 const itemOrdenCountMock = vi.fn();
 const auditCreateMock = vi.fn();
+const etiquetaFindUniqueMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -42,6 +43,7 @@ vi.mock("../lib/prisma.js", () => ({
       count: vi.fn().mockResolvedValue(0),
       update: vi.fn(),
     },
+    etiqueta: { findUnique: (...args) => etiquetaFindUniqueMock(...args) },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
     usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
@@ -170,6 +172,110 @@ describe("PATCH /api/products/visibilidad-masiva", () => {
     const res = await conAuth(request(buildApp()).patch("/api/products/visibilidad-masiva")).send({
       ids: [1],
       visible: "si",
+    });
+
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/products/etiqueta-masiva", () => {
+  it("asigna una etiqueta existente a todos los ids pedidos con un solo updateMany", async () => {
+    etiquetaFindUniqueMock.mockResolvedValue({ id: 5 });
+    updateManyMock.mockResolvedValue({ count: 3 });
+
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [1, 2, 3],
+      etiquetaId: 5,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ actualizados: 3 });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: [1, 2, 3] } },
+      data: { etiquetaId: 5 },
+    });
+  });
+
+  it("etiquetaId: null saca la etiqueta de todos los seleccionados", async () => {
+    updateManyMock.mockResolvedValue({ count: 2 });
+
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [7, 9],
+      etiquetaId: null,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ actualizados: 2 });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: [7, 9] } },
+      data: { etiquetaId: null },
+    });
+    // Sacar la etiqueta no tiene id que verificar contra la base.
+    expect(etiquetaFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza con 400 una etiqueta que no existe, sin tocar la base", async () => {
+    etiquetaFindUniqueMock.mockResolvedValue(null);
+
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [1, 2],
+      etiquetaId: 999,
+    });
+
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("audita un renglon POR PRODUCTO, no uno por lote", async () => {
+    etiquetaFindUniqueMock.mockResolvedValue({ id: 5 });
+    updateManyMock.mockResolvedValue({ count: 2 });
+
+    await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [4, 5],
+      etiquetaId: 5,
+    });
+
+    expect(auditCreateMock).toHaveBeenCalledTimes(2);
+    const idsAuditados = auditCreateMock.mock.calls.map((c) => c[0].data.entidadId);
+    expect(idsAuditados).toEqual([4, 5]);
+  });
+
+  it("rechaza con 401 sin token, sin tocar la base", async () => {
+    const res = await request(buildApp())
+      .patch("/api/products/etiqueta-masiva")
+      .send({ ids: [1], etiquetaId: 5 });
+
+    expect(res.status).toBe(401);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza con 400 una lista vacia", async () => {
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [],
+      etiquetaId: 5,
+    });
+
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza con 400 mas de 100 ids en vez de truncar en silencio", async () => {
+    const ids = Array.from({ length: 101 }, (_, i) => i + 1);
+
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids,
+      etiquetaId: 5,
+    });
+
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza con 400 si etiquetaId no viene en el body", async () => {
+    const res = await conAuth(request(buildApp()).patch("/api/products/etiqueta-masiva")).send({
+      ids: [1],
     });
 
     expect(res.status).toBe(400);

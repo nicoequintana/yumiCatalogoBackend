@@ -189,6 +189,9 @@ router.post("/import", requireAuth, uploadXlsx, productsImportController.importa
 // pisotón que ya evita `/import` unas líneas más arriba.
 router.post("/eliminar-masivo", requireAuth, requierePermisoDeBorrado, productsController.eliminarMasivo);
 router.patch("/visibilidad-masiva", requireAuth, productsController.actualizarVisibilidadMasiva);
+// Asigna o quita una etiqueta a los productos seleccionados. Mismo pisotón
+// que las otras masivas: va ANTES de cualquier `PATCH /:id/...`.
+router.patch("/etiqueta-masiva", requireAuth, productsController.actualizarEtiquetaMasiva);
 // Aplica el precio calculado (`costo × coeficiente`) a los productos
 // seleccionados en `/catalogo/admin/productos/precios`. Mismo pisotón que las
 // otras masivas: va ANTES de cualquier `POST /:id/...`.
