@@ -103,12 +103,14 @@ describe("cuerpoProducto — la regla de cloaking sobre el texto", () => {
     // `cuerpoProducto` recibe acá la fila CRUDA de Prisma: `seo.controller.js`
     // arma el cuerpo con `{ ...producto, relacionados }` sobre el resultado de
     // `prisma.product.findUnique({ include: PRODUCT_INCLUDE })`, sin pasar por
-    // `mapProducto`. `PRODUCT_INCLUDE.etiqueta` selecciona
-    // `{ id, nombre, color }` (`products.mapper.js`), así que la fixture usa
-    // esa forma — NO la `{ colorFondo, colorTexto }` que arma `mapEtiqueta`
-    // para el JSON de la API, que acá nunca llega.
+    // `mapProducto`. `PRODUCT_INCLUDE.etiqueta` es `true` (`products.mapper.js:22`,
+    // afirmado en `products.mapper.test.js:370`): trae la fila COMPLETA de
+    // `Etiqueta` tal cual la guarda la base, así que `color` es el id de la
+    // paleta (`"TERRACOTA"`), nunca los canales — la fixture usa esa forma,
+    // NO la `{ colorFondo, colorTexto }` que arma `mapEtiqueta` para el JSON
+    // de la API, que acá nunca llega.
     const html = cuerpoProducto(
-      producto({ etiqueta: { id: 1, nombre: "Nuevo", color: "157 62 29" } }),
+      producto({ etiqueta: { id: 1, nombre: "Nuevo", color: "TERRACOTA" } }),
     );
     expect(html).toContain("<p>Nuevo</p>");
     expect(html).not.toContain("Etiqueta:");

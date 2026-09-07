@@ -34,10 +34,12 @@ function productoCompleto(extra = {}) {
     nombre: "Set de cuchillos",
     descripcion: "Seis piezas de acero inoxidable con mango ergonómico.",
     sku: "YIMA-0005",
-    // La forma cruda de `PRODUCT_INCLUDE.etiqueta` (`products.mapper.js`):
-    // `{ id, nombre, color }`, no el `{ colorFondo, colorTexto }` que arma
-    // `mapEtiqueta` para la API — este mock nunca pasa por el mapper.
-    etiqueta: { id: 1, nombre: "Nuevo", color: "157 62 29" },
+    // `PRODUCT_INCLUDE.etiqueta` es `true` (`products.mapper.js:22`, afirmado
+    // en `products.mapper.test.js:370`): trae la fila COMPLETA de `Etiqueta`
+    // tal cual la guarda la base, así que `color` es el id de la paleta
+    // (`"TERRACOTA"`), nunca los canales — no el `{ colorFondo, colorTexto }`
+    // que arma `mapEtiqueta` para la API, este mock nunca pasa por el mapper.
+    etiqueta: { id: 1, nombre: "Nuevo", color: "TERRACOTA" },
     // Espeja un Decimal de Prisma de verdad: `toString()` para el JSON-LD,
     // `toFixed()` para `formatearMonto` (`lib/plantillasEmail.js`), que arma
     // el precio formateado del cuerpo del crawler.
