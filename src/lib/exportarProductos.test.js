@@ -36,7 +36,7 @@ describe("productoAFila", () => {
 
   it("no filtra ningún campo que la planilla no deba traer", () => {
     const fila = productoAFila(
-      productoDePrueba({ descripcion: "texto largo", etiqueta: "Nuevo", categoria: { nombre: "Velas" } }),
+      productoDePrueba({ descripcion: "texto largo", categoria: { nombre: "Velas" } }),
     );
 
     expect(fila).toEqual(["VEL-1234", "Vela de soja", 1500, 2.05, 12]);

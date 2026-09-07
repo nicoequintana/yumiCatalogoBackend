@@ -49,7 +49,7 @@ const filaListado = {
   sku: "YIMA-BRUMAF-1234",
   nombre: "Bruma Facial",
   precio: "100",
-  etiqueta: "Nuevo",
+  etiqueta: { id: 3, nombre: "Nuevo", color: "TERRACOTA" },
   visibleEnCatalogo: true,
   stock: 10,
   destacado: true,
@@ -131,6 +131,16 @@ describe("GET /api/products - payload liviano de listado", () => {
       ].sort(),
     );
     expect(producto.precio).toBe("100");
+    // La forma real que arma `mapEtiqueta` a partir de `LIST_SELECT` —
+    // {id, nombre, color} entra, {id, nombre, colorFondo, colorTexto} sale.
+    // Antes esta fixture guardaba un string y el `Object.keys` de arriba
+    // pasaba igual: la clave existe, pero con valores `undefined` adentro.
+    expect(producto.etiqueta).toEqual({
+      id: 3,
+      nombre: "Nuevo",
+      colorFondo: "157 62 29",
+      colorTexto: "255 255 255",
+    });
     expect(producto.categoria).toEqual({ id: 5, nombre: "Cuidado" });
     expect(producto.fotos).toEqual([{ id: 900, url: "https://cdn/foto.jpg", orden: 0 }]);
     expect(producto.cantidadFotos).toBe(4);
