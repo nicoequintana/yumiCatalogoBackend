@@ -155,8 +155,8 @@ describe("GET /api/products - ?orden=", () => {
   it.each([
     ["sku-asc", [{ sku: "asc" }, { id: "asc" }]],
     ["sku-desc", [{ sku: "desc" }, { id: "asc" }]],
-    ["etiqueta-asc", [{ etiqueta: "asc" }, { id: "asc" }]],
-    ["etiqueta-desc", [{ etiqueta: "desc" }, { id: "asc" }]],
+    ["etiqueta-asc", [{ etiqueta: { nombre: "asc" } }, { id: "asc" }]],
+    ["etiqueta-desc", [{ etiqueta: { nombre: "desc" } }, { id: "asc" }]],
     ["categoria-asc", [{ categoria: { nombre: "asc" } }, { id: "asc" }]],
     ["categoria-desc", [{ categoria: { nombre: "desc" } }, { id: "asc" }]],
     ["visible-asc", [{ visibleEnCatalogo: "asc" }, { id: "asc" }]],

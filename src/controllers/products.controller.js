@@ -151,8 +151,8 @@ const ORDENES_LISTADO = {
   // `fotos._count`.
   "sku-asc": [{ sku: "asc" }, { id: "asc" }],
   "sku-desc": [{ sku: "desc" }, { id: "asc" }],
-  "etiqueta-asc": [{ etiqueta: "asc" }, { id: "asc" }],
-  "etiqueta-desc": [{ etiqueta: "desc" }, { id: "asc" }],
+  "etiqueta-asc": [{ etiqueta: { nombre: "asc" } }, { id: "asc" }],
+  "etiqueta-desc": [{ etiqueta: { nombre: "desc" } }, { id: "asc" }],
   "categoria-asc": [{ categoria: { nombre: "asc" } }, { id: "asc" }],
   "categoria-desc": [{ categoria: { nombre: "desc" } }, { id: "asc" }],
   "visible-asc": [{ visibleEnCatalogo: "asc" }, { id: "asc" }],
@@ -373,12 +373,13 @@ function construirFiltrosListado(query, { esAdmin, ids, campaniaId }) {
   // caer en cualquier página.
   if (query.destacado !== undefined) where.destacado = true;
 
-  // Igualdad exacta, no `contains`: el select del admin ofrece valores que ya
-  // existen (GET /products/etiquetas), así que un match parcial solo podría
-  // mezclar etiquetas distintas. Compone con las guardas públicas como
-  // cualquier otro filtro.
-  if (typeof query.etiqueta === "string" && query.etiqueta.trim() !== "") {
-    where.etiqueta = query.etiqueta.trim();
+  // El ID de la etiqueta, no su texto: desde que `Etiqueta` es una tabla, el
+  // select del admin ofrece filas y no strings. `parsearIdEntero`, mismo
+  // criterio que `promocion`: un valor que no parsea a entero NO arma
+  // filtro. Compone con las guardas públicas como cualquier otro filtro.
+  if (query.etiqueta !== undefined) {
+    const etiquetaId = parsearIdEntero(query.etiqueta);
+    if (etiquetaId !== null) where.etiquetaId = etiquetaId;
   }
 
   // Solo en la vista admin: la rama pública ya escribe `where.stock` como
@@ -622,7 +623,7 @@ export async function etiquetas(req, res, next) {
 
 /**
  * Fetches up to 4 related products for the detail page: same categoriaId OR
- * same etiqueta as the current product (either match counts, not both),
+ * same etiquetaId as the current product (either match counts, not both),
  * excluding the product itself. Short-circuits to `[]` without a DB
  * round-trip when the product has neither field set — that's a normal case
  * (nothing to match on), not an error.
@@ -639,12 +640,12 @@ export async function etiquetas(req, res, next) {
 // relacionados que la ficha (regla de cloaking). Duplicar el cálculo sería una
 // segunda casa de la regla de "qué producto se parece a cuál".
 export async function obtenerRelacionados(producto, { esAdmin }) {
-  const { categoriaId, etiqueta } = producto;
-  if (!categoriaId && !etiqueta) return [];
+  const { categoriaId, etiquetaId } = producto;
+  if (!categoriaId && !etiquetaId) return [];
 
   const or = [];
   if (categoriaId) or.push({ categoriaId });
-  if (etiqueta) or.push({ etiqueta });
+  if (etiquetaId) or.push({ etiquetaId });
 
   const where = {
     id: { not: producto.id },

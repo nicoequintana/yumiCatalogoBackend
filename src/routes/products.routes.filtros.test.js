@@ -47,6 +47,7 @@ const productoBase = {
   descripcion: "Descripción",
   precio: "100",
   etiqueta: null,
+  etiquetaId: null,
   categoriaId: null,
   categoria: null,
   caracteristicas: [],
@@ -113,29 +114,58 @@ describe("GET /api/products - filtros de stock y etiqueta", () => {
     // puede pisar esa guarda (mismo criterio que `ids`).
     expect(where).toEqual({ visibleEnCatalogo: true, stock: { gt: 0 } });
   });
+});
 
-  it("etiqueta filtra por igualdad exacta y compone con las guardas públicas", async () => {
+describe("GET /api/products?etiqueta=", () => {
+  it("filtra por el ID de la etiqueta, no por su texto", async () => {
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp()).get("/api/products?etiqueta=Nuevo");
+    await request(buildApp()).get("/api/products?etiqueta=3");
 
-    const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toEqual({
-      visibleEnCatalogo: true,
-      stock: { gt: 0 },
-      etiqueta: "Nuevo",
-    });
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ etiquetaId: 3 }),
+      }),
+    );
   });
 
-  it("una etiqueta vacía no filtra", async () => {
+  // Mismo criterio que `promocion`: un valor que no parsea no arma filtro.
+  it("un valor que no parsea a entero NO arma filtro", async () => {
     findManyMock.mockResolvedValue([]);
 
-    await request(buildApp())
-      .get("/api/products?admin=1&etiqueta=")
-      .set("Authorization", authHeader);
+    await request(buildApp()).get("/api/products?etiqueta=abc");
 
-    const { where } = findManyMock.mock.calls[0][0];
-    expect(where).toBeUndefined();
+    const where = findManyMock.mock.calls[0][0].where;
+    expect(where).not.toHaveProperty("etiquetaId");
+  });
+
+  // La guarda pública sigue en pie: el filtro compone, nunca reemplaza.
+  it("compone con las guardas públicas", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?etiqueta=3");
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          etiquetaId: 3,
+          visibleEnCatalogo: true,
+          stock: { gt: 0 },
+        }),
+      }),
+    );
+  });
+
+  it("orden=etiqueta-asc ordena por el nombre de la relación, con desempate por id", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products?orden=etiqueta-asc");
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ etiqueta: { nombre: "asc" } }, { id: "asc" }],
+      }),
+    );
   });
 });
 
@@ -409,7 +439,7 @@ describe("GET /api/products - filtros de listado", () => {
 
 describe("GET /api/products/:id - relacionados", () => {
   it("incluye relacionados cuando hay match por categoriaId", async () => {
-    const principal = { ...productoBase, id: 1, categoriaId: 5, etiqueta: null };
+    const principal = { ...productoBase, id: 1, categoriaId: 5 };
     const relacionado = { ...productoBase, id: 2, categoriaId: 5 };
 
     findUniqueMock.mockResolvedValueOnce(principal); // existencia
@@ -428,8 +458,8 @@ describe("GET /api/products/:id - relacionados", () => {
   });
 
   it("incluye relacionados cuando hay match por etiqueta", async () => {
-    const principal = { ...productoBase, id: 1, categoriaId: null, etiqueta: "Nuevo" };
-    const relacionado = { ...productoBase, id: 3, etiqueta: "Nuevo" };
+    const principal = { ...productoBase, id: 1, categoriaId: null, etiquetaId: 7 };
+    const relacionado = { ...productoBase, id: 3, etiquetaId: 7 };
 
     findUniqueMock.mockResolvedValueOnce(principal);
     updateMock.mockResolvedValue({ ...principal, vistas: 1 });
@@ -443,7 +473,7 @@ describe("GET /api/products/:id - relacionados", () => {
   });
 
   it("devuelve array vacío sin consultar la BD si no hay categoriaId ni etiqueta", async () => {
-    const principal = { ...productoBase, id: 1, categoriaId: null, etiqueta: null };
+    const principal = { ...productoBase, id: 1, categoriaId: null };
 
     findUniqueMock.mockResolvedValueOnce(principal);
     updateMock.mockResolvedValue({ ...principal, vistas: 1 });
