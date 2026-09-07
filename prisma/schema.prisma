@@ -38,7 +38,8 @@ model Product {
   /// la regla de enteros que gobierna la plata no se podría representar, y
   /// forzarlo a entero perdería la mitad del rango útil.
   coeficiente        Decimal?         @db.Decimal(5, 2)
-  etiqueta           String?
+  etiquetaId         Int?
+  etiqueta           Etiqueta?        @relation(fields: [etiquetaId], references: [id], onDelete: NoAction)
   fraseComercial     String?
   porQueLoVasAQuerer String?          @db.NVarChar(Max)
   tePasaEsto         String?          @db.NVarChar(Max)
@@ -73,6 +74,7 @@ model Product {
   @@index([visibleEnCatalogo, createdAt])
   @@index([destacado])
   @@index([categoriaId])
+  @@index([etiquetaId])
 }
 
 model Caracteristica {
@@ -168,6 +170,36 @@ model Categoria {
   ordenHome       Int     @default(0)
 
   @@index([destacadaEnHome, ordenHome])
+}
+
+/// Etiqueta comercial de un producto ("Nuevo", "Best Seller"), administrada
+/// desde Configuración › Etiquetas.
+///
+/// Antes era `Product.etiqueta`, un `String?` de texto libre: nadie las
+/// administraba y `Nuevo`, `nuevo` y `NUEVO ` eran tres etiquetas distintas
+/// para la base. `nombre @unique` sobre una collation case-insensitive es lo
+/// que hace imposible esa convivencia — es el objetivo del cambio, no un
+/// efecto colateral.
+///
+/// `color` guarda el ID de la paleta cerrada de `src/lib/coloresEtiqueta.js`
+/// (`"TERRACOTA"`, `"VERDE"`…), NUNCA un hex ni canales: la resolución a
+/// valores es del backend, que los emite ya hechos en el mapper.
+///
+/// `color: null` significa "pintá como siempre": el chip cae al token por
+/// defecto de cada superficie (`bg-tertiary` en `Badge`,
+/// `bg-secondary-container` en `ProductCard`). Es lo que garantizó cero
+/// regresión visual el día de la migración.
+///
+/// Sin `activo` ni `orden`, a diferencia de `Anuncio` y `Categoria`: no hay
+/// caso de uso para desactivar una etiqueta sin borrarla, y el `<select>` del
+/// formulario ordena alfabéticamente.
+model Etiqueta {
+  id        Int       @id @default(autoincrement())
+  nombre    String    @unique @db.NVarChar(40)
+  color     String?   @db.VarChar(20)
+  productos Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 /// Mensajes de la cinta de anuncios del catálogo público (`BarraAnuncios`).
