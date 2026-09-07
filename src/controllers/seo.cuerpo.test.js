@@ -96,12 +96,28 @@ describe("cuerpoProducto — la regla de cloaking sobre el texto", () => {
     expect(html).not.toContain("Cocina");
   });
 
-  it("emite la etiqueta pelada, como el Badge de la ficha", () => {
+  it("emite el NOMBRE de la etiqueta, pelado y sin prefijo", () => {
     // La ficha la muestra con `<Badge etiqueta={...} />`, que pinta el texto
     // solo. El prefijo "Etiqueta: " no existe en la página.
-    const html = cuerpoProducto(producto({ etiqueta: "Novedad" }));
-    expect(html).toContain("<p>Novedad</p>");
+    //
+    // `cuerpoProducto` recibe acá la fila CRUDA de Prisma: `seo.controller.js`
+    // arma el cuerpo con `{ ...producto, relacionados }` sobre el resultado de
+    // `prisma.product.findUnique({ include: PRODUCT_INCLUDE })`, sin pasar por
+    // `mapProducto`. `PRODUCT_INCLUDE.etiqueta` selecciona
+    // `{ id, nombre, color }` (`products.mapper.js`), así que la fixture usa
+    // esa forma — NO la `{ colorFondo, colorTexto }` que arma `mapEtiqueta`
+    // para el JSON de la API, que acá nunca llega.
+    const html = cuerpoProducto(
+      producto({ etiqueta: { id: 1, nombre: "Nuevo", color: "157 62 29" } }),
+    );
+    expect(html).toContain("<p>Nuevo</p>");
     expect(html).not.toContain("Etiqueta:");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("sin etiqueta no emite el párrafo", () => {
+    const html = cuerpoProducto(producto({ etiqueta: null }));
+    expect(html).not.toContain("<p></p>");
   });
 
   it("dice 'Agotado' sin stock, como la ficha", () => {

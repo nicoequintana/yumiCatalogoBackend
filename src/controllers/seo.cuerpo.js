@@ -83,8 +83,10 @@ export function cuerpoProducto(producto, { descuento = null } = {}) {
   const partes = [
     `<h1>${escapeHtml(producto.nombre)}</h1>`,
     // La etiqueta PELADA: la ficha la muestra con `<Badge>`, que pinta el texto
-    // solo. El prefijo "Etiqueta: " no existe en la página.
-    producto.etiqueta ? `<p>${escapeHtml(producto.etiqueta)}</p>` : "",
+    // solo. El prefijo "Etiqueta: " no existe en la página. Desde que
+    // `Etiqueta` es una tabla, el mapper la entrega como objeto y acá va el
+    // NOMBRE — el color no es contenido y no viaja al HTML de crawler.
+    producto.etiqueta ? `<p>${escapeHtml(producto.etiqueta.nombre)}</p>` : "",
     parrafo(producto.fraseComercial),
     // ⚠️ NO va la categoría. La ficha no la muestra en ningún lado —no hay
     // migas de pan ni línea de categoría—, así que emitirla acá era contenido
