@@ -30,8 +30,15 @@ export async function descargarPlantilla(_req, res, next) {
       select: { nombre: true },
       orderBy: { nombre: "asc" },
     });
+    const etiquetas = await prisma.etiqueta.findMany({
+      select: { nombre: true },
+      orderBy: { nombre: "asc" },
+    });
 
-    const buffer = await generarPlantilla(categorias.map((c) => c.nombre));
+    const buffer = await generarPlantilla(
+      categorias.map((c) => c.nombre),
+      etiquetas.map((e) => e.nombre),
+    );
 
     res.setHeader(
       "Content-Type",
@@ -65,10 +72,11 @@ export async function importar(req, res, next) {
     // Una sola consulta para todas las filas, no una por fila.
     const categorias = await prisma.categoria.findMany({ select: { id: true, nombre: true } });
     const categoriasPorNombre = new Map(categorias.map((c) => [c.nombre.toLowerCase(), c.id]));
+    const etiquetas = await prisma.etiqueta.findMany({ select: { id: true, nombre: true } });
 
     let procesado;
     try {
-      procesado = await procesarArchivo(req.file.buffer, categoriasPorNombre);
+      procesado = await procesarArchivo(req.file.buffer, categoriasPorNombre, etiquetas);
     } catch (err) {
       // Problema del ARCHIVO (vacío, sin la hoja, supera el límite): no tiene
       // fila a la que apuntar, así que es un 400 con mensaje suelto.
@@ -155,7 +163,7 @@ function dataDeAlta(datos, sku) {
     precio: String(calcularPrecio(datos.costo, datos.coeficiente)),
     costo: datos.costo,
     coeficiente: datos.coeficiente,
-    etiqueta: datos.etiqueta,
+    etiquetaId: datos.etiquetaId,
     categoriaId: datos.categoriaId,
     sku,
     stock: datos.stock,

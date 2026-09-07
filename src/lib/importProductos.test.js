@@ -99,7 +99,7 @@ describe("validarFila", () => {
       // El neutro que aplica la planilla cuando la celda viene vacía.
       coeficiente: "1",
       stock: 0,
-      etiqueta: null,
+      etiquetaId: null,
       categoriaId: null,
       fraseComercial: null,
       porQueLoVasAQuerer: null,
@@ -202,6 +202,7 @@ describe("validarFila", () => {
   });
 
   it("mapea todos los campos opcionales cuando vienen completos", () => {
+    const etiquetas = [{ id: 2, nombre: "Nuevo" }];
     const { datos } = validarFila(
       filaValida({
         stock: 12,
@@ -219,14 +220,79 @@ describe("validarFila", () => {
       }),
       2,
       CATEGORIAS,
+      etiquetas,
     );
 
     expect(datos.stock).toBe(12);
     expect(datos.categoriaId).toBe(7);
-    expect(datos.etiqueta).toBe("Nuevo");
+    expect(datos.etiquetaId).toBe(2);
     expect(datos.fraseComercial).toBe("Iluminá tu casa");
     expect(datos.beneficios).toEqual([{ texto: "Dura 40 h" }, { texto: "Sin humo" }]);
     expect(datos.especificaciones).toEqual([{ nombre: "Material", valor: "Soja" }]);
+  });
+});
+
+describe("etiqueta contra la tabla", () => {
+  // Lista cerrada: son las mismas dos filas que devolvería
+  // `prisma.etiqueta.findMany`, ya cargadas por el controller antes de leer
+  // el archivo — mismo enhebrado que `categoriasPorNombre`.
+  const etiquetas = [
+    { id: 2, nombre: "Nuevo" },
+    { id: 5, nombre: "Best Seller" },
+  ];
+
+  it("resuelve el nombre a etiquetaId", () => {
+    const { datos, errores } = validarFila(filaValida({ etiqueta: "Nuevo" }), 2, CATEGORIAS, etiquetas);
+
+    expect(errores).toEqual([]);
+    expect(datos.etiquetaId).toBe(2);
+  });
+
+  it("no distingue mayúsculas ni espacios, mismo criterio que categoría", () => {
+    const { datos, errores } = validarFila(
+      filaValida({ etiqueta: "  best seller " }),
+      2,
+      CATEGORIAS,
+      etiquetas,
+    );
+
+    expect(errores).toEqual([]);
+    expect(datos.etiquetaId).toBe(5);
+  });
+
+  it("acepta la celda vacía", () => {
+    const { datos, errores } = validarFila(filaValida({ etiqueta: "" }), 2, CATEGORIAS, etiquetas);
+
+    expect(errores).toEqual([]);
+    expect(datos.etiquetaId).toBeNull();
+  });
+
+  // Es el punto de tener lista cerrada: antes cualquier texto entraba y
+  // fabricaba una etiqueta nueva en silencio.
+  it("rechaza la fila si la etiqueta no existe, y el error nombra las válidas", () => {
+    const { datos, errores } = validarFila(
+      filaValida({ etiqueta: "Inventada" }),
+      2,
+      CATEGORIAS,
+      etiquetas,
+    );
+
+    expect(datos).toBeNull();
+    expect(errores.map((e) => e.motivo).join(" ")).toContain("Nuevo");
+  });
+
+  it("sin etiquetas cargadas, cualquier nombre no vacío es error de fila", () => {
+    const { datos, errores } = validarFila(filaValida({ etiqueta: "Nuevo" }), 2, CATEGORIAS);
+
+    expect(datos).toBeNull();
+    expect(errores).toEqual([
+      {
+        fila: 2,
+        columna: "etiqueta",
+        valor: "Nuevo",
+        motivo: 'La etiqueta "Nuevo" no existe. Válidas: .',
+      },
+    ]);
   });
 });
 

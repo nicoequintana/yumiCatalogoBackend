@@ -8,6 +8,7 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 process.env.JWT_SECRET = "test-secret";
 
 const categoriaMock = { findMany: vi.fn() };
+const etiquetaMock = { findMany: vi.fn() };
 const productCreateMock = vi.fn();
 const productFindManyMock = vi.fn();
 const productUpdateMock = vi.fn();
@@ -17,6 +18,7 @@ const auditCreateMock = vi.fn();
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     categoria: { findMany: (...args) => categoriaMock.findMany(...args) },
+    etiqueta: { findMany: (...args) => etiquetaMock.findMany(...args) },
     product: {
       create: (...args) => productCreateMock(...args),
       findMany: (...args) => productFindManyMock(...args),
@@ -65,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
   categoriaMock.findMany.mockResolvedValue([{ id: 7, nombre: "Velas" }]);
+  etiquetaMock.findMany.mockResolvedValue([{ id: 2, nombre: "Nuevo" }]);
   // `$transaction` recibe un array de promesas de create; devolvemos lo que
   // esas promesas resuelvan, igual que hace Prisma.
   transactionMock.mockImplementation((operaciones) => Promise.all(operaciones));

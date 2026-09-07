@@ -159,9 +159,10 @@ function normalizarCoeficiente(celda) {
  * @param {object} fila valores crudos de la fila, indexados por nombre de columna
  * @param {number} numeroFila número de fila TAL COMO SE VE EN EXCEL (encabezado = 1)
  * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
+ * @param {Array<{id: number, nombre: string}>} etiquetas las etiquetas válidas (lista cerrada)
  * @returns {{ datos: object|null, errores: Array<{fila:number,columna:string,valor:*,motivo:string}> }}
  */
-function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
+function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre, etiquetas = []) {
   const errores = [];
   const error = (columna, valor, motivo) => errores.push({ fila: numeroFila, columna, valor, motivo });
 
@@ -206,6 +207,28 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
     }
   }
 
+  // La etiqueta viaja como NOMBRE porque la planilla la llena una persona, pero
+  // desde que `Etiqueta` es una tabla la lista es CERRADA: un nombre que no
+  // existe es error de fila, y por la regla vigente eso rechaza el archivo
+  // entero. Antes cualquier texto entraba y fabricaba una etiqueta nueva en
+  // silencio, que es justo lo que esta feature vino a terminar.
+  let etiquetaId = null;
+  const nombreEtiqueta = textoOpcional(fila.etiqueta);
+  if (nombreEtiqueta !== null) {
+    const encontrada = etiquetas.find(
+      (e) => e.nombre.toLowerCase() === nombreEtiqueta.toLowerCase(),
+    );
+    if (!encontrada) {
+      error(
+        "etiqueta",
+        fila.etiqueta,
+        `La etiqueta "${nombreEtiqueta}" no existe. Válidas: ${etiquetas.map((e) => e.nombre).join(", ")}.`,
+      );
+    } else {
+      etiquetaId = encontrada.id;
+    }
+  }
+
   let especificaciones = [];
   try {
     especificaciones = parsearEspecificaciones(fila.especificaciones);
@@ -222,7 +245,7 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
       costo,
       coeficiente,
       stock,
-      etiqueta: textoOpcional(fila.etiqueta),
+      etiquetaId,
       categoriaId,
       fraseComercial: textoOpcional(fila.fraseComercial),
       porQueLoVasAQuerer: textoOpcional(fila.porQueLoVasAQuerer),
@@ -245,10 +268,11 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre) {
  * @param {object} fila valores crudos de la fila, indexados por nombre de columna
  * @param {number} numeroFila número de fila TAL COMO SE VE EN EXCEL (encabezado = 1)
  * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
+ * @param {Array<{id: number, nombre: string}>} [etiquetas] las etiquetas válidas (lista cerrada)
  * @returns {{ datos: object|null, errores: Array<{fila:number,columna:string,valor:*,motivo:string}> }}
  */
-export function validarFila(fila, numeroFila, categoriasPorNombre) {
-  return validarCamposDeProducto(fila, numeroFila, categoriasPorNombre);
+export function validarFila(fila, numeroFila, categoriasPorNombre, etiquetas = []) {
+  return validarCamposDeProducto(fila, numeroFila, categoriasPorNombre, etiquetas);
 }
 
 /**
@@ -512,8 +536,9 @@ export async function leerArchivo(buffer, columnas = COLUMNAS) {
  *
  * @param {Buffer} buffer
  * @param {Map<string, number>} categoriasPorNombre nombre en minúsculas -> id
+ * @param {Array<{id: number, nombre: string}>} [etiquetas] las etiquetas válidas (lista cerrada)
  */
-export async function procesarArchivo(buffer, categoriasPorNombre) {
+export async function procesarArchivo(buffer, categoriasPorNombre, etiquetas = []) {
   const filas = await leerArchivo(buffer);
 
   if (filas.length === 0) {
@@ -527,7 +552,7 @@ export async function procesarArchivo(buffer, categoriasPorNombre) {
   const errores = [];
 
   for (const { numeroFila, valores } of filas) {
-    const resultado = validarFila(valores, numeroFila, categoriasPorNombre);
+    const resultado = validarFila(valores, numeroFila, categoriasPorNombre, etiquetas);
     if (resultado.errores.length > 0) errores.push(...resultado.errores);
     else productos.push(resultado.datos);
   }

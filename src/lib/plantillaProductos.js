@@ -1,13 +1,6 @@
 import ExcelJS from "exceljs";
 import { COLUMNAS, MARCA_EJEMPLO, MAX_FILAS, NOMBRE_HOJA } from "./importProductos.js";
 
-/**
- * Mismas sugerencias que el `<datalist>` del formulario de alta
- * (`AdminProductoForm.jsx`, `SUGERENCIAS_ETIQUETA`). Duplicación consciente:
- * el backend no puede importar del frontend. Si cambian allá, cambiar acá.
- */
-export const ETIQUETAS_SUGERIDAS = ["Exclusivo", "Nuevo", "Best Seller", "Trending", "Popular"];
-
 export const HOJA_LISTAS = "Listas";
 
 /** Última fila a la que se aplican las validaciones (el admin puede llenar hasta MAX_FILAS). */
@@ -39,12 +32,13 @@ const FILA_EJEMPLO = {
  * archivo puede editarse en Google Sheets. El backend revalida todo al importar.
  *
  * @param {string[]} categorias nombres de categoría existentes
+ * @param {string[]} [etiquetas] nombres de etiqueta existentes (la tabla `Etiqueta`, lista cerrada)
  * @returns {Promise<Buffer>}
  */
-export async function generarPlantilla(categorias) {
+export async function generarPlantilla(categorias, etiquetas = []) {
   const wb = new ExcelJS.Workbook();
 
-  construirHojaListas(wb, categorias);
+  construirHojaListas(wb, categorias, etiquetas);
 
   const hoja = wb.addWorksheet(NOMBRE_HOJA);
   hoja.addRow(COLUMNAS);
@@ -52,27 +46,30 @@ export async function generarPlantilla(categorias) {
   hoja.columns = COLUMNAS.map((columna) => ({ width: columna.length + 14 }));
   hoja.addRow(COLUMNAS.map((columna) => FILA_EJEMPLO[columna] ?? null));
 
-  aplicarValidaciones(hoja, categorias.length);
+  aplicarValidaciones(hoja, categorias.length, COLUMNAS, ULTIMA_FILA, etiquetas.length);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
 /**
- * Arma la hoja `Listas` con las categorías y las etiquetas sugeridas que
- * alimentan los desplegables de la hoja `Productos`. Compartida por la
- * plantilla de alta (`generarPlantilla`) y la exportación para actualización
- * masiva (`exportarProductos.js`) — las dos necesitan exactamente los mismos
- * dos desplegables.
+ * Arma la hoja `Listas` con las categorías y las etiquetas que alimentan los
+ * desplegables de la hoja `Productos`. Compartida por la plantilla de alta
+ * (`generarPlantilla`) y la exportación para actualización masiva
+ * (`exportarProductos.js`) — las dos necesitan exactamente los mismos dos
+ * desplegables.
+ *
+ * Las etiquetas ya NO son una lista sugerida escrita a mano acá: desde que
+ * `Etiqueta` es una tabla, salen de la base (mismo criterio que `categorias`).
  */
-export function construirHojaListas(wb, categorias) {
+export function construirHojaListas(wb, categorias, etiquetas = []) {
   const listas = wb.addWorksheet(HOJA_LISTAS);
   listas.getCell("A1").value = "Categorías";
-  listas.getCell("B1").value = "Etiquetas sugeridas";
+  listas.getCell("B1").value = "Etiquetas";
   categorias.forEach((nombre, indice) => {
     listas.getCell(`A${indice + 2}`).value = nombre;
   });
-  ETIQUETAS_SUGERIDAS.forEach((etiqueta, indice) => {
-    listas.getCell(`B${indice + 2}`).value = etiqueta;
+  etiquetas.forEach((nombre, indice) => {
+    listas.getCell(`B${indice + 2}`).value = nombre;
   });
   return listas;
 }
@@ -94,8 +91,20 @@ export function construirHojaListas(wb, categorias) {
  * guarda `indexOf` devuelve `-1`, el `+ 1` lo convierte en `0`, y
  * `hoja.getCell(fila, 0)` es una celda que no existe. El salteo es silencioso
  * a propósito: no es un error configurar menos columnas, es el caso de uso.
+ *
+ * `cantidadEtiquetas` es un parámetro aparte (no comparte `cantidadCategorias`)
+ * porque las dos listas crecen distinto: la exportación de actualización pasa
+ * siempre `0` acá, y como esa hoja tampoco tiene la columna `etiqueta` el
+ * salteo de `columnas` ya lo cubre — el parámetro solo importa para la
+ * plantilla de alta.
  */
-export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNAS, ultimaFila = ULTIMA_FILA) {
+export function aplicarValidaciones(
+  hoja,
+  cantidadCategorias,
+  columnas = COLUMNAS,
+  ultimaFila = ULTIMA_FILA,
+  cantidadEtiquetas = 0,
+) {
   const posicion = (columna) => columnas.indexOf(columna) + 1;
 
   /** Aplica una validación solo si la columna existe en este layout. */
@@ -158,13 +167,20 @@ export function aplicarValidaciones(hoja, cantidadCategorias, columnas = COLUMNA
       });
     }
 
-    // Permisivo: en el formulario `etiqueta` es texto libre con sugerencias
-    // (un `<datalist>`), no un enum. El desplegable sugiere pero no bloquea.
-    validar(fila, "etiqueta", {
-      type: "list",
-      allowBlank: true,
-      formulae: [`${HOJA_LISTAS}!$B$2:$B$${ETIQUETAS_SUGERIDAS.length + 1}`],
-      showErrorMessage: false,
-    });
+    // ESTRICTA desde que `Etiqueta` es una tabla. Era permisiva
+    // (`showErrorMessage: false`) porque espejaba el `<datalist>` de texto
+    // libre del formulario; hoy espeja un `<select>` de lista cerrada, y el
+    // import rechaza un nombre que no exista. Se omite si no hay etiquetas
+    // cargadas — un rango vacío rompe el archivo, mismo criterio que `categoria`.
+    if (cantidadEtiquetas > 0) {
+      validar(fila, "etiqueta", {
+        type: "list",
+        allowBlank: true,
+        formulae: [`${HOJA_LISTAS}!$B$2:$B$${cantidadEtiquetas + 1}`],
+        showErrorMessage: true,
+        errorTitle: "Etiqueta inválida",
+        error: "Elegí una etiqueta de la lista o dejá la celda vacía.",
+      });
+    }
   }
 }

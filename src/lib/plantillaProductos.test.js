@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ExcelJS from "exceljs";
 import { COLUMNAS, MARCA_EJEMPLO, leerArchivo } from "./importProductos.js";
-import { ETIQUETAS_SUGERIDAS, generarPlantilla } from "./plantillaProductos.js";
+import { generarPlantilla } from "./plantillaProductos.js";
 
 async function abrir(buffer) {
   const wb = new ExcelJS.Workbook();
@@ -34,11 +34,12 @@ describe("generarPlantilla", () => {
     expect(listas.getCell("A3").value).toBe("Bazar");
   });
 
-  it("vuelca las etiquetas sugeridas en la hoja Listas", async () => {
-    const wb = await abrir(await generarPlantilla(["Velas"]));
+  it("vuelca las etiquetas recibidas en la hoja Listas", async () => {
+    const etiquetas = ["Best Seller", "Nuevo"];
+    const wb = await abrir(await generarPlantilla(["Velas"], etiquetas));
     const listas = wb.getWorksheet("Listas");
 
-    ETIQUETAS_SUGERIDAS.forEach((etiqueta, indice) => {
+    etiquetas.forEach((etiqueta, indice) => {
       expect(listas.getCell(`B${indice + 2}`).value).toBe(etiqueta);
     });
   });
@@ -53,23 +54,21 @@ describe("generarPlantilla", () => {
     expect(validacion.formulae).toEqual(["Listas!$A$2:$A$3"]);
   });
 
-  it("pone un desplegable PERMISIVO en etiqueta — en el form es texto libre", async () => {
-    const wb = await abrir(await generarPlantilla(["Velas"]));
+  it("pone un desplegable ESTRICTO en etiqueta — es una tabla, lista cerrada", async () => {
+    const wb = await abrir(await generarPlantilla(["Velas"], ["Nuevo", "Best Seller"]));
     const columna = COLUMNAS.indexOf("etiqueta") + 1;
     const validacion = wb.getWorksheet("Productos").getCell(2, columna).dataValidation;
 
     expect(validacion.type).toBe("list");
-    // Se afirma "no bloquea" (falsy) y no `=== false` a propósito: ExcelJS
-    // omite el atributo `showErrorMessage` al escribir cuando es false, porque
-    // ese es el default implícito del formato OOXML. Al releer vuelve como
-    // `undefined`, que en Excel significa exactamente lo mismo: sugiere sin
-    // bloquear. Afirmar `false` estricto testearía un detalle de serialización
-    // de la librería, no la garantía que le importa al admin.
-    expect(validacion.showErrorMessage).toBeFalsy();
-    // El contraste con `categoria` es lo que da valor a esta prueba: esa sí
-    // bloquea, y su atributo sí viaja en el archivo.
-    const estricta = wb.getWorksheet("Productos").getCell(2, COLUMNAS.indexOf("categoria") + 1);
-    expect(estricta.dataValidation.showErrorMessage).toBe(true);
+    expect(validacion.showErrorMessage).toBe(true);
+    expect(validacion.formulae).toEqual(["Listas!$B$2:$B$3"]);
+  });
+
+  it("no rompe cuando no hay ninguna etiqueta cargada", async () => {
+    const wb = await abrir(await generarPlantilla(["Velas"]));
+    const columna = COLUMNAS.indexOf("etiqueta") + 1;
+
+    expect(wb.getWorksheet("Productos").getCell(2, columna).dataValidation).toBeUndefined();
   });
 
   it("bloquea costos <= 0 o con decimales, y stock negativo o decimal", async () => {
