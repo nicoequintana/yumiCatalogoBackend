@@ -145,6 +145,20 @@ const productos = [
   },
 ];
 
+/**
+ * Las cinco etiquetas canónicas — las mismas que la migración
+ * `20260906120000_etiquetas_entidad` sembró como "Semilla 2" al convertir
+ * `Product.etiqueta` de texto libre a la relación `Etiqueta`.
+ *
+ * TODAS con `color: null` a propósito: es lo que hizo la migración, y es lo
+ * que garantiza cero regresión visual — `color: null` significa "pintá con
+ * el token de siempre" (ver el comentario del modelo `Etiqueta` en
+ * `schema.prisma`). Asignarles un color de la paleta acá sería tomar una
+ * decisión de diseño que nadie tomó; si el día de mañana alguien quiere
+ * etiquetas con color, se elige desde el panel, no desde el seed.
+ */
+const ETIQUETAS_CANONICAS = ["Exclusivo", "Nuevo", "Best Seller", "Trending", "Popular"];
+
 /** Cantidad de productos que arrancan destacados, para que la home no quede vacía. */
 const DESTACADOS_INICIALES = 3;
 
@@ -171,6 +185,21 @@ async function crearConSku(data, nombre) {
 }
 
 async function main() {
+  console.log("Sembrando etiquetas...");
+
+  // Idempotente (el seed se corre más de una vez): `upsert` por `nombre`,
+  // que es `@unique` en el modelo. Mismo criterio que usa este archivo para
+  // el resto de las entidades de catálogo con nombre único.
+  const etiquetaPorNombre = new Map();
+  for (const nombre of ETIQUETAS_CANONICAS) {
+    const etiqueta = await prisma.etiqueta.upsert({
+      where: { nombre },
+      update: {},
+      create: { nombre, color: null },
+    });
+    etiquetaPorNombre.set(nombre, etiqueta.id);
+  }
+
   console.log("Sembrando productos...");
 
   for (const [indice, p] of productos.entries()) {
@@ -179,7 +208,11 @@ async function main() {
         nombre: p.nombre,
         descripcion: p.descripcion,
         precio: p.precio,
-        etiqueta: p.etiqueta,
+        // `p.etiqueta` sigue siendo el NOMBRE de la etiqueta (lo natural de
+        // leer acá arriba, en la lista de productos); se resuelve al id de
+        // la fila ya sembrada. Un producto sin etiqueta (`p.etiqueta: null`)
+        // queda con `etiquetaId: null`, sin romper.
+        etiquetaId: p.etiqueta ? etiquetaPorNombre.get(p.etiqueta) : null,
         // Sin estos tres la siembra o explota (sku es NOT NULL) o deja 9
         // productos invisibles y agotados: `visibleEnCatalogo` y `stock`
         // tienen defaults (false / 0) que esconden el producto del catálogo.
