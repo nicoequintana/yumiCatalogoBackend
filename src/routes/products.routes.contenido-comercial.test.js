@@ -265,6 +265,12 @@ describe("etiquetaId en la escritura de producto", () => {
     );
   });
 
+  // `objectContaining({ etiquetaId: undefined })` matchea IGUAL si la clave
+  // está ausente del objeto real (Vitest, como Jest, no distingue "la clave
+  // está y vale undefined" de "la clave no está"): ese assert no puede fallar
+  // ni con un typo en el nombre del campo. Se afirma sobre el `data` real,
+  // primero que la CLAVE existe (`hasOwnProperty`) y después que vale
+  // `undefined`.
   it("ausente en un PUT significa `no la toques`", async () => {
     findUniqueMock.mockResolvedValue({ ...productoBase, id: 1, etiquetaId: 3, fotos: [], video: null });
     updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
@@ -274,9 +280,56 @@ describe("etiquetaId en la escritura de producto", () => {
       .set("Authorization", authHeader)
       .field("nombre", "Producto editado");
 
+    const data = updateMock.mock.calls[0][0].data;
+    expect(Object.prototype.hasOwnProperty.call(data, "etiquetaId")).toBe(true);
+    expect(data.etiquetaId).toBeUndefined();
+  });
+
+  it("guarda la etiqueta en un PUT cuando el id existe", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, id: 1, etiquetaId: null, fotos: [], video: null });
+    etiquetaFindUniqueMock.mockResolvedValue({ id: 5, nombre: "Oferta" });
+    updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await request(buildApp())
+      .put("/api/products/1")
+      .set("Authorization", authHeader)
+      .field("nombre", "Producto editado")
+      .field("etiquetaId", "5");
+
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ etiquetaId: undefined }),
+        data: expect.objectContaining({ etiquetaId: 5 }),
+      }),
+    );
+  });
+
+  it("400 en un PUT cuando el id de etiqueta no existe, y no toca la base", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, id: 1, etiquetaId: 3, fotos: [], video: null });
+    etiquetaFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .put("/api/products/1")
+      .set("Authorization", authHeader)
+      .field("nombre", "Producto editado")
+      .field("etiquetaId", "99");
+
+    expect(res.status).toBe(400);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("una cadena vacía saca la etiqueta en un PUT", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, id: 1, etiquetaId: 3, fotos: [], video: null });
+    updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await request(buildApp())
+      .put("/api/products/1")
+      .set("Authorization", authHeader)
+      .field("nombre", "Producto editado")
+      .field("etiquetaId", "");
+
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ etiquetaId: null }),
       }),
     );
   });
