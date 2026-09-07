@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "@prisma/client/runtime/client.js";
-import { mapProducto, mapProductoListado, mapProductoParaN8n } from "./products.mapper.js";
+import {
+  LIST_SELECT,
+  PRODUCT_INCLUDE,
+  mapEtiqueta,
+  mapProducto,
+  mapProductoListado,
+  mapProductoParaN8n,
+} from "./products.mapper.js";
 
 /**
  * Payload que recibe el flujo de generación de imágenes de n8n.
@@ -17,7 +24,9 @@ function filaDeProducto(extra = {}) {
     nombre: "Termo mate",
     descripcion: "Un termo autocebante",
     precio: { toString: () => "45000" },
-    etiqueta: "Nuevo",
+    // Ahora es la relación completa (Task 4): `Product.etiqueta` dejó de ser
+    // un string y pasó a `Etiqueta { id, nombre, color }`.
+    etiqueta: { id: 3, nombre: "Nuevo", color: "VERDE" },
     categoria: { id: 1002, nombre: "Cocina" },
     vistas: 12,
     compartidos: 3,
@@ -319,5 +328,45 @@ describe("precio efectivo en los mappers", () => {
     });
 
     expect(mapeado.precioEfectivo).toBe("899");
+  });
+});
+
+describe("mapEtiqueta", () => {
+  it("resuelve el color a canales", () => {
+    expect(mapEtiqueta({ id: 3, nombre: "Nuevo", color: "VERDE" })).toEqual({
+      id: 3,
+      nombre: "Nuevo",
+      colorFondo: "46 125 50",
+      colorTexto: "255 255 255",
+    });
+  });
+
+  it("sin color emite los dos campos en null (el chip cae a su token de siempre)", () => {
+    expect(mapEtiqueta({ id: 3, nombre: "Nuevo", color: null })).toEqual({
+      id: 3,
+      nombre: "Nuevo",
+      colorFondo: null,
+      colorTexto: null,
+    });
+  });
+
+  it("un producto sin etiqueta da null", () => {
+    expect(mapEtiqueta(null)).toBeNull();
+    expect(mapEtiqueta(undefined)).toBeNull();
+  });
+});
+
+// El guard de la trampa: sin la relación en LIST_SELECT, la etiqueta llega
+// undefined en el listado y la grilla muestra un vacío plausible mientras el
+// detalle sigue funcionando.
+describe("forma de lectura", () => {
+  it("LIST_SELECT trae la etiqueta con su color", () => {
+    expect(LIST_SELECT.etiqueta).toEqual({
+      select: { id: true, nombre: true, color: true },
+    });
+  });
+
+  it("PRODUCT_INCLUDE trae la etiqueta", () => {
+    expect(PRODUCT_INCLUDE.etiqueta).toBe(true);
   });
 });

@@ -10,6 +10,7 @@
 import { calcularPrecio, estadoDePrecio } from "../lib/precios.js";
 import { precioConDescuento } from "../lib/precioEfectivo.js";
 import { urlDeFoto } from "../lib/fotos.js";
+import { resolverColorEtiqueta } from "../lib/coloresEtiqueta.js";
 
 export const PRODUCT_INCLUDE = {
   caracteristicas: true,
@@ -18,6 +19,7 @@ export const PRODUCT_INCLUDE = {
   categoria: true,
   listas: { orderBy: { orden: "asc" } },
   especificaciones: { orderBy: { orden: "asc" } },
+  etiqueta: true,
 };
 
 /**
@@ -54,7 +56,10 @@ export const LIST_SELECT = {
   // precios, que es el consumidor principal de este listado en el panel.
   costo: true,
   coeficiente: true,
-  etiqueta: true,
+  // Con `select` la relación tiene que declarar sus propias columnas. `color`
+  // viaja porque `mapEtiqueta` lo resuelve a canales; el id crudo de la paleta
+  // no sale al cliente.
+  etiqueta: { select: { id: true, nombre: true, color: true } },
   visibleEnCatalogo: true,
   stock: true,
   destacado: true,
@@ -137,6 +142,28 @@ function camposDePrecio(producto, esAdmin) {
 }
 
 /**
+ * La etiqueta con su color YA RESUELTO a canales.
+ *
+ * El frontend no tiene copia de la paleta: `Badge` y `ProductCard` pintan con
+ * `style` inline lo que reciben acá. Regla 1 de la metodología — el dato
+ * derivado viaja en la respuesta.
+ *
+ * `colorFondo: null` significa "pintá como siempre" y cada superficie cae a su
+ * token por defecto (`bg-tertiary` en la ficha, `bg-secondary-container` en la
+ * card). No es un error ni un dato faltante.
+ */
+export function mapEtiqueta(etiqueta) {
+  if (!etiqueta) return null;
+  const color = resolverColorEtiqueta(etiqueta.color);
+  return {
+    id: etiqueta.id,
+    nombre: etiqueta.nombre,
+    colorFondo: color?.fondo ?? null,
+    colorTexto: color?.texto ?? null,
+  };
+}
+
+/**
  * Mapea una fila leída con `LIST_SELECT` a la forma que devuelve el listado.
  *
  * Es un subconjunto estricto de `mapProducto`: cada clave que emite existe
@@ -156,7 +183,7 @@ export function mapProductoListado(producto, { esAdmin = false, descuento = null
     sku: producto.sku,
     nombre: producto.nombre,
     precio: producto.precio.toString(),
-    etiqueta: producto.etiqueta,
+    etiqueta: mapEtiqueta(producto.etiqueta),
     categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
     vistas: producto.vistas,
     compartidos: producto.compartidos,
@@ -199,7 +226,7 @@ export function mapProducto(producto, { esAdmin = false, descuento = null } = {}
     nombre: producto.nombre,
     descripcion: producto.descripcion,
     precio: producto.precio.toString(),
-    etiqueta: producto.etiqueta,
+    etiqueta: mapEtiqueta(producto.etiqueta),
     categoria: producto.categoria ? { id: producto.categoria.id, nombre: producto.categoria.nombre } : null,
     vistas: producto.vistas,
     compartidos: producto.compartidos,
@@ -277,7 +304,8 @@ export function mapProductoParaN8n(producto) {
     nombre: completo.nombre,
     descripcion: completo.descripcion,
     categoria: completo.categoria?.nombre ?? null,
-    etiqueta: completo.etiqueta,
+    // n8n arma texto para impresión: le sirve el nombre, no el color.
+    etiqueta: completo.etiqueta?.nombre ?? null,
     fraseComercial: completo.fraseComercial,
     porQueLoVasAQuerer: completo.porQueLoVasAQuerer,
     tePasaEsto: completo.tePasaEsto,
