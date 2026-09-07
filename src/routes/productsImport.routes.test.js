@@ -136,7 +136,7 @@ describe("POST /api/products/import", () => {
       .attach(
         "archivo",
         await xlsxCon([
-          { nombre: "Vela", descripcion: "Lavanda", costo: 1500, categoria: "Velas" },
+          { nombre: "Vela", descripcion: "Lavanda", costo: 1500, categoria: "Velas", etiqueta: "Nuevo" },
           { nombre: "Difusor", descripcion: "Cítrico", costo: 2000 },
         ]),
         "p.xlsx",
@@ -149,6 +149,37 @@ describe("POST /api/products/import", () => {
       expect(llamada[0].data.visibleEnCatalogo).toBe(false);
     }
     expect(productCreateMock.mock.calls[0][0].data.categoriaId).toBe(7);
+    // Guarda del bug que motivó esta tarea: `dataDeAlta` escribía
+    // `etiqueta: datos.etiqueta` contra una columna que ya no existe. Un
+    // objectContaining con un valor CONCRETO (nunca `undefined`) es la única
+    // forma de que este test no pueda quedarse verde con el campo mal escrito.
+    expect(productCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ etiquetaId: 2 }),
+      }),
+    );
+    // La segunda fila no trae `etiqueta`: celda vacía = sin etiqueta, no un error.
+    expect(productCreateMock.mock.calls[1][0].data.etiquetaId).toBeNull();
+  });
+
+  it("rechaza el archivo si una etiqueta no existe, y no crea ningún producto", async () => {
+    const res = await request(buildApp())
+      .post("/api/products/import")
+      .set("Authorization", authHeader)
+      .attach(
+        "archivo",
+        await xlsxCon([
+          { nombre: "Vela", descripcion: "Lavanda", costo: 1500, etiqueta: "Inventada" },
+        ]),
+        "p.xlsx",
+      );
+
+    expect(res.status).toBe(400);
+    expect(res.body.errores).toEqual([
+      expect.objectContaining({ fila: 2, columna: "etiqueta" }),
+    ]);
+    expect(productCreateMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 
   it("ATOMICIDAD: una fila inválida entre varias no crea NINGÚN producto", async () => {
