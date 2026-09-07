@@ -281,7 +281,10 @@ describe("etiqueta contra la tabla", () => {
     expect(errores.map((e) => e.motivo).join(" ")).toContain("Nuevo");
   });
 
-  it("sin etiquetas cargadas, cualquier nombre no vacío es error de fila", () => {
+  // Bug de la review final: con la tabla vacía el mensaje salía
+  // 'La etiqueta "Nuevo" no existe. Válidas: .' — un punto colgando, sin
+  // decir por qué. Mensaje propio cuando no hay NINGUNA etiqueta creada.
+  it("sin etiquetas cargadas, cualquier nombre no vacío es error de fila con mensaje propio", () => {
     const { datos, errores } = validarFila(filaValida({ etiqueta: "Nuevo" }), 2, CATEGORIAS);
 
     expect(datos).toBeNull();
@@ -290,7 +293,8 @@ describe("etiqueta contra la tabla", () => {
         fila: 2,
         columna: "etiqueta",
         valor: "Nuevo",
-        motivo: 'La etiqueta "Nuevo" no existe. Válidas: .',
+        motivo:
+          "Todavía no hay etiquetas creadas. Crealas desde Configuración › Etiquetas o dejá la celda vacía.",
       },
     ]);
   });

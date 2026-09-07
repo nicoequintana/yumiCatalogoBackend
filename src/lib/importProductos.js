@@ -219,11 +219,11 @@ function validarCamposDeProducto(fila, numeroFila, categoriasPorNombre, etiqueta
       (e) => e.nombre.toLowerCase() === nombreEtiqueta.toLowerCase(),
     );
     if (!encontrada) {
-      error(
-        "etiqueta",
-        fila.etiqueta,
-        `La etiqueta "${nombreEtiqueta}" no existe. Válidas: ${etiquetas.map((e) => e.nombre).join(", ")}.`,
-      );
+      const motivo =
+        etiquetas.length === 0
+          ? "Todavía no hay etiquetas creadas. Crealas desde Configuración › Etiquetas o dejá la celda vacía."
+          : `La etiqueta "${nombreEtiqueta}" no existe. Válidas: ${etiquetas.map((e) => e.nombre).join(", ")}.`;
+      error("etiqueta", fila.etiqueta, motivo);
     } else {
       etiquetaId = encontrada.id;
     }
