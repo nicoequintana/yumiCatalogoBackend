@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
 import { exigirIdsExistentes } from "../lib/idsExistentes.js";
+import { parsearIdEntero } from "../lib/enteroSeguro.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { subtotalDeItem } from "../lib/dinero.js";
@@ -589,6 +590,20 @@ export async function eliminar(req, res, next) {
  *   no sabe sumar la expresión `precioUnitario × cantidad`;
  * - en qué **promociones** participa cada producto.
  *
+ * Acepta dos filtros, `categoria` y `etiqueta` (los ids, no el texto), con el
+ * mismo criterio que `etiqueta`/`promocion`/`campania` de
+ * `products.controller.js`: `parsearIdEntero` — un valor que no parsea a un
+ * entero positivo y seguro (`Number.isSafeInteger`) NO arma filtro, nunca
+ * 400/500. Antes `categoria` se parseaba con `Number.isInteger`, que acepta
+ * `"1e21"` como entero válido y revienta en Prisma con un 500 real (excede el
+ * entero de 64 bits de SQL Server); `parsearIdEntero` también descarta 0 y
+ * negativos, que acá no tienen motivo para colar un filtro que nunca puede
+ * matchear nada. **Esto difiere a propósito de `?categoria=` en
+ * `/products`**, que es PÚBLICO y deja pasar 0/negativos con
+ * `esEnteroSeguro` para que el filtro devuelva vacío en vez de "ignorarse" y
+ * mostrar el catálogo entero a un anónimo — esta pantalla es admin-only y esa
+ * distinción de seguridad no aplica.
+ *
  * ⚠️ **Las ventas se agregan SOLO sobre los productos de la página.** Recorrer
  * el histórico entero para pintar veinte filas se traería 20.000 órdenes en
  * cada carga de la pantalla.
@@ -599,8 +614,12 @@ export async function listadoComercial(req, res, next) {
 
     const where = {};
     if (req.query.categoria !== undefined) {
-      const categoriaId = Number(req.query.categoria);
-      if (Number.isInteger(categoriaId)) where.categoriaId = categoriaId;
+      const categoriaId = parsearIdEntero(req.query.categoria);
+      if (categoriaId !== null) where.categoriaId = categoriaId;
+    }
+    if (req.query.etiqueta !== undefined) {
+      const etiquetaId = parsearIdEntero(req.query.etiqueta);
+      if (etiquetaId !== null) where.etiquetaId = etiquetaId;
     }
 
     const [total, productos] = await Promise.all([

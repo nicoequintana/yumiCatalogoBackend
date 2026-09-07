@@ -759,6 +759,67 @@ describe("GET /api/promociones/productos — el listado comercial", () => {
     ]);
   });
 
+  it("filtra por categoría cuando viene ?categoria=", async () => {
+    await request(buildApp())
+      .get("/api/promociones/productos?categoria=7")
+      .set("Authorization", authHeader);
+
+    const { where } = productMock.findMany.mock.calls[0][0];
+    expect(where.categoriaId).toBe(7);
+  });
+
+  it("filtra por etiqueta cuando viene ?etiqueta=", async () => {
+    await request(buildApp())
+      .get("/api/promociones/productos?etiqueta=5")
+      .set("Authorization", authHeader);
+
+    const { where } = productMock.findMany.mock.calls[0][0];
+    expect(where.etiquetaId).toBe(5);
+  });
+
+  it("un id de categoría 0 o negativo no arma ningún filtro (parsearIdEntero los descarta)", async () => {
+    for (const invalido of ["0", "-3"]) {
+      productMock.findMany.mockClear();
+      await request(buildApp())
+        .get(`/api/promociones/productos?categoria=${invalido}`)
+        .set("Authorization", authHeader);
+      const { where } = productMock.findMany.mock.calls[0][0];
+      expect(where.categoriaId, `categoria=${invalido}`).toBeUndefined();
+    }
+  });
+
+  it("un id de etiqueta 0 o negativo no arma ningún filtro", async () => {
+    for (const invalido of ["0", "-3"]) {
+      productMock.findMany.mockClear();
+      await request(buildApp())
+        .get(`/api/promociones/productos?etiqueta=${invalido}`)
+        .set("Authorization", authHeader);
+      const { where } = productMock.findMany.mock.calls[0][0];
+      expect(where.etiquetaId, `etiqueta=${invalido}`).toBeUndefined();
+    }
+  });
+
+  it("un id de categoría fuera del rango representable (1e21) no revienta y no filtra", async () => {
+    // `Number.isInteger(1e21)` da `true` —es un entero perfectamente válido
+    // para JS— pero excede el entero de 64 bits de SQL Server y Prisma
+    // revienta con un 500 real. `parsearIdEntero` lo descarta.
+    await request(buildApp())
+      .get("/api/promociones/productos?categoria=1e21")
+      .set("Authorization", authHeader);
+
+    const { where } = productMock.findMany.mock.calls[0][0];
+    expect(where.categoriaId).toBeUndefined();
+  });
+
+  it("un id de etiqueta fuera del rango representable (1e21) no revienta y no filtra", async () => {
+    await request(buildApp())
+      .get("/api/promociones/productos?etiqueta=1e21")
+      .set("Authorization", authHeader);
+
+    const { where } = productMock.findMany.mock.calls[0][0];
+    expect(where.etiquetaId).toBeUndefined();
+  });
+
   it("devuelve el sobre paginado del proyecto", async () => {
     const res = await request(buildApp())
       .get("/api/promociones/productos")
