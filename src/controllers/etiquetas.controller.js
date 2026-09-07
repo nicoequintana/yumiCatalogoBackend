@@ -121,7 +121,10 @@ export async function crear(req, res, next) {
 
   try {
     const color = parsearColor(req.body) ?? null;
-    const etiqueta = await prisma.etiqueta.create({ data: { nombre, color } });
+    const etiqueta = await prisma.etiqueta.create({
+      data: { nombre, color },
+      include: { _count: { select: { productos: true } } },
+    });
 
     logAudit(req, {
       accion: "CREAR",
@@ -150,7 +153,11 @@ export async function actualizar(req, res, next) {
 
     let etiqueta;
     try {
-      etiqueta = await prisma.etiqueta.update({ where: { id }, data: { nombre, color } });
+      etiqueta = await prisma.etiqueta.update({
+        where: { id },
+        data: { nombre, color },
+        include: { _count: { select: { productos: true } } },
+      });
     } catch (err) {
       throw traducirNombreRepetido(err, nombre);
     }

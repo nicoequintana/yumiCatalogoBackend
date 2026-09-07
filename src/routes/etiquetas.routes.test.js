@@ -132,6 +132,7 @@ describe("POST /api/etiquetas", () => {
     expect(res.status).toBe(201);
     expect(etiquetaMock.create).toHaveBeenCalledWith({
       data: { nombre: "Oferta", color: "ROJO" },
+      include: { _count: { select: { productos: true } } },
     });
     expect(res.body).toEqual({
       id: 7,
@@ -187,6 +188,30 @@ describe("POST /api/etiquetas", () => {
     expect(res.body.error).toContain("Nuevo");
   });
 
+  // Bug de la review final: `create` no llevaba el `include` del conteo, así
+  // que una etiqueta creada con productos ya asociados (p.ej. por una carga
+  // en simultáneo) respondía `cantidadProductos: 0` mintiendo. Mismo criterio
+  // que `cantidadFotos`: lo tienen que emitir los dos mappers.
+  it("el create pide el conteo de productos, y la respuesta lo refleja", async () => {
+    etiquetaMock.create.mockResolvedValue({
+      id: 7,
+      nombre: "Oferta",
+      color: "ROJO",
+      _count: { productos: 8 },
+    });
+
+    const res = await request(buildApp())
+      .post("/api/etiquetas")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Oferta", color: "ROJO" });
+
+    expect(etiquetaMock.create).toHaveBeenCalledWith({
+      data: { nombre: "Oferta", color: "ROJO" },
+      include: { _count: { select: { productos: true } } },
+    });
+    expect(res.body.cantidadProductos).toBe(8);
+  });
+
   it("audita la creación", async () => {
     etiquetaMock.create.mockResolvedValue({ id: 7, nombre: "Oferta", color: null });
 
@@ -228,6 +253,7 @@ describe("PUT /api/etiquetas/:id", () => {
     expect(etiquetaMock.update).toHaveBeenCalledWith({
       where: { id: 1 },
       data: { nombre: undefined, color: null },
+      include: { _count: { select: { productos: true } } },
     });
     expect(res.body.colorFondo).toBeNull();
   });
@@ -244,7 +270,30 @@ describe("PUT /api/etiquetas/:id", () => {
     expect(etiquetaMock.update).toHaveBeenCalledWith({
       where: { id: 1 },
       data: { nombre: "Novedad", color: undefined },
+      include: { _count: { select: { productos: true } } },
     });
+  });
+
+  it("el update pide el conteo de productos, y la respuesta lo refleja", async () => {
+    etiquetaMock.findUnique.mockResolvedValue({ id: 1, nombre: "Nuevo", color: "VERDE" });
+    etiquetaMock.update.mockResolvedValue({
+      id: 1,
+      nombre: "Nuevo",
+      color: "ROJO",
+      _count: { productos: 8 },
+    });
+
+    const res = await request(buildApp())
+      .put("/api/etiquetas/1")
+      .set("Authorization", authHeader)
+      .send({ color: "ROJO" });
+
+    expect(etiquetaMock.update).toHaveBeenCalledWith({
+      where: { id: 1 },
+      data: { nombre: undefined, color: "ROJO" },
+      include: { _count: { select: { productos: true } } },
+    });
+    expect(res.body.cantidadProductos).toBe(8);
   });
 
   it("400 cuando no viene ni nombre ni color", async () => {
