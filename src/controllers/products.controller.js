@@ -598,25 +598,27 @@ export const STOCK_BAJO_UMBRAL = 3;
  * GET /products/etiquetas — las etiquetas EN USO, para el filtro del listado
  * del admin.
  *
- * `Product.etiqueta` es texto libre: las "sugeridas" del formulario no son una
- * lista cerrada, así que un select armado con constantes no podría ofrecer una
- * etiqueta que existe en la base pero nadie sugirió — un filtro que miente por
- * omisión. La consulta es un `distinct` sobre la columna, nunca traerse el
- * catálogo para deduplicar en memoria.
+ * **Devuelve las que tienen al menos un producto, NO todas las creadas**, y es
+ * deliberado: ofrecer en el filtro una etiqueta sin productos manda al operador
+ * a una grilla vacía — la misma trampa que `cantidadProductos` vs
+ * `cantidadPublicados` en Categorías. El ABM completo vive en
+ * `GET /etiquetas`, que sí las trae todas.
+ *
+ * Desde que `Etiqueta` es una tabla, la consulta es un `some` sobre la relación
+ * en vez del `distinct` sobre la columna que había cuando era texto libre.
  *
  * Requiere auth: enumera datos del panel (incluye etiquetas de productos
  * ocultos), y el catálogo público no la necesita.
  */
 export async function etiquetas(req, res, next) {
   try {
-    const filas = await prisma.product.findMany({
-      where: { etiqueta: { not: null } },
-      select: { etiqueta: true },
-      distinct: ["etiqueta"],
-      orderBy: { etiqueta: "asc" },
+    const filas = await prisma.etiqueta.findMany({
+      where: { productos: { some: {} } },
+      select: { id: true, nombre: true },
+      orderBy: [{ nombre: "asc" }, { id: "asc" }],
     });
 
-    res.json({ etiquetas: filas.map((fila) => fila.etiqueta) });
+    res.json({ etiquetas: filas });
   } catch (err) {
     next(err);
   }

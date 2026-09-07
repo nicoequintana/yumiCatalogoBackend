@@ -14,6 +14,7 @@ const findManyMock = vi.fn();
 const countMock = vi.fn().mockResolvedValue(0);
 const findUniqueMock = vi.fn();
 const updateMock = vi.fn();
+const etiquetaFindManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -25,6 +26,9 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => findUniqueMock(...args),
       update: (...args) => updateMock(...args),
       count: (...args) => countMock(...args),
+    },
+    etiqueta: {
+      findMany: (...args) => etiquetaFindManyMock(...args),
     },
   },
 }));
@@ -170,29 +174,36 @@ describe("GET /api/products?etiqueta=", () => {
 });
 
 describe("GET /api/products/etiquetas", () => {
-  it("exige auth: las etiquetas en uso son dato del panel, no del catálogo público", async () => {
+  it("sin token responde 401", async () => {
     const res = await request(buildApp()).get("/api/products/etiquetas");
-
     expect(res.status).toBe(401);
-    expect(findManyMock).not.toHaveBeenCalled();
+    expect(etiquetaFindManyMock).not.toHaveBeenCalled();
   });
 
-  it("devuelve las etiquetas distintas en uso, ordenadas y sin null", async () => {
-    findManyMock.mockResolvedValue([{ etiqueta: "Exclusivo" }, { etiqueta: "Nuevo" }]);
+  // Sigue devolviendo las EN USO, no todas las creadas: ofrecer en el filtro
+  // una etiqueta sin productos manda al operador a una grilla vacía. Misma
+  // trampa que `cantidadProductos` vs `cantidadPublicados` en Categorías.
+  it("devuelve solo las etiquetas EN USO, con id y nombre", async () => {
+    etiquetaFindManyMock.mockResolvedValue([
+      { id: 2, nombre: "Exclusivo" },
+      { id: 5, nombre: "Nuevo" },
+    ]);
 
     const res = await request(buildApp())
       .get("/api/products/etiquetas")
       .set("Authorization", authHeader);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ etiquetas: ["Exclusivo", "Nuevo"] });
-    // La forma de la consulta es el contrato: distinct sobre la columna, nunca
-    // traerse el catálogo entero para deduplicar en memoria.
-    expect(findManyMock.mock.calls[0][0]).toEqual({
-      where: { etiqueta: { not: null } },
-      select: { etiqueta: true },
-      distinct: ["etiqueta"],
-      orderBy: { etiqueta: "asc" },
+    expect(res.body).toEqual({
+      etiquetas: [
+        { id: 2, nombre: "Exclusivo" },
+        { id: 5, nombre: "Nuevo" },
+      ],
+    });
+    expect(etiquetaFindManyMock).toHaveBeenCalledWith({
+      where: { productos: { some: {} } },
+      select: { id: true, nombre: true },
+      orderBy: [{ nombre: "asc" }, { id: "asc" }],
     });
   });
 });
