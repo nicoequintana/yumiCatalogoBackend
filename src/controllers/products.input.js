@@ -354,6 +354,31 @@ export function parsearCategoriaId(valor) {
   return id;
 }
 
+/**
+ * Resuelve `etiquetaId` del body. Tres estados distintos, no dos:
+ *
+ * - ausente       → `undefined`, o sea "no la toques" (clave del PUT parcial)
+ * - `""` o `null` → `null`, o sea "sacale la etiqueta"
+ * - un id         → el entero, previa verificación de que la fila existe
+ *
+ * La verificación NO es defensiva de más: la FK es `NO ACTION`, así que un id
+ * borrado en el medio explota como `P2003` y el handler lo traduce a un 500
+ * opaco. El admin leería "error del servidor" cuando su pantalla está vieja.
+ * Mismo criterio que `exigirIdsExistentes` (`lib/idsExistentes.js`).
+ */
+export async function parsearEtiquetaId(prisma, valor) {
+  if (valor === undefined) return undefined;
+  if (valor === null || valor === "") return null;
+
+  const id = Number(valor);
+  if (!Number.isInteger(id)) throw httpError(400, "La etiqueta elegida no es válida.");
+
+  const existe = await prisma.etiqueta.findUnique({ where: { id }, select: { id: true } });
+  if (!existe) throw httpError(400, "La etiqueta elegida ya no existe. Recargá la página.");
+
+  return id;
+}
+
 export function validarArchivos({ fotosNuevas, fotosExistentesCount, video }) {
   if (fotosExistentesCount + fotosNuevas.length > MAX_FOTOS) {
     throw httpError(400, `Un producto admite un máximo de ${MAX_FOTOS} fotos.`);

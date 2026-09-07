@@ -38,6 +38,7 @@ import {
   parseFotosExistentes,
   parseListas,
   parsearCategoriaId,
+  parsearEtiquetaId,
   parsearOrdenFotos,
   validarArchivos,
   validarCamposBase,
@@ -918,7 +919,7 @@ export async function crear(req, res, next) {
   let producto = null;
   try {
     const {
-      nombre, descripcion, etiqueta, categoriaId, stock, destacado,
+      nombre, descripcion, etiquetaId, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
     validarCamposBase({ nombre, descripcion }, { esCreacion: true });
@@ -926,6 +927,11 @@ export async function crear(req, res, next) {
     // Guarda ANTES de tocar la base: un `categoriaId` no numérico es un 400
     // limpio, no un `NaN` que revienta en Prisma como 500.
     const categoriaIdParseado = parsearCategoriaId(categoriaId);
+    // Misma guarda que la categoría, pero con verificación de existencia:
+    // la FK de `etiquetaId` es `NO ACTION`. En el alta un `undefined` (nadie
+    // mandó el campo) se escribe igual como `null` — acá no hay "no tocar"
+    // que valga, porque no hay fila previa.
+    const etiquetaIdParseado = (await parsearEtiquetaId(prisma, etiquetaId)) ?? null;
     // Obligatorios: de este par sale el precio de venta, y sin él la columna
     // `precio` (NOT NULL) no tiene ningún valor correcto que escribir.
     const costeo = validarCostoYCoeficiente(
@@ -977,7 +983,7 @@ export async function crear(req, res, next) {
             precio: String(precioCalculado),
             costo: costeo.costo,
             coeficiente: costeo.coeficiente,
-            etiqueta: etiqueta?.trim() || null,
+            etiquetaId: etiquetaIdParseado,
             categoriaId: categoriaIdParseado,
             sku: generarSku(nombre.trim()),
             stock: merchandising.stock ?? 0,
@@ -1067,7 +1073,7 @@ export async function actualizar(req, res, next) {
     if (!existente) throw httpError(404, "Producto no encontrado.");
 
     const {
-      nombre, descripcion, etiqueta, categoriaId, stock, destacado,
+      nombre, descripcion, etiquetaId, categoriaId, stock, destacado,
       fraseComercial, porQueLoVasAQuerer, tePasaEsto, costo, coeficiente,
     } = req.body;
     validarCamposBase({ nombre, descripcion }, { esCreacion: false });
@@ -1077,6 +1083,9 @@ export async function actualizar(req, res, next) {
     // (el PUT es parcial); `null`/vacío la pone en "sin categoría".
     const categoriaIdParseado =
       categoriaId !== undefined ? parsearCategoriaId(categoriaId) : undefined;
+    // `parsearEtiquetaId` ya devuelve `undefined` para "no la toques": el PUT
+    // es parcial, mismo criterio que el resto de los campos opcionales acá.
+    const etiquetaIdParseado = await parsearEtiquetaId(prisma, etiquetaId);
     // Modo "edicion": omitir el costeo está bien —el PUT es parcial, y un
     // request que solo reordena fotos no tiene por qué hablar de plata— pero
     // BORRARLO no, porque dejaría al producto sin forma de recalcular su precio.
@@ -1140,7 +1149,7 @@ export async function actualizar(req, res, next) {
             // cambio de precio al catálogo público sin ninguna revisión.
             costo: costeo.costo,
             coeficiente: costeo.coeficiente,
-            etiqueta: etiqueta !== undefined ? etiqueta?.trim() || null : undefined,
+            etiquetaId: etiquetaIdParseado,
             categoriaId: categoriaIdParseado,
             stock: merchandising.stock,
             destacado: merchandising.destacado,

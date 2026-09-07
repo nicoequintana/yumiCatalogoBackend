@@ -15,6 +15,7 @@ const listaDeleteManyMock = vi.fn();
 const listaCreateManyMock = vi.fn();
 const especificacionDeleteManyMock = vi.fn();
 const especificacionCreateManyMock = vi.fn();
+const etiquetaFindUniqueMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -24,6 +25,9 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => findUniqueMock(...args),
       findMany: (...args) => findManyMock(...args),
       findUniqueOrThrow: (...args) => findUniqueOrThrowMock(...args),
+    },
+    etiqueta: {
+      findUnique: (...args) => etiquetaFindUniqueMock(...args),
     },
     $transaction: async (fn) =>
       fn({
@@ -92,6 +96,7 @@ beforeEach(() => {
   listaCreateManyMock.mockReset();
   especificacionDeleteManyMock.mockReset();
   especificacionCreateManyMock.mockReset();
+  etiquetaFindUniqueMock.mockReset();
 });
 
 function post(fields) {
@@ -220,5 +225,59 @@ describe("PUT /api/products/:id reemplaza listas y especificaciones (full replac
     expect(listaCreateManyMock).toHaveBeenCalledWith({
       data: [{ texto: "Nuevo beneficio", tipo: "BENEFICIO", orden: 0, productId: 42 }],
     });
+  });
+});
+
+describe("etiquetaId en la escritura de producto", () => {
+  it("guarda la etiqueta cuando el id existe", async () => {
+    etiquetaFindUniqueMock.mockResolvedValue({ id: 3, nombre: "Nuevo" });
+    createMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await post({ etiquetaId: "3" });
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ etiquetaId: 3 }),
+      }),
+    );
+  });
+
+  // Sin esto la escritura explota como P2003 y sale como 500 opaco: el admin
+  // lee "error del servidor" cuando su pantalla simplemente está vieja.
+  it("400 cuando el id de etiqueta no existe", async () => {
+    etiquetaFindUniqueMock.mockResolvedValue(null);
+
+    const res = await post({ etiquetaId: "99" });
+
+    expect(res.status).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("una cadena vacía saca la etiqueta", async () => {
+    createMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await post({ etiquetaId: "" });
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ etiquetaId: null }),
+      }),
+    );
+  });
+
+  it("ausente en un PUT significa `no la toques`", async () => {
+    findUniqueMock.mockResolvedValue({ ...productoBase, id: 1, etiquetaId: 3, fotos: [], video: null });
+    updateMock.mockResolvedValue({ ...productoBase, fotos: [], video: null });
+
+    await request(buildApp())
+      .put("/api/products/1")
+      .set("Authorization", authHeader)
+      .field("nombre", "Producto editado");
+
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ etiquetaId: undefined }),
+      }),
+    );
   });
 });
