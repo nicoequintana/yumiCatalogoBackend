@@ -4,7 +4,12 @@ import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { subtotalDeItem } from "../lib/dinero.js";
 import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitados.js";
-import { MAX_ORDENES_HISTORICO } from "./admin.controller.js";
+import {
+  MAX_ORDENES_HISTORICO,
+  aClaveDia,
+  hayPeriodoPedido,
+  parsearPeriodo,
+} from "./admin.controller.js";
 import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN, ESTADOS_CON_STOCK_TOMADO, listaDeEstados } from "../lib/estadosOrden.js";
@@ -272,32 +277,76 @@ export async function crear(req, res, next) {
 }
 
 /**
- * Construye el `where` de `listar()` a partir de los filtros opcionales de
- * query string: estado (match exacto), rango de fechas sobre `createdAt`
- * (`desde`/`hasta`, ISO), y dni/nombre del cliente (relation filter contra
- * `Cliente`, vía `where.cliente`). Todos combinables.
+ * Construye el `where` de `listar()` (y el de `resumen()`) a partir de los
+ * filtros opcionales de query string: estado (match exacto), período sobre
+ * `createdAt` (`desde`/`hasta`/`dias`), y dni/nombre del cliente (relation
+ * filter contra `Cliente`, vía `where.cliente`). Todos combinables.
  *
- * Mismo criterio que `products.controller.js`'s `construirFiltrosListado`:
- * un valor malformado (fecha inválida, estado desconocido) nunca tira
- * 400/500 acá — simplemente esa porción del filtro se ignora.
+ * Mismo criterio que `products.controller.js`'s `construirFiltrosListado`, y
+ * dicho sin ambigüedad porque acá los dos comportamientos posibles no dan lo
+ * mismo: **un valor malformado NUNCA tira 400/500 y NUNCA cae a un default —
+ * esa porción del filtro simplemente NO SE APLICA.**
+ *
+ *   - `?estado=NO_EXISTE` → no filtra por estado (el listado sigue trayendo los
+ *     cuatro).
+ *   - `?desde=basura`, `?hasta=31/01/2026`, `?dias=abc`, y también un
+ *     `?desde=` vacío → no acotan el período, y la respuesta no trae `periodo`.
+ *   - `?dni=`/`?nombre=` vacíos → no filtran por cliente.
+ *
+ * ⚠️ La regla del período fue lo suficientemente sutil como para haber estado
+ * mal: la guarda miraba si la CLAVE existía, así que un `?desde=basura` la daba
+ * por presente, `parsearPeriodo` no la sabía leer y caía a su default de últimos
+ * 30 días. Eso no es ignorar el filtro: es CAMBIAR el universo de resultados, y
+ * sale con 200, sin `recortado: true` y sin ninguna otra señal. Un link
+ * compartido con un typo en la fecha escondía el histórico entero, en una
+ * pantalla que RESPONDE "¿hay órdenes?".
+ *
+ * Por eso quien decide es `hayPeriodoPedido` (`admin.controller.js`), que
+ * comparte los parsers con `parsearPeriodo` en vez de tener su propia lectura de
+ * "¿esta fecha sirve?" — que es exactamente lo que las había dejado en
+ * desacuerdo. El default de 30 días sigue vivo y sigue siendo correcto para las
+ * cuatro pantallas de analytics, donde el período SIEMPRE existe y la respuesta
+ * declara cuál se aplicó.
+ *
+ * Devuelve `{ where, periodo }` y no solo el `where` porque el período
+ * RESUELTO tiene que viajar a la respuesta: la pantalla necesita saber qué
+ * rango se aplicó realmente (y si se recortó), igual que en las cuatro
+ * pantallas de analytics. `periodo` es `null` cuando nadie pidió uno.
+ *
+ * `incluirEstado: false` es lo que necesita `resumen()`: ese endpoint cuenta
+ * órdenes POR estado, así que respetar el filtro de estado le daría a cada
+ * número el suyo propio y tres de los cuatro saldrían en 0.
  */
-function construirFiltrosOrdenes(query) {
+function construirFiltrosOrdenes(query, { incluirEstado = true } = {}) {
   const where = {};
 
-  if (query.estado !== undefined && ESTADOS_ORDEN.includes(query.estado)) {
+  if (incluirEstado && query.estado !== undefined && ESTADOS_ORDEN.includes(query.estado)) {
     where.estado = query.estado;
   }
 
-  const rangoFechas = {};
-  if (query.desde !== undefined) {
-    const desde = new Date(query.desde);
-    if (!Number.isNaN(desde.getTime())) rangoFechas.gte = desde;
+  // La guarda es OBLIGATORIA: `parsearPeriodo` SIEMPRE devuelve un rango (30
+  // días por defecto), así que aplicarlo sin condición dejaría a un
+  // `GET /ordenes` pelado devolviendo solo el último mes — el preset "Todo" de
+  // la pantalla mostraría menos órdenes de las que hay, con 200 y sin error.
+  //
+  // El parseo va por `parsearPeriodo` y no a mano: `new Date("2026-01-31")` es
+  // medianoche UTC, o sea las 21:00 del 30 en Argentina, así que un `lte`
+  // armado acá se comía el día 31 entero y corría los dos cortes tres horas.
+  // Además es la única casa del calendario argentino: un segundo parser son dos
+  // definiciones de "día" que se desincronizan sin que nada falle.
+  // Y la guarda pregunta si hay un parámetro de rango UTILIZABLE, no si alguna
+  // de las tres claves está presente: ver el ⚠️ del docstring: con
+  // `!== undefined`, un `?desde=basura` o un `?desde=` vacío disparaban el
+  // default de 30 días. `hayPeriodoPedido` comparte los parsers con
+  // `parsearPeriodo`, así que las dos no pueden opinar distinto sobre el mismo
+  // valor.
+  const hayPeriodo = hayPeriodoPedido(query);
+
+  let periodo = null;
+  if (hayPeriodo) {
+    periodo = parsearPeriodo(query);
+    where.createdAt = { gte: periodo.desde, lte: periodo.hastaInclusive };
   }
-  if (query.hasta !== undefined) {
-    const hasta = new Date(query.hasta);
-    if (!Number.isNaN(hasta.getTime())) rangoFechas.lte = hasta;
-  }
-  if (Object.keys(rangoFechas).length > 0) where.createdAt = rangoFechas;
 
   const filtroCliente = {};
   if (typeof query.dni === "string" && query.dni !== "") {
@@ -313,13 +362,17 @@ function construirFiltrosOrdenes(query) {
   }
   if (Object.keys(filtroCliente).length > 0) where.cliente = filtroCliente;
 
-  return where;
+  return { where, periodo };
 }
 
 /**
  * GET /api/ordenes — listado paginado para el panel admin, protegido con
- * requireAuth. Filtros combinables por query string (estado/desde/hasta/
+ * requireAuth. Filtros combinables por query string (estado/desde/hasta/dias/
  * dni/nombre), orden por createdAt desc (más reciente primero).
+ *
+ * El sobre es el de siempre (`{ data, page, pageSize, total }`) más una clave
+ * ADITIVA `periodo`, que viaja SOLO cuando el llamador acotó un rango. Sin
+ * parámetros de fecha el listado sigue devolviendo el histórico completo.
  *
  * Responde con la forma de LISTADO (`mapOrdenListado`), que no es la del
  * detalle: cliente completo, `total` en plata, `cantidadItems` y un `resumen`
@@ -342,7 +395,7 @@ export async function listar(req, res, next) {
   try {
     const { page, pageSize } = parsearPaginacion(req.query);
 
-    const where = construirFiltrosOrdenes(req.query);
+    const { where, periodo } = construirFiltrosOrdenes(req.query);
 
     const [total, ordenes] = await Promise.all([
       prisma.orden.count({ where }),
@@ -360,7 +413,73 @@ export async function listar(req, res, next) {
     // test — la fila cruda de Prisma salía sin etiqueta y el panel caía al
     // respaldo con la clave cruda. `esAdmin: true` porque la ruta está detrás
     // de `requireAuth`.
-    res.json({ data: ordenes.map(mapOrdenListado), page, pageSize, total });
+    res.json({
+      data: ordenes.map(mapOrdenListado),
+      page,
+      pageSize,
+      total,
+      // Solo cuando el llamador acotó un período. Misma forma exacta que emiten
+      // las cuatro pantallas de analytics — así el aviso de "período recortado"
+      // del panel es el mismo componente y no un segundo formato. Emitirlo
+      // siempre le diría a la pantalla que hay un rango aplicado justo cuando
+      // está mostrando el histórico completo.
+      ...(periodo !== null && {
+        periodo: {
+          desde: aClaveDia(periodo.desde),
+          hasta: aClaveDia(periodo.hasta),
+          recortado: periodo.recortado,
+        },
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/ordenes/resumen — cuántas órdenes hay en cada estado, protegido con
+ * requireAuth. Alimenta los contadores del tablero.
+ *
+ * Respeta LOS MISMOS filtros que el listado (período, dni, nombre) SALVO
+ * `estado`: contar por estado respetando el filtro de estado le daría a cada
+ * número el suyo propio, y tres de los cuatro saldrían siempre en 0.
+ *
+ * UNA sola consulta agrupada, no cuatro `count`: el conteo por estado es
+ * exactamente lo que un `groupBy` resuelve en un round-trip.
+ *
+ * Mismo criterio que `GET /products/resumen`: números GLOBALES del filtro, no
+ * de la página — no lo tocan `page` ni `pageSize`.
+ */
+export async function resumen(req, res, next) {
+  try {
+    const { where } = construirFiltrosOrdenes(req.query, { incluirEstado: false });
+
+    const conteos = await prisma.orden.groupBy({
+      by: ["estado"],
+      where,
+      _count: { _all: true },
+    });
+
+    // ⚠️ `groupBy` OMITE los estados sin ninguna fila: no los devuelve en cero,
+    // directamente no vienen. Sembrar los cuatro ANTES de volcar el resultado es
+    // lo que hace que "ninguna" se lea como 0 y no como `undefined`, que la
+    // pantalla mostraría como un contador vacío.
+    const porEstado = {};
+    for (const estado of ESTADOS_ORDEN) porEstado[estado] = 0;
+
+    for (const fila of conteos) {
+      // `Orden.estado` es un `VarChar(20)` sin enum de base, así que la columna
+      // puede llegar a tener un valor que este sistema no conoce (una migración
+      // a medio aplicar, un dato viejo). Ese valor NO se emite: la respuesta
+      // tiene exactamente las cuatro claves de `ESTADOS_ORDEN`, y una quinta
+      // sería una columna que el tablero no sabe dibujar.
+      //
+      // Se filtra con `includes` y no con `in`, que consulta la cadena de
+      // prototipos: un estado llamado `toString` pasaría la guarda.
+      if (ESTADOS_ORDEN.includes(fila.estado)) porEstado[fila.estado] = fila._count._all;
+    }
+
+    res.json(porEstado);
   } catch (err) {
     next(err);
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const clienteFindUniqueMock = vi.fn();
 const clienteCreateMock = vi.fn();
@@ -13,6 +13,7 @@ const ordenFindUniqueMock = vi.fn();
 const ordenUpdateMock = vi.fn();
 const ordenUpdateManyMock = vi.fn();
 const ordenCountMock = vi.fn();
+const ordenGroupByMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const transactionMock = vi.fn();
 
@@ -39,6 +40,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => ordenUpdateMock(...args),
       updateMany: (...args) => ordenUpdateManyMock(...args),
       count: (...args) => ordenCountMock(...args),
+      groupBy: (...args) => ordenGroupByMock(...args),
     },
     eventoTrafico: {
       create: (...args) => eventoTraficoCreateMock(...args),
@@ -47,8 +49,15 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { crear, listar, obtenerPorId, actualizarEstado, MAX_ITEMS_POR_ORDEN, MAX_CANTIDAD_POR_ITEM } =
-  await import("./ordenes.controller.js");
+const {
+  crear,
+  listar,
+  resumen,
+  obtenerPorId,
+  actualizarEstado,
+  MAX_ITEMS_POR_ORDEN,
+  MAX_CANTIDAD_POR_ITEM,
+} = await import("./ordenes.controller.js");
 const { LISTADO_ORDEN_INCLUDE, DETALLE_ORDEN_INCLUDE } = await import("./ordenes.mapper.js");
 
 function buildReqRes({ body, query, params } = {}) {
@@ -156,6 +165,7 @@ beforeEach(() => {
   ordenUpdateMock.mockReset();
   ordenUpdateManyMock.mockReset();
   ordenCountMock.mockReset();
+  ordenGroupByMock.mockReset();
   eventoTraficoCreateMock.mockReset();
   transactionMock.mockReset();
 
@@ -192,6 +202,22 @@ beforeEach(() => {
   // `{ count: 0 }`.
   ordenUpdateManyMock.mockResolvedValue({ count: 1 });
   eventoTraficoCreateMock.mockResolvedValue({});
+});
+
+// El reloj falso se devuelve SIEMPRE, pase lo que pase en el test.
+//
+// Estaba como un `vi.useRealTimers()` en línea, en medio del cuerpo de los dos
+// tests que congelan `Date`: si el código bajo test lanza (o si una expectativa
+// falla antes de esa línea), la restauración nunca corre y el reloj falso se
+// filtra al resto del archivo. El síntoma no aparece donde está la causa — falla
+// otro test, más abajo, por una fecha que nadie le puso.
+//
+// Solo `Date` se faquea en este archivo (ver los tests del período): faquear
+// todos los timers cuelga los tests que levantan un servidor HTTP real.
+// `useRealTimers()` sobre un reloj que nunca se faqueó es un no-op, así que
+// correrlo en cada test es gratis.
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function bodyValido(overrides = {}) {
@@ -694,19 +720,60 @@ describe("listar()", () => {
     expect(where.createdAt.lte).toBeInstanceOf(Date);
   });
 
-  it("filtra solo por desde (sin hasta)", async () => {
+  // CAMBIÓ DE EXPECTATIVA (no es una regresión, es la semántica nueva): antes
+  // cada extremo se parseaba por separado, así que `desde` solo dejaba `lte`
+  // sin definir y el listado se comía todo el futuro. Ahora el rango lo arma
+  // `parsearPeriodo`, que SIEMPRE devuelve los dos extremos: sin `hasta`, el
+  // período termina hoy.
+  it("filtra solo por desde: el período igual queda cerrado en los dos extremos", async () => {
     ordenFindManyMock.mockResolvedValue([]);
     ordenCountMock.mockResolvedValue(0);
 
-    const { req, res, next } = buildReqRes({ query: { desde: "2026-01-01" } });
+    // El reloj se CONGELA para poder clavar el instante exacto del `lte`. Con
+    // `toBeInstanceOf(Date)` a secas —como estaba— un `lte` mal calculado
+    // (medianoche UTC en vez del fin del día argentino, o el día equivocado)
+    // pasaba el test igual: cualquier Date lo satisface, incluso un Invalid
+    // Date. El test hermano de acá abajo sí clava el instante, así que el hueco
+    // era justo el extremo que este endpoint calcula solo.
+    //
+    // 02/09/2026 01:00 UTC = 01/09/2026 22:00 en Argentina: el "hoy" argentino
+    // es el 01, no el 02. Es la franja nocturna donde los dos calendarios
+    // difieren, o sea donde un `lte` armado con el día UTC se delata.
+    //
+    // Solo `Date`: faquear todos los timers cuelga los tests que levantan un
+    // servidor HTTP real (ver la nota de `afterEach`).
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-02T01:00:00.000Z"));
+
+    const { req, res, next } = buildReqRes({ query: { desde: "2026-08-01" } });
     await listar(req, res, next);
 
     const where = ordenFindManyMock.mock.calls[0][0].where;
-    expect(where.createdAt.gte).toBeInstanceOf(Date);
-    expect(where.createdAt.lte).toBeUndefined();
+    expect(where.createdAt.gte).toEqual(new Date("2026-08-01T03:00:00.000Z"));
+    // Fin del día argentino de HOY (01/09), o sea las 02:59:59.999 UTC del 02.
+    expect(where.createdAt.lte).toEqual(new Date("2026-09-02T02:59:59.999Z"));
+    expect(res.body.periodo).toEqual({
+      desde: "2026-08-01",
+      hasta: "2026-09-01",
+      recortado: false,
+    });
   });
 
-  it("ignora una fecha inválida sin romper la consulta", async () => {
+  // LA DECISIÓN, fijada acá porque el docstring solo no la puede sostener: una
+  // fecha ILEGIBLE se trata como AUSENTE. No acota nada, no tira 400 y la
+  // respuesta no trae `periodo`.
+  //
+  // Antes caía al default de 30 días, y eso NO es "ignorar el filtro": es
+  // cambiar el universo de resultados. Un link compartido con un typo en la
+  // fecha escondía el histórico entero, con 200, sin `recortado: true` y sin
+  // una sola señal — en una pantalla que RESPONDE "¿hay órdenes?", eso le
+  // afirma al operador algo falso.
+  //
+  // Es además el criterio que ya aplica el resto del repo: en
+  // `products.controller.js`'s `construirFiltrosListado`, un `?categoria=abc`,
+  // un `?etiqueta=abc` o un `?promocion=abc` NO arman filtro. Ninguno cae a un
+  // default que recorte.
+  it("una fecha ILEGIBLE se trata como ausente: no acota el período", async () => {
     ordenFindManyMock.mockResolvedValue([]);
     ordenCountMock.mockResolvedValue(0);
 
@@ -716,6 +783,81 @@ describe("listar()", () => {
     expect(res.statusCode).toBe(200);
     const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
     expect(where.createdAt).toBeUndefined();
+    expect(res.body).not.toHaveProperty("periodo");
+  });
+
+  it("una fecha ilegible en `hasta` tampoco acota el período", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { hasta: "31/01/2026" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+  });
+
+  // El otro lado de la misma asimetría: `parsearPeriodo` ya trataba `""` como
+  // ausente, pero la guarda del listado miraba `!== undefined`, así que la
+  // clave vacía la daba por presente y disparaba el default de 30 días. Dos
+  // funciones que TIENEN que estar de acuerdo y no lo estaban.
+  //
+  // La pantalla no lo dispara (mapea `"" → undefined`), así que el expuesto era
+  // cualquier otro consumidor de la API o una URL editada a mano — justamente
+  // el caso que nadie mira.
+  it("`?desde=` vacío se trata como ausente, no como período de 30 días", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { desde: "" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+    expect(res.body).not.toHaveProperty("periodo");
+  });
+
+  it("`?hasta=` vacío se trata como ausente", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { hasta: "" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+  });
+
+  it("`?dias=` vacío o no numérico se trata como ausente", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    for (const dias of ["", "abc", "0", "-5", "2.5"]) {
+      ordenFindManyMock.mockClear();
+      const { req, res, next } = buildReqRes({ query: { dias } });
+      await listar(req, res, next);
+
+      const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+      expect(where.createdAt, `?dias=${dias} no debería acotar el período`).toBeUndefined();
+      expect(res.body).not.toHaveProperty("periodo");
+    }
+  });
+
+  // El complemento: un valor ILEGIBLE se ignora, pero uno LEGIBLE sigue
+  // acotando aunque venga acompañado de basura. La guarda mira si hay al menos
+  // un parámetro de rango utilizable, no si la query trae alguna clave.
+  it("un `desde` legible sigue acotando aunque `dias` venga ilegible", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { desde: "2026-08-01", hasta: "2026-08-15", dias: "abc" },
+    });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.createdAt.gte).toEqual(new Date("2026-08-01T03:00:00.000Z"));
+    expect(res.body.periodo).toMatchObject({ desde: "2026-08-01", hasta: "2026-08-15" });
   });
 
   it("filtra por dni del cliente (relation filter)", async () => {
@@ -789,6 +931,278 @@ describe("listar()", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.page).toBe(1);
     expect(res.body.pageSize).toBe(20);
+  });
+});
+
+describe("listar() — el período lo resuelve parsearPeriodo", () => {
+  // POR QUÉ EXISTE ESTE BLOQUE. El listado parseaba `desde`/`hasta` a mano con
+  // `new Date(...)` y tenía dos bugs que nada delataba: `hasta` era exclusivo de
+  // hecho (`new Date("2026-01-31")` es medianoche UTC, así que con `lte` se
+  // perdía el día 31 entero) y los cortes caían a las 21:00 ART del día
+  // anterior, porque el calendario era el de Greenwich y el negocio vive en
+  // Buenos Aires. Los dos los resuelve `parsearPeriodo`, que ya es la única casa
+  // del calendario argentino — escribir un tercer parser acá sería una segunda
+  // definición de "día" que se desincroniza sin que nada falle.
+
+  it("sin ningún parámetro de fecha NO filtra por createdAt", async () => {
+    // EL GUARD MÁS CARO DE ESTE CAMBIO. `parsearPeriodo` SIEMPRE devuelve un
+    // rango (30 días por defecto), así que aplicarlo sin condición dejaría
+    // `GET /ordenes` devolviendo solo el último mes: el preset "Todo" de la
+    // pantalla mostraría menos órdenes de las que hay, con 200 y sin error.
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({ query: { estado: "PENDIENTE" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+  });
+
+  it("`hasta` es INCLUSIVO: cubre hasta el final de ese día argentino", async () => {
+    // El bug del último día. `new Date("2026-01-31")` es el 31 a las 00:00 UTC,
+    // o sea las 21:00 del 30 en Argentina: con `lte` se perdían las órdenes del
+    // 31 entero y las de la noche del 30. El límite tiene que ser el final del
+    // día ARGENTINO, o sea las 02:59:59.999 UTC del 1 de febrero.
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { desde: "2026-01-01", hasta: "2026-01-31" },
+    });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.createdAt.gte).toEqual(new Date("2026-01-01T03:00:00.000Z"));
+    expect(where.createdAt.lte).toEqual(new Date("2026-02-01T02:59:59.999Z"));
+
+    // Una orden creada el 31 a las 20:00 ART (23:00 UTC) entra en el rango. Es
+    // el caso concreto que el parser viejo se comía.
+    const orden20hs = new Date("2026-01-31T23:00:00.000Z");
+    expect(orden20hs.getTime()).toBeGreaterThanOrEqual(where.createdAt.gte.getTime());
+    expect(orden20hs.getTime()).toBeLessThanOrEqual(where.createdAt.lte.getTime());
+  });
+
+  it("`?dias=7` arma el rango sin que vengan desde/hasta", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    // 02/09/2026 01:00 UTC = 01/09/2026 22:00 en Argentina: el "hoy" argentino
+    // es el 01, no el 02. Es justo la franja nocturna donde los dos calendarios
+    // difieren, así que si el rango sale bien acá, sale del correcto.
+    //
+    // Solo `Date`: faquear todos los timers cuelga los tests que levantan un
+    // servidor HTTP real, y el hábito se respeta también acá.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-02T01:00:00.000Z"));
+
+    const { req, res, next } = buildReqRes({ query: { dias: "7" } });
+    await listar(req, res, next);
+
+    const where = ordenFindManyMock.mock.calls[0][0].where;
+    expect(where.createdAt.gte).toEqual(new Date("2026-08-26T03:00:00.000Z"));
+    expect(res.body.periodo).toMatchObject({ desde: "2026-08-26", hasta: "2026-09-01" });
+  });
+
+  it("desde/hasta explícitos ganan sobre dias", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { dias: "7", desde: "2026-08-01", hasta: "2026-08-15" },
+    });
+    await listar(req, res, next);
+
+    expect(res.body.periodo).toMatchObject({ desde: "2026-08-01", hasta: "2026-08-15" });
+  });
+
+  it("un rango mayor al tope se recorta y la respuesta lo declara", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { desde: "2020-01-01", hasta: "2030-01-01" },
+    });
+    await listar(req, res, next);
+
+    // Se conserva `hasta` y se corre `desde`: ante un rango imposible interesa
+    // el tramo más reciente, no el arranque histórico.
+    expect(res.body.periodo.hasta).toBe("2030-01-01");
+    expect(res.body.periodo.recortado).toBe(true);
+  });
+
+  it("sin período la respuesta NO trae la clave `periodo`", async () => {
+    // El sobre del listado sigue siendo el de siempre cuando nadie acotó nada:
+    // emitir un `periodo` inventado le diría a la pantalla que hay un rango
+    // aplicado cuando está mostrando el histórico completo.
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes();
+    await listar(req, res, next);
+
+    expect(res.body).not.toHaveProperty("periodo");
+  });
+
+  it("con período la respuesta trae `periodo` con claves YYYY-MM-DD", async () => {
+    // Misma forma exacta que emiten las cuatro pantallas de analytics, para que
+    // el aviso de período recortado del panel sea el mismo componente.
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    const { req, res, next } = buildReqRes({
+      query: { desde: "2026-08-01", hasta: "2026-08-15" },
+    });
+    await listar(req, res, next);
+
+    expect(res.body.periodo).toEqual({
+      desde: "2026-08-01",
+      hasta: "2026-08-15",
+      recortado: false,
+    });
+  });
+});
+
+describe("resumen()", () => {
+  it("devuelve los cuatro estados aunque groupBy traiga menos", async () => {
+    // `groupBy` OMITE los estados sin ninguna fila — no los devuelve en cero.
+    // Sin sembrar el objeto con los cuatro de `ESTADOS_ORDEN`, un estado ausente
+    // llegaría como `undefined` y la columna del tablero leería "no existe" en
+    // vez de "ninguna": el contador quedaría vacío en vez de decir 0.
+    ordenGroupByMock.mockResolvedValue([
+      { estado: "PENDIENTE", _count: { _all: 3 } },
+      { estado: "ENTREGADA", _count: { _all: 7 } },
+    ]);
+
+    const { req, res, next } = buildReqRes();
+    await resumen(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({
+      PENDIENTE: 3,
+      EN_PREPARACION: 0,
+      ENTREGADA: 7,
+      CANCELADA: 0,
+    });
+  });
+
+  it("cuenta con UNA sola consulta agrupada, no una por estado", async () => {
+    ordenGroupByMock.mockResolvedValue([]);
+
+    const { req, res, next } = buildReqRes();
+    await resumen(req, res, next);
+
+    expect(ordenGroupByMock).toHaveBeenCalledTimes(1);
+    expect(ordenGroupByMock).toHaveBeenCalledWith(
+      expect.objectContaining({ by: ["estado"], _count: { _all: true } }),
+    );
+  });
+
+  it("IGNORA el filtro por estado", async () => {
+    // Si lo respetara, cada número sería el de su propio filtro y los otros
+    // tres saldrían en 0: el tablero mostraría una sola columna con contenido.
+    ordenGroupByMock.mockResolvedValue([]);
+
+    const { req, res, next } = buildReqRes({ query: { estado: "ENTREGADA" } });
+    await resumen(req, res, next);
+
+    const where = ordenGroupByMock.mock.calls[0][0].where ?? {};
+    expect(where.estado).toBeUndefined();
+  });
+
+  it("SÍ respeta desde/hasta, dni y nombre — los mismos filtros del listado", async () => {
+    ordenGroupByMock.mockResolvedValue([]);
+
+    const { req, res, next } = buildReqRes({
+      query: { estado: "ENTREGADA", desde: "2026-08-01", hasta: "2026-08-15", dni: "12.345.678", nombre: "Juan" },
+    });
+    await resumen(req, res, next);
+
+    const { where } = ordenGroupByMock.mock.calls[0][0];
+    expect(where.createdAt.gte).toEqual(new Date("2026-08-01T03:00:00.000Z"));
+    expect(where.createdAt.lte).toEqual(new Date("2026-08-16T02:59:59.999Z"));
+    expect(where.cliente).toEqual({ dni: "12345678", nombre: { contains: "Juan" } });
+  });
+
+  it("sin filtros de fecha NO acota el período", async () => {
+    // El mismo guard que el listado: `parsearPeriodo` siempre devuelve un rango,
+    // así que sin la guarda los contadores del tablero contarían solo el último
+    // mes y no coincidirían con el `total` de cada columna.
+    ordenGroupByMock.mockResolvedValue([]);
+
+    const { req, res, next } = buildReqRes();
+    await resumen(req, res, next);
+
+    const where = ordenGroupByMock.mock.calls[0][0].where ?? {};
+    expect(where.createdAt).toBeUndefined();
+  });
+
+  // Los contadores comparten `construirFiltrosOrdenes` con el listado, así que
+  // comparten también la decisión sobre las fechas ilegibles: si acá cayera al
+  // default de 30 días mientras el listado muestra el histórico completo, cada
+  // columna del tablero contaría un universo distinto del de su propia grilla.
+  it("una fecha ilegible o vacía tampoco acota el período", async () => {
+    ordenGroupByMock.mockResolvedValue([]);
+
+    for (const query of [{ desde: "no-es-fecha" }, { desde: "" }, { dias: "" }]) {
+      ordenGroupByMock.mockClear();
+      const { req, res, next } = buildReqRes({ query });
+      await resumen(req, res, next);
+
+      const where = ordenGroupByMock.mock.calls[0][0].where ?? {};
+      expect(where.createdAt, `${JSON.stringify(query)} no debería acotar`).toBeUndefined();
+    }
+  });
+
+  // EL GUARD DEL FILTRO DE ESTADOS DESCONOCIDOS. `Orden.estado` es un
+  // `VarChar(20)` sin enum de base, así que la columna puede traer un valor que
+  // este sistema ya no conoce — `CONFIRMADA` existió hasta el 01/09/2026 y una
+  // migración a medio aplicar lo deja vivo en la base.
+  //
+  // Sin este test, borrar el `ESTADOS_ORDEN.includes(...)` del controller dejaba
+  // la suite entera en verde y la respuesta pasaba a emitir una quinta clave que
+  // el tablero no sabe dibujar. Un guard que no puede fallar cuando la regla se
+  // rompe no es un guard.
+  it("DESCARTA un estado que no está en ESTADOS_ORDEN", async () => {
+    ordenGroupByMock.mockResolvedValue([
+      { estado: "PENDIENTE", _count: { _all: 3 } },
+      { estado: "CONFIRMADA", _count: { _all: 9 } },
+    ]);
+
+    const { req, res, next } = buildReqRes();
+    await resumen(req, res, next);
+
+    expect(res.body).not.toHaveProperty("CONFIRMADA");
+    expect(Object.keys(res.body)).toEqual([
+      "PENDIENTE",
+      "EN_PREPARACION",
+      "ENTREGADA",
+      "CANCELADA",
+    ]);
+    expect(res.body).toEqual({
+      PENDIENTE: 3,
+      EN_PREPARACION: 0,
+      ENTREGADA: 0,
+      CANCELADA: 0,
+    });
+  });
+
+  // El mismo guard, contra la otra forma de romperlo: `in` en vez de `includes`
+  // consulta la cadena de prototipos, así que un estado llamado `toString`
+  // pasaría la condición y escribiría una clave heredada en la respuesta.
+  it("DESCARTA un estado que colisiona con una propiedad del prototipo", async () => {
+    ordenGroupByMock.mockResolvedValue([{ estado: "toString", _count: { _all: 4 } }]);
+
+    const { req, res, next } = buildReqRes();
+    await resumen(req, res, next);
+
+    expect(Object.keys(res.body)).toEqual([
+      "PENDIENTE",
+      "EN_PREPARACION",
+      "ENTREGADA",
+      "CANCELADA",
+    ]);
   });
 });
 

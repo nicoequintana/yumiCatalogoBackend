@@ -40,6 +40,11 @@ router.get("/productos-solicitados", requireAuth, ordenesController.listarProduc
 // "estados" como un id de orden. Mismo motivo que `/export` y
 // `/productos-solicitados` acá arriba.
 router.get("/estados", requireAuth, ordenesController.estados);
+
+// También ANTES de `/:id`, por el mismo pisotón: puesta después, Express le
+// pasa "resumen" a `obtenerPorId` como si fuera un id y el tablero recibe el
+// 404 de una orden inexistente en vez de sus contadores.
+router.get("/resumen", requireAuth, ordenesController.resumen);
 router.get("/:id", requireAuth, ordenesController.obtenerPorId);
 router.patch("/:id/estado", requireAuth, ordenesController.actualizarEstado);
 

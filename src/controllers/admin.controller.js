@@ -134,9 +134,76 @@ export function aClaveDia(fecha) {
 }
 
 /**
+ * `desde`/`hasta` de la query → la medianoche argentina de ese día, o `null` si
+ * el valor falta, viene vacío o no es una fecha legible.
+ *
+ * Vive a nivel de módulo, y no adentro de `parsearPeriodo`, porque
+ * `hayPeriodoPedido` tiene que responder con EXACTAMENTE el mismo criterio: dos
+ * lecturas distintas de "¿esta fecha sirve?" es lo que hacía que una función
+ * diera "ausente" y la otra "presente" para el mismo `?desde=`.
+ */
+function fechaDeClave(valor) {
+  if (typeof valor !== "string" || valor === "") return null;
+  return inicioDelDiaArgentino(valor.slice(0, 10));
+}
+
+/**
+ * `?dias=N` → la cantidad de días pedida, ya acotada al tope, o `null` si el
+ * valor falta, viene vacío o no es un entero positivo.
+ *
+ * El tope se aplica ACÁ, sobre la entrada, y no solo en el recorte de más
+ * abajo: un valor lo bastante grande (~2e8) empuja la resta fuera del rango
+ * representable de `Date` y `desde` queda en Invalid Date; a partir de ahí
+ * `diasDelRango` sale `NaN`, `NaN > MAX_DIAS_PERIODO` es `false`, y el período
+ * inválido pasa entero y sin marcar `recortado` hasta `aClaveDia`, que revienta
+ * como 500 al serializar la respuesta. Se acota a un día MÁS que el tope para
+ * que el recorte de abajo siga siendo el único lugar que decide el límite, y lo
+ * declare.
+ */
+function diasPedidos(valor) {
+  const dias = Number(valor);
+  if (!Number.isInteger(dias) || dias <= 0) return null;
+  return Math.min(dias, MAX_DIAS_PERIODO + 1);
+}
+
+/**
+ * ¿La query PIDE un período, o sea trae al menos un parámetro de rango que este
+ * módulo pueda LEER?
+ *
+ * Existe porque `parsearPeriodo` siempre devuelve un rango —cae a los últimos
+ * 30 días cuando no puede leer nada—, así que quien tenga que distinguir "no me
+ * pidieron período" de "me pidieron uno" no puede preguntárselo a ella. Los dos
+ * consumidores hoy son el listado y el resumen de órdenes, donde el default
+ * sería un recorte silencioso del histórico (ver `construirFiltrosOrdenes`).
+ *
+ * ⚠️ Mira si el valor es UTILIZABLE, no si la clave está presente. Un
+ * `?desde=basura` o un `?desde=` vacío contestan `false`: `parsearPeriodo` no
+ * los sabe leer, así que darlos por presentes disparaba el default de 30 días —
+ * o sea que un typo en una fecha no "ignoraba el filtro", CAMBIABA el universo
+ * de resultados. Este predicado y `parsearPeriodo` comparten los dos parsers de
+ * arriba justamente para que no puedan opinar distinto.
+ *
+ * Las cuatro pantallas de analytics NO lo usan y está bien: ahí el período
+ * SIEMPRE existe (el default de 30 días es la vista por defecto de la pantalla),
+ * y la respuesta declara cuál se aplicó en `periodo`.
+ */
+export function hayPeriodoPedido(query) {
+  return (
+    fechaDeClave(query.desde) !== null ||
+    fechaDeClave(query.hasta) !== null ||
+    diasPedidos(query.dias) !== null
+  );
+}
+
+/**
  * Parsea `desde`/`hasta` de la query string con el mismo criterio defensivo
  * que `parsearPaginacion`: una fecha ausente, malformada o no parseable cae al
  * período por defecto (últimos 30 días) en vez de tirar 500.
+ *
+ * ⚠️ Por eso SIEMPRE devuelve un rango, y por eso no sirve para preguntarle si
+ * el llamador pidió alguno: para eso está `hayPeriodoPedido`. Un endpoint donde
+ * el default sería un recorte silencioso del histórico —el listado y el resumen
+ * de órdenes— tiene que preguntar primero y recién después llamar acá.
  *
  * `hasta` es inclusivo — se extiende al final del día (23:59:59.999) para que
  * pedir `hasta=2026-08-15` incluya las órdenes de ese mismo día y no las
@@ -152,15 +219,10 @@ export function aClaveDia(fecha) {
  * las ventas de esas tres horas contadas del lado equivocado del corte.
  */
 export function parsearPeriodo(query) {
-  const parsear = (valor) => {
-    if (typeof valor !== "string" || valor === "") return null;
-    return inicioDelDiaArgentino(valor.slice(0, 10));
-  };
-
   const hoy = inicioDelDiaArgentino(aClaveDia(new Date()));
 
-  let desde = parsear(query.desde);
-  let hasta = parsear(query.hasta);
+  let desde = fechaDeClave(query.desde);
+  let hasta = fechaDeClave(query.hasta);
 
   // `?dias=N`: el frontend manda la INTENCIÓN ("últimos 30 días") y el rango lo
   // resuelve este módulo, que es la única fuente del calendario argentino.
@@ -174,8 +236,10 @@ export function parsearPeriodo(query) {
   // así nada de lo que funcionaba antes cambia de comportamiento. Un valor
   // inválido se ignora y cae al período por defecto, igual que una fecha rota.
   if (desde === null && hasta === null) {
-    const dias = Number(query.dias);
-    if (Number.isInteger(dias) && dias > 0) {
+    // El acotado del `dias` vive en `diasPedidos` (ver ahí por qué es sobre la
+    // ENTRADA y no solo en el recorte de más abajo).
+    const dias = diasPedidos(query.dias);
+    if (dias !== null) {
       hasta = hoy;
       desde = new Date(hoy.getTime() - (dias - 1) * MS_POR_DIA);
     }

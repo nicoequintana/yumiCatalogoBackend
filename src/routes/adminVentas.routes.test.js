@@ -683,6 +683,24 @@ describe("GET /api/admin/ventas?dias=N — el backend calcula el rango", () => {
     expect(res.body.periodo.desde).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
+  // Un `dias` absurdamente grande desbordaba el rango de `Date`: la resta daba
+  // un Invalid Date, y el clamp de MAX_DIAS_PERIODO no lo atrapaba porque
+  // `NaN > 400` es `false`. El período salía con `desde` inválido y
+  // `recortado: false`, y `aClaveDia` lo hacía explotar como 500 al serializar
+  // la respuesta. El tope se aplica ahora sobre el `dias` de entrada, así que
+  // este caso es el mismo que `?dias=500`: recorta e informa.
+  it("un dias que desborda el rango de Date recorta en vez de tirar 500", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/ventas?dias=200000000")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.periodo.desde).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(res.body.periodo.recortado).toBe(true);
+  });
+
   it("un dias mayor al tope recorta e informa recortado", async () => {
     ordenFindManyMock.mockResolvedValue([]);
 

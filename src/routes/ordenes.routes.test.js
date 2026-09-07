@@ -39,6 +39,7 @@ const ordenFindUniqueMock = vi.fn();
 const ordenUpdateMock = vi.fn();
 const ordenUpdateManyMock = vi.fn();
 const ordenCountMock = vi.fn();
+const ordenGroupByMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const promocionItemFindManyMock = vi.fn();
 const auditCreateMock = vi.fn();
@@ -64,6 +65,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => ordenUpdateMock(...args),
       updateMany: (...args) => ordenUpdateManyMock(...args),
       count: (...args) => ordenCountMock(...args),
+      groupBy: (...args) => ordenGroupByMock(...args),
     },
     eventoTrafico: {
       create: (...args) => eventoTraficoCreateMock(...args),
@@ -146,6 +148,8 @@ beforeEach(() => {
   // orden NO tenía `stockDescontado: true`).
   ordenUpdateManyMock.mockResolvedValue({ count: 1 });
   ordenCountMock.mockReset();
+  ordenGroupByMock.mockReset();
+  ordenGroupByMock.mockResolvedValue([]);
   eventoTraficoCreateMock.mockReset();
   eventoTraficoCreateMock.mockResolvedValue({});
   promocionItemFindManyMock.mockReset();
@@ -622,6 +626,44 @@ describe("PATCH /api/ordenes/:id/estado — notificación al cliente", () => {
       .send({ estado: "EN_PREPARACION", notificarCliente: "si" });
 
     expect(notificarCambioEstadoMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/ordenes/resumen", () => {
+  it("requiere autenticación", async () => {
+    const res = await request(buildApp()).get("/api/ordenes/resumen");
+    expect(res.status).toBe(401);
+  });
+
+  it("devuelve el conteo por estado con los cuatro estados", async () => {
+    ordenGroupByMock.mockResolvedValue([{ estado: "PENDIENTE", _count: { _all: 2 } }]);
+
+    const res = await request(buildApp())
+      .get("/api/ordenes/resumen")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      PENDIENTE: 2,
+      EN_PREPARACION: 0,
+      ENTREGADA: 0,
+      CANCELADA: 0,
+    });
+  });
+
+  // El pisotón de siempre: sin declararla ANTES de `/:id`, Express matchea
+  // "resumen" como un id de orden, `obtenerPorId` lo lee como `NaN` y esto
+  // responde el 404 de una orden inexistente en vez del conteo. Mismo motivo
+  // que `/estados` y `/productos-solicitados`.
+  it("no la matchea GET /ordenes/:id", async () => {
+    ordenFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .get("/api/ordenes/resumen")
+      .set("Authorization", authHeader);
+
+    expect(res.status).not.toBe(404);
+    expect(ordenFindUniqueMock).not.toHaveBeenCalled();
   });
 });
 
