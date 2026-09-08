@@ -9,6 +9,8 @@ process.env.JWT_SECRET = "test-secret";
 const eventoGroupByMock = vi.fn();
 const eventoCountMock = vi.fn();
 const ordenCountMock = vi.fn();
+const campaniaFindManyMock = vi.fn();
+const promocionFindManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -22,6 +24,8 @@ vi.mock("../lib/prisma.js", () => ({
       groupBy: (...args) => eventoGroupByMock(...args),
       count: (...args) => eventoCountMock(...args),
     },
+    campania: { findMany: (...args) => campaniaFindManyMock(...args) },
+    promocion: { findMany: (...args) => promocionFindManyMock(...args) },
   },
 }));
 
@@ -61,6 +65,8 @@ beforeEach(() => {
   eventoGroupByMock.mockReset();
   eventoCountMock.mockReset();
   ordenCountMock.mockReset();
+  campaniaFindManyMock.mockReset();
+  promocionFindManyMock.mockReset();
   mockEventos();
   ordenCountMock.mockResolvedValue(0);
 });
@@ -292,5 +298,27 @@ describe("GET /api/admin/embudo", () => {
     expect(res.status).toBe(200);
     expect(res.body.periodo.recortado).toBe(true);
     expect(res.body.periodo.hasta).toBe("2026-08-19");
+  });
+});
+
+describe("GET /api/admin/metricas-comerciales", () => {
+  it("exige auth", async () => {
+    const res = await request(buildApp()).get("/api/admin/metricas-comerciales");
+    expect(res.status).toBe(401);
+  });
+
+  it("responde la forma { registraDesde, items } con token", async () => {
+    // Los mocks de campania.findMany / promocion.findMany / eventoTrafico.groupBy
+    // devuelven vacío: acá se prueba la RUTA, el controller ya tiene los suyos.
+    campaniaFindManyMock.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([]);
+    eventoGroupByMock.mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/metricas-comerciales")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ registraDesde: null, items: [] });
   });
 });
