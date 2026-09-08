@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import * as campaniasController from "../controllers/campanias.controller.js";
+import * as eventosComercialesController from "../controllers/eventosComerciales.controller.js";
 import { requireAuth, authOpcional } from "../middlewares/auth.middleware.js";
 import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
@@ -53,6 +54,16 @@ const limitadorLecturaPublica = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
 });
 
+// Impresiones y clicks del cartel y del slide. Techo de lectura pública (600)
+// y no el de POST /eventos (300): un visitante genera por carga de la home una
+// impresión del cartel más una por slide que ve más los clicks, y una oficina
+// detrás de un NAT comparte una sola IP. Ver eventosComerciales.controller.js.
+const limitadorEventosComerciales = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
+});
+
 // ⚠️ `/activas` va ANTES de `/:id`: con el orden invertido Express matchea
 // "activas" como un id y la ruta se vuelve inalcanzable. Mismo pisotón que
 // evitan `/products/import` y `/anuncios/orden`.
@@ -77,6 +88,10 @@ router.post("/", requireAuth, campaniasController.crear);
 
 // También antes de `/:id`, por lo mismo.
 router.post("/:id/duplicar", requireAuth, campaniasController.duplicar);
+// Pública: la emite el navegador de cualquier visitante. El literal va DESPUÉS
+// del `:id`, así que no cae en la regla de "literal antes de /:id" — no hay
+// otra POST /:id/<algo> con la que confundirse.
+router.post("/:id/evento", limitadorEventosComerciales, eventosComercialesController.crearDeCampania);
 router.patch("/:id/estado", requireAuth, campaniasController.cambiarEstado);
 // Qué promociones aplica la campaña mientras está activa. Apagar la campaña las
 // apaga a todas de una: la vigencia la heredan de acá, no la guardan.

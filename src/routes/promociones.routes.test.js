@@ -22,6 +22,7 @@ const auditCreateMock = vi.fn();
 const transactionMock = vi.fn();
 const subirArchivoMock = vi.fn();
 const eliminarArchivoMock = vi.fn();
+const eventoTraficoCreateMock = vi.fn();
 
 vi.mock("../services/cloudinary.service.js", () => ({
   subirArchivo: (...args) => subirArchivoMock(...args),
@@ -58,6 +59,7 @@ vi.mock("../lib/prisma.js", () => ({
     usuario: { findUnique: (...a) => usuarioFindUniqueMock(...a) },
     auditLog: { create: (...a) => auditCreateMock(...a) },
     $transaction: (...a) => transactionMock(...a),
+    eventoTrafico: { create: (...a) => eventoTraficoCreateMock(...a) },
   },
 }));
 
@@ -103,6 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
+  eventoTraficoCreateMock.mockReset();
   // Defaults EXPLÍCITOS: `vi.clearAllMocks()` limpia las llamadas pero NO los
   // `mockResolvedValue`, así que sin esto un test hereda la respuesta del
   // anterior — y con una forma distinta, que es peor que sin respuesta.
@@ -1095,5 +1098,34 @@ describe("GET /api/promociones/conflictos", () => {
 
     expect(res.status).toBe(200);
     expect(promocionMock.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/promociones/:id/evento", () => {
+  it("es la primera ruta PÚBLICA del módulo: 201 sin Authorization", async () => {
+    promocionMock.findUnique.mockResolvedValue({ id: 7 });
+    eventoTraficoCreateMock.mockResolvedValue({ id: 2 });
+
+    const res = await request(buildApp())
+      .post("/api/promociones/7/evento")
+      .send({ tipo: "CLICK_COMERCIAL", origen: "BANNER", destino: "PROMOCION" });
+
+    expect(res.status).toBe(201);
+  });
+
+  // El guard de que abrir UNA ruta no abrió el módulo.
+  it("GET /:id sigue exigiendo auth", async () => {
+    const res = await request(buildApp()).get("/api/promociones/7");
+    expect(res.status).toBe(401);
+  });
+
+  it("una promoción inexistente es 404", async () => {
+    promocionMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post("/api/promociones/7/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
+
+    expect(res.status).toBe(404);
   });
 });

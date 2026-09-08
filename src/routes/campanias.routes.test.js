@@ -30,6 +30,7 @@ const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
 const subirArchivoMock = vi.fn();
 const eliminarArchivoMock = vi.fn();
+const eventoTraficoCreateMock = vi.fn();
 
 vi.mock("../services/cloudinary.service.js", () => ({
   subirArchivo: (...args) => subirArchivoMock(...args),
@@ -67,6 +68,7 @@ vi.mock("../lib/prisma.js", () => ({
     $transaction: (...a) => transactionMock(...a),
     usuario: { findUnique: (...args) => usuarioFindUniqueMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
+    eventoTrafico: { create: (...a) => eventoTraficoCreateMock(...a) },
   },
 }));
 
@@ -196,6 +198,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
+  eventoTraficoCreateMock.mockReset();
   campaniaMock.findMany.mockResolvedValue([]);
   promocionFindManyMock.mockResolvedValue([]);
   campaniaPromocionMock.findMany.mockResolvedValue([]);
@@ -2394,5 +2397,62 @@ describe("El bloque del banner de la home", () => {
       .set("Authorization", authHeader);
 
     expect(res.body.bannerArteUrl).toBe("https://res.cloudinary.com/demo/arte.jpg");
+  });
+});
+
+describe("POST /api/campanias/:id/evento", () => {
+  it("es PÚBLICA: responde 201 sin Authorization", async () => {
+    campaniaMock.findUnique.mockResolvedValue({ id: 12 });
+    eventoTraficoCreateMock.mockResolvedValue({ id: 1 });
+
+    const res = await request(buildApp())
+      .post("/api/campanias/12/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ id: 1 });
+  });
+
+  it("una campaña inexistente es 404", async () => {
+    campaniaMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post("/api/campanias/999/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
+
+    expect(res.status).toBe(404);
+    expect(eventoTraficoCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("un tipo histórico es 400: esta ruta no fabrica VISTA_PRODUCTO", async () => {
+    const res = await request(buildApp())
+      .post("/api/campanias/12/evento")
+      .send({ tipo: "VISTA_PRODUCTO", origen: "BANNER" });
+
+    expect(res.status).toBe(400);
+    expect(campaniaMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  // El techo es el de lectura pública (600/5min), no el de POST /eventos
+  // (300): un visitante genera por carga de la home una impresión del cartel
+  // más una por slide que ve más los clicks, y una oficina detrás de un NAT
+  // comparte una sola IP.
+  //
+  // Se afirma sobre el header y no disparando 601 requests: mismo criterio
+  // que `products.ratelimit.test.js` y `anuncios.ratelimit.test.js` — el
+  // comportamiento del 429 en sí ya está cubierto por
+  // `rateLimit.middleware.test.js`, y una ráfaga de cientos de requests acá
+  // sería lenta y, peor, frágil: comparte balde por IP con los tests
+  // anteriores de este mismo describe, así que un loop de exactamente 600
+  // fallaría por los tres consumidos arriba, no por un bug real.
+  it("expone RateLimit-Limit=600 en POST /:id/evento", async () => {
+    campaniaMock.findUnique.mockResolvedValue({ id: 12 });
+    eventoTraficoCreateMock.mockResolvedValue({ id: 1 });
+
+    const res = await request(buildApp())
+      .post("/api/campanias/12/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
+
+    expect(res.headers["ratelimit-limit"]).toBe("600");
   });
 });
