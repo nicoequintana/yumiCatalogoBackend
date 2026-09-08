@@ -175,6 +175,9 @@ export async function metricasComerciales(req, res, next) {
       res.json({
         registraDesde: arranque ? aClaveDia(arranque) : null,
         truncado,
+        // El tope viaja en el sobre para que la pantalla lo lea en vez de
+        // escribirlo a mano — ver el comentario de `tope` más abajo.
+        tope: MAX_ITEMS_METRICAS,
         // Sin ítems no hay rango que declarar, pero la clave viaja igual: un
         // sobre que a veces la trae y a veces no obliga a la pantalla a
         // distinguir "no vino" de "no aplica".
@@ -278,6 +281,13 @@ export async function metricasComerciales(req, res, next) {
     res.json({
       registraDesde: arranque ? aClaveDia(arranque) : null,
       truncado,
+      // El tope es POR TIPO (`take: MAX_ITEMS_METRICAS` corre separado para
+      // campañas y para promociones), no uno global entre las dos: con 60
+      // campañas y 10 promociones el sobre trae 60 ítems. Viaja acá para que
+      // la pantalla lo lea en vez de tener su propia copia del número — ese
+      // 50 escrito a mano en el frontend era un par de sincronización manual
+      // más, sin declarar en el censo.
+      tope: MAX_ITEMS_METRICAS,
       // Sobre qué ventana se contaron las `etapas` de TODOS los ítems. Es el
       // rango total del lote y puede ser mucho más ancho que el `periodo` de
       // un ítem viejo: se declara en vez de quedar escondido en un comentario.

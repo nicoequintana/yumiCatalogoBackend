@@ -546,4 +546,26 @@ describe("metricasComerciales", () => {
 
     expect(res.body.truncado).toBe(false);
   });
+
+  // El sobre emite el tope para que la pantalla lo lea en vez de escribirlo a
+  // mano — el 50 hardcodeado en el frontend era un par de sincronización
+  // manual sin declarar. Se verifica en las DOS ramas de `res.json` (con
+  // ítems y sin ítems), porque son dos `return` distintos en el controller.
+  it("el sobre declara el tope, con ítems y sin ítems", async () => {
+    campaniaFindManyMock.mockResolvedValue([CAMPANIA]);
+    promocionFindManyMock.mockResolvedValue([]);
+    programarGroupBy({});
+    const { req, res, next } = buildReqRes();
+
+    await metricasComerciales(req, res, next);
+
+    expect(res.body.tope).toBe(MAX_ITEMS_METRICAS);
+
+    campaniaFindManyMock.mockResolvedValue([]);
+    const { req: req2, res: res2, next: next2 } = buildReqRes();
+    await metricasComerciales(req2, res2, next2);
+
+    expect(res2.body.tope).toBe(MAX_ITEMS_METRICAS);
+    expect(res2.body.items).toEqual([]);
+  });
 });

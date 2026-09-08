@@ -321,10 +321,13 @@ describe("GET /api/admin/metricas-comerciales", () => {
     expect(res.status).toBe(200);
     // `etapasEnRango` y `origenes` viajan SIEMPRE, también sin ítems: un sobre
     // que a veces trae una clave y a veces no obliga a la pantalla a
-    // distinguir "no vino" de "no aplica".
+    // distinguir "no vino" de "no aplica". `tope` es `MAX_ITEMS_METRICAS`
+    // (el controller ya lo prueba por nombre); acá se afirma el valor
+    // concreto porque este test es de la RUTA completa, no del módulo.
     expect(res.body).toEqual({
       registraDesde: null,
       truncado: false,
+      tope: 50,
       etapasEnRango: null,
       origenes: [
         { valor: "MODAL", etiqueta: "Cartel" },
