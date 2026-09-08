@@ -1128,4 +1128,29 @@ describe("POST /api/promociones/:id/evento", () => {
 
     expect(res.status).toBe(404);
   });
+
+  // Una promoción no tiene cartel: ningún `modalCtaTipo` puede apuntar a una.
+  it("origen MODAL es 400 y no toca la base", async () => {
+    const res = await request(buildApp())
+      .post("/api/promociones/7/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "MODAL" });
+
+    expect(res.status).toBe(400);
+    expect(promocionMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  // El gemelo del de `campanias.routes.test.js`: los dos limitadores son dos
+  // instancias distintas y nada obliga a que compartan el techo, así que sin
+  // este test una de las dos podía quedarse en 600 sin que nada fallara.
+  // 1800 = 600 cargas de página × ~3 eventos por carga.
+  it("expone RateLimit-Limit=1800 en POST /:id/evento", async () => {
+    promocionMock.findUnique.mockResolvedValue({ id: 7 });
+    eventoTraficoCreateMock.mockResolvedValue({ id: 2 });
+
+    const res = await request(buildApp())
+      .post("/api/promociones/7/evento")
+      .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
+
+    expect(res.headers["ratelimit-limit"]).toBe("1800");
+  });
 });

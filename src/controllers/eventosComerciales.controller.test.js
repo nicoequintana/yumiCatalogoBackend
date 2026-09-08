@@ -219,6 +219,38 @@ describe("crearDePromocion", () => {
     expect(campaniaFindUniqueMock).not.toHaveBeenCalled();
   });
 
+  // Una promoción NO tiene cartel: `TIPOS_DESTINO_CTA` no incluye `PROMOCION`,
+  // así que ningún modal apunta nunca a una. Aceptar `origen: "MODAL"` acá
+  // dejaba fabricar `impresiones.MODAL` de una superficie que no existe, gratis
+  // y desde afuera. La Parte 2 solo emite `BANNER` para promociones.
+  it("origen MODAL contra una promoción es 400: una promoción no tiene cartel", async () => {
+    const { req, res, next } = buildReqRes({
+      params: { id: "7" },
+      body: { tipo: "IMPRESION_COMERCIAL", origen: "MODAL" },
+    });
+
+    await crearDePromocion(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 400 }));
+    // Antes de tocar la base, como el resto de las validaciones de forma.
+    expect(promocionFindUniqueMock).not.toHaveBeenCalled();
+    expect(eventoCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("el mismo origen MODAL contra una CAMPAÑA se sigue aceptando", async () => {
+    campaniaFindUniqueMock.mockResolvedValue({ id: 12 });
+    eventoCreateMock.mockResolvedValue({ id: 911 });
+    const { req, res, next } = buildReqRes({
+      params: { id: "12" },
+      body: { tipo: "IMPRESION_COMERCIAL", origen: "MODAL" },
+    });
+
+    await crearDeCampania(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(201);
+  });
+
   it("una promoción inexistente es 404 y NO escribe", async () => {
     promocionFindUniqueMock.mockResolvedValue(null);
     const { req, res, next } = buildReqRes({

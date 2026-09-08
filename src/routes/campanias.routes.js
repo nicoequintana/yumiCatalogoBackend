@@ -54,13 +54,20 @@ const limitadorLecturaPublica = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
 });
 
-// Impresiones y clicks del cartel y del slide. Techo de lectura pública (600)
-// y no el de POST /eventos (300): un visitante genera por carga de la home una
-// impresión del cartel más una por slide que ve más los clicks, y una oficina
-// detrás de un NAT comparte una sola IP. Ver eventosComerciales.controller.js.
+// Impresiones y clicks del cartel y del slide.
+//
+// **El techo se cuenta en CARGAS DE PÁGINA, no en eventos**: 1800 = 600 cargas
+// × ~3 eventos por carga (la impresión del cartel, la del slide visible y un
+// click). Ese 600 es el mismo de `/activas` y el de la cinta de anuncios, y
+// una oficina detrás de un NAT comparte una sola IP.
+//
+// Con 600 acá el número mentía: `/activas` es UN request por carga y sin él no
+// existe ningún evento, así que la LECTURA toleraba 600 cargas y la ESCRITURA
+// solo 200 — la escritura era la restricción vinculante antes que la lectura,
+// que está al revés. Ver eventosComerciales.controller.js.
 const limitadorEventosComerciales = crearLimitadorDeVelocidad({
   windowMs: 5 * 60 * 1000,
-  max: 600,
+  max: 1800,
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 

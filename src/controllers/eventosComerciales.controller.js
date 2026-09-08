@@ -43,6 +43,17 @@ async function crear(req, res, next, referencia) {
     const id = parsearId(req.params?.id);
     const { tipo, origen, destino } = validarEventoComercial(req.body);
 
+    // Una promoción NO tiene cartel: `TIPOS_DESTINO_CTA` no incluye
+    // `PROMOCION`, así que ningún modal apunta nunca a una y la Parte 2 solo
+    // emite `BANNER` para promociones. Aceptar `MODAL` acá dejaba fabricar
+    // gratis, desde afuera y sin login, `impresiones.MODAL` de una superficie
+    // que no existe. La validación es de FORMA (depende del par
+    // referencia/origen, no del estado de la base), así que va antes de
+    // cualquier consulta.
+    if (referencia === "promocion" && origen === "MODAL") {
+      throw httpError(400, "Una promoción no tiene cartel: su único origen es BANNER.");
+    }
+
     // Solo la existencia, con el select mínimo: es lo que impide guardar ids
     // inventados sin pagar una consulta cara por impresión.
     const existe =

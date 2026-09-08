@@ -2489,19 +2489,21 @@ describe("POST /api/campanias/:id/evento", () => {
     expect(campaniaMock.findUnique).not.toHaveBeenCalled();
   });
 
-  // El techo es el de lectura pública (600/5min), no el de POST /eventos
-  // (300): un visitante genera por carga de la home una impresión del cartel
-  // más una por slide que ve más los clicks, y una oficina detrás de un NAT
-  // comparte una sola IP.
+  // El techo se cuenta en CARGAS DE PÁGINA, no en eventos: 1800 = 600 cargas
+  // × ~3 eventos por carga (el cartel, el slide visible y un click). Con 600
+  // la ruta de ESCRITURA se agotaba a las 200 cargas mientras
+  // `/campanias/activas` —1 request por carga, sin la cual no existe ningún
+  // evento— tolera 600: la escritura era la restricción vinculante antes que
+  // la lectura, que está al revés.
   //
-  // Se afirma sobre el header y no disparando 601 requests: mismo criterio
+  // Se afirma sobre el header y no disparando 1801 requests: mismo criterio
   // que `products.ratelimit.test.js` y `anuncios.ratelimit.test.js` — el
   // comportamiento del 429 en sí ya está cubierto por
   // `rateLimit.middleware.test.js`, y una ráfaga de cientos de requests acá
   // sería lenta y, peor, frágil: comparte balde por IP con los tests
-  // anteriores de este mismo describe, así que un loop de exactamente 600
+  // anteriores de este mismo describe, así que un loop de exactamente 1800
   // fallaría por los tres consumidos arriba, no por un bug real.
-  it("expone RateLimit-Limit=600 en POST /:id/evento", async () => {
+  it("expone RateLimit-Limit=1800 en POST /:id/evento", async () => {
     campaniaMock.findUnique.mockResolvedValue({ id: 12 });
     eventoTraficoCreateMock.mockResolvedValue({ id: 1 });
 
@@ -2509,6 +2511,6 @@ describe("POST /api/campanias/:id/evento", () => {
       .post("/api/campanias/12/evento")
       .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
 
-    expect(res.headers["ratelimit-limit"]).toBe("600");
+    expect(res.headers["ratelimit-limit"]).toBe("1800");
   });
 });

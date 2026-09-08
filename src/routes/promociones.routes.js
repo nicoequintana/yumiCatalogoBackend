@@ -10,9 +10,10 @@ import { ALLOWED_PHOTO_MIMES, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
 const router = Router();
 
 // Ver el comentario gemelo en campanias.routes.js: mismo techo, mismo motivo.
+// 1800 = 600 cargas de página × ~3 eventos por carga.
 const limitadorEventosComerciales = crearLimitadorDeVelocidad({
   windowMs: 5 * 60 * 1000,
-  max: 600,
+  max: 1800,
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 
