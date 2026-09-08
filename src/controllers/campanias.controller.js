@@ -709,6 +709,10 @@ async function aModalPublico(campania, ahora) {
     // texto se usa el default, que sale de `lib/campanias.js` y no del panel.
     ctaTexto: campania.modalCtaTipo ? (campania.modalCtaTexto ?? CTA_TEXTO_POR_DEFECTO) : null,
     ctaDestino: await resolverDestinoCta(campania),
+    // La INTENCIÓN del CTA, además de la ruta ya resuelta (`ctaDestino`). El
+    // frontend la necesita para el evento de click: guarda adónde QUERÍA
+    // llevar el botón, no adónde terminó yendo esa vez si la ruta degradó.
+    ctaTipo: campania.modalCtaTipo ?? null,
     diasFaltantes: claveObjetivo === null ? null : diasHastaClave(claveObjetivo, ahora),
   };
 }
@@ -746,9 +750,16 @@ async function aSlideCampania(campania) {
   return {
     tipo: "CAMPANIA",
     campaniaId: campania.id,
+    // `null` EXPLÍCITO y no ausente: el contrato de "uno de los dos siempre en
+    // null" se lee del JSON, y un `undefined` desaparece al serializar. Hasta
+    // el 07/09/2026 faltaba, y CLAUDE.md lo describía como si estuviera.
+    promocionId: null,
     titulo: campania.bannerTitulo,
     texto: campania.bannerTexto,
     ctaDestino: await resolverDestinoCta(campania),
+    // El slide reusa el destino del cartel ("modalCtaTipo sirve a DOS
+    // superficies pese al prefijo"), así que su intención es la misma.
+    ctaTipo: campania.modalCtaTipo ?? null,
     // La pieza apaisada, si la campaña la subió. `null` es un caso legítimo y
     // la clave viaja igual para que el slide no tenga que distinguirlo de un
     // olvido: sin arte cae al molde compuesto.
@@ -788,6 +799,8 @@ export function aSlidePromocion(promocion) {
     titulo: promocion.bannerTitulo,
     texto: promocion.bannerTexto ?? null,
     ctaDestino: `/coleccion?promocion=${promocion.id}`,
+    // Fijo: el slide de una promoción siempre lleva a su vitrina.
+    ctaTipo: "PROMOCION",
     arteUrl: promocion.bannerArteUrl ?? null,
     doodleUrl: null,
   };

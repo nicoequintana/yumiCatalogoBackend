@@ -542,6 +542,20 @@ describe("GET /api/campanias/activas — el modal", () => {
     expect(res.body.modal).not.toHaveProperty("prioridad");
   });
 
+  it("el modal trae ctaTipo, y null cuando la campaña no tiene botón", async () => {
+    // Mismo armado que el test vecino de arriba (`conModal`), con la intención
+    // del CTA explícita.
+    campaniaMock.findMany.mockResolvedValue([conModal({ modalCtaTipo: "CAMPANIA" })]);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+    expect(res.body.modal.ctaTipo).toBe("CAMPANIA");
+
+    campaniaMock.findMany.mockResolvedValue([conModal({ modalCtaTipo: null })]);
+    const sinBoton = await request(buildApp()).get("/api/campanias/activas");
+    expect(sinBoton.body.modal.ctaTipo).toBeNull();
+    expect(sinBoton.body.modal.ctaDestino).toBeNull();
+  });
+
   it("el Doodle y el modal pueden venir de campañas DISTINTAS", async () => {
     // Son dos recursos exclusivos independientes: la campaña que manda el logo
     // no tiene por qué ser la que manda el cartel.
@@ -570,6 +584,34 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body).not.toHaveProperty("banner");
     expect(res.body.slides.map((s) => s.titulo)).toEqual(["Semana del Hogar", "Primavera"]);
     expect(res.body.slides[0].tipo).toBe("CAMPANIA");
+  });
+
+  it("el slide de una campaña trae ctaTipo (la INTENCIÓN) y promocionId null EXPLÍCITO", async () => {
+    // Mismo armado que el test vecino de arriba: una campaña con banner. Le
+    // suma la intención del CTA (`modalCtaTipo`), que el slide reusa del cartel.
+    campaniaMock.findMany.mockResolvedValue([
+      fila({
+        id: 1,
+        bannerEnHome: true,
+        bannerTitulo: "Primavera",
+        modalCtaTipo: "PRODUCTO",
+        modalCtaReferenciaId: 3,
+      }),
+    ]);
+    productMock.findUnique.mockResolvedValue({
+      id: 3,
+      nombre: "Termo",
+      visibleEnCatalogo: true,
+    });
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    const slide = res.body.slides.find((s) => s.tipo === "CAMPANIA");
+    expect(slide.ctaTipo).toBe("PRODUCTO");
+    // `null` y no `undefined`: el contrato de excluyentes se lee del JSON, y
+    // un undefined desaparece al serializar.
+    expect(slide).toHaveProperty("promocionId", null);
   });
 
   // ⚠️ EL SLIDE SINTÉTICO DE OFERTAS SE ELIMINÓ EL 06/09/2026, y estos tests
@@ -747,6 +789,20 @@ describe("GET /campanias/activas — slides de campaña y de promoción", () => 
 
     const tipos = res.body.slides.map((s) => s.tipo);
     expect(tipos.indexOf("CAMPANIA")).toBeLessThan(tipos.indexOf("PROMOCION"));
+  });
+
+  it("el slide de una promoción trae ctaTipo PROMOCION, fijo", async () => {
+    // Mismo armado que el test vecino de arriba, con `promocionFindManyMock`
+    // devolviendo una promoción con banner.
+    campaniaMock.findMany.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([promocionParaSlide()]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    const slide = res.body.slides.find((s) => s.tipo === "PROMOCION");
+    expect(slide.ctaTipo).toBe("PROMOCION");
+    expect(slide).toHaveProperty("campaniaId", null);
   });
 
   it("corta en cinco slides en total", async () => {
