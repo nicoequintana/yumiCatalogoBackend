@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { ESTADOS_TEMPORALES, estadoTemporal } from "../lib/campanias.js";
-import { TIPOS_COMERCIALES } from "../lib/eventosComerciales.js";
+import { TIPOS_COMERCIALES, listaDeOrigenesComerciales } from "../lib/eventosComerciales.js";
 import {
   ETAPAS_COMERCIALES,
   calcularTasaClicks,
@@ -31,7 +31,7 @@ export const MAX_ITEMS_METRICAS = 50;
  *   1. el arranque global de la medición (`_min(createdAt)` de los dos tipos
  *      comerciales) — sin filtro de fecha a propósito, es "desde cuándo
  *      existe esto";
- *   2. los eventos por campaña, en el rango TOTAL del lote;
+ *   2. los eventos por campaña, cada una en SU período;
  *   3. los eventos por promoción, ídem;
  *   4. las etapas (`VISTA_PRODUCTO`, `AGREGADO_CARRITO`) por producto, para
  *      los productos de TODAS las vitrinas del lote, en el rango total.
@@ -39,6 +39,22 @@ export const MAX_ITEMS_METRICAS = 50;
  *      el tope de 2.100 parámetros de SQL Server (la misma trampa que
  *      `?promocion=` documenta en `CLAUDE.md`) lo acota el tamaño del
  *      CATÁLOGO, no la cantidad de campañas o promociones del lote.
+ *
+ * ⚠️ **La 2 y la 3 acotan al período de CADA ítem, con un `OR` de rangos, y
+ * eso no es cosmética: es lo que sostiene que la ESCRITURA no valide la
+ * vigencia.** `eventosComerciales.controller.js` acepta un evento contra una
+ * campaña FINALIZADA a propósito, y el argumento es que la lectura lo va a
+ * descartar. Con un rango único —el `min` de todos los `desde` al `max` de
+ * todos los `hasta`— eso era FALSO: bastaba una campaña vigente para que un
+ * evento posteado hoy contra una campaña de enero cayera adentro y se
+ * contara, o sea que un anónimo podía inflar los números de cualquier campaña
+ * terminada. Sigue siendo UNA consulta por lado (con el tope de 50, ≤50
+ * cláusulas y ~150 parámetros); un query por ítem es justo lo que la
+ * estrategia evita.
+ *
+ * ⚠️ **Y el `OR` vacío no filtra nada en Prisma: trae la tabla entera.** Por
+ * eso cada lado se saltea cuando no tiene ítems. El early return cubre "cero
+ * ítems en total", pero un `?estado=` puede dejar promociones y CERO campañas.
  *
  * ⚠️ **El truncado NO filtra por `?estado=`**: `take: MAX_ITEMS_METRICAS`
  * trae las más recientes de cada tabla y el filtro de `?estado=` corre
@@ -49,13 +65,19 @@ export const MAX_ITEMS_METRICAS = 50;
  * las más recientes". Por eso el sobre declara `truncado`, mismo criterio
  * que `periodo.recortado` en las cuatro pantallas de analytics.
  *
- * ⚠️ **Imprecisión asumida en la 4**: un `groupBy` por `[productId, tipo]`
- * no puede acotarse al período de CADA ítem a la vez, así que se acota al
- * rango total del lote. Una vista de un producto de la vitrina de Navidad,
- * ocurrida en marzo, suma a Navidad si marzo cae dentro del rango total. Con
- * campañas que se solapan poco es despreciable; con muchas campañas largas y
- * vitrinas compartidas, sobrecuenta. Partirlo por ítem sería una consulta por
- * campaña, que es lo que la estrategia evita. Se declara y se acepta.
+ * ⚠️ **La 4 SÍ queda en el rango total, y el sobre lo declara en
+ * `etapasEnRango`.** Un `groupBy` por `[productId, tipo]` no puede acotarse al
+ * período de cada ítem: con un `OR` de rangos distintos el motor no puede
+ * decir de qué rama vino cada conteo, y un producto puede estar en dos
+ * vitrinas a la vez —que es justo lo que `repartirEtapas` resuelve sumándolo
+ * en las dos—. Partirlo sería una consulta por campaña.
+ *
+ * **No es una imprecisión despreciable, y no hace falta que las campañas se
+ * solapen**: con una campaña de enero y otra vigente hoy, el rango total va de
+ * enero a hoy, así que la de enero reporta NUEVE MESES de vistas de sus
+ * productos al lado de un `periodo` de quince días. Por eso el rango real
+ * viaja en el sobre en vez de quedar solo en este comentario: la pantalla
+ * puede decir sobre qué ventana se contaron esas dos filas.
  */
 export async function metricasComerciales(req, res, next) {
   try {
@@ -119,6 +141,19 @@ export async function metricasComerciales(req, res, next) {
         productos: new Set(c.productos.map((p) => p.productId)),
       })),
       ...promociones
+        // Una promoción ASOCIADA A UNA CAMPAÑA no entra al carrusel
+        // (`slidesDePromociones` la excluye con `campanias: { none: {} }`),
+        // así que no tiene ninguna superficie y no puede generar un solo
+        // evento. Sin este filtro entraba igual —`periodoDePromocion` le da
+        // período con las campañas asociadas— y salía con impresiones y
+        // clicks en cero ESTRUCTURAL (no "no vino nadie") más unas etapas que
+        // son las vistas de los productos de su campaña, o sea el mismo
+        // número dibujado dos veces en la pantalla. Una fila donde ningún dato
+        // es propio no es un dato incompleto: es una afirmación falsa.
+        // ⚠️ Si algún día una promoción con campaña vuelve a tener superficie
+        // propia, esto se saca ACÁ y no en `periodoDePromocion`, que sigue
+        // siendo la definición general del período.
+        .filter((p) => p.campanias.length === 0)
         .map((p) => ({ promocion: p, periodo: periodoDePromocion(p) }))
         .filter(({ periodo }) => periodo !== null)
         .map(({ promocion, periodo }) => ({
@@ -134,41 +169,57 @@ export async function metricasComerciales(req, res, next) {
       .filter((item) => filtroEstado === null || item.estadoTemporal === filtroEstado)
       .sort((a, b) => b.periodo.desde.getTime() - a.periodo.desde.getTime());
 
+    const origenes = listaDeOrigenesComerciales();
+
     if (items.length === 0) {
-      res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, truncado, items: [] });
+      res.json({
+        registraDesde: arranque ? aClaveDia(arranque) : null,
+        truncado,
+        // Sin ítems no hay rango que declarar, pero la clave viaja igual: un
+        // sobre que a veces la trae y a veces no obliga a la pantalla a
+        // distinguir "no vino" de "no aplica".
+        etapasEnRango: null,
+        origenes,
+        items: [],
+      });
       return;
     }
 
-    // El rango TOTAL del lote: una sola consulta por tipo de referencia.
+    // El rango TOTAL del lote. Ya NO acota los eventos —cada ítem lleva el
+    // suyo—, solo las etapas, que agrupan por producto y no se pueden partir.
     const rangoTotal = {
       gte: new Date(Math.min(...items.map((i) => i.periodo.desde.getTime()))),
       lte: finInclusivo(new Date(Math.max(...items.map((i) => i.periodo.hasta.getTime())))),
     };
-    const idsCampania = items.filter((i) => i.tipo === "CAMPANIA").map((i) => i.id);
-    const idsPromocion = items.filter((i) => i.tipo === "PROMOCION").map((i) => i.id);
+    // Una rama del `OR` por ítem: su id MÁS su propio rango. Como el `by` ya
+    // lleva `campaniaId`/`promocionId`, la atribución de cada fila es exacta.
+    const ramasDe = (tipo, clave) =>
+      items
+        .filter((i) => i.tipo === tipo)
+        .map((i) => ({
+          [clave]: i.id,
+          createdAt: { gte: i.periodo.desde, lte: finInclusivo(i.periodo.hasta) },
+        }));
+    const ramasCampania = ramasDe("CAMPANIA", "campaniaId");
+    const ramasPromocion = ramasDe("PROMOCION", "promocionId");
     const productosDelLote = [...new Set(items.flatMap((i) => [...i.productos]))];
 
     const [porCampania, porPromocion, etapasCrudas] = await Promise.all([
-      idsCampania.length === 0
+      // El lado sin ítems NO corre: `OR: []` en Prisma no filtra nada y
+      // devolvería la tabla entera, atribuyéndole a cada campaña eventos de
+      // cualquier fecha.
+      ramasCampania.length === 0
         ? []
         : prisma.eventoTrafico.groupBy({
             by: ["campaniaId", "tipo", "origen", "destino"],
-            where: {
-              campaniaId: { in: idsCampania },
-              tipo: { in: TIPOS_COMERCIALES },
-              createdAt: rangoTotal,
-            },
+            where: { tipo: { in: TIPOS_COMERCIALES }, OR: ramasCampania },
             _count: { _all: true },
           }),
-      idsPromocion.length === 0
+      ramasPromocion.length === 0
         ? []
         : prisma.eventoTrafico.groupBy({
             by: ["promocionId", "tipo", "origen", "destino"],
-            where: {
-              promocionId: { in: idsPromocion },
-              tipo: { in: TIPOS_COMERCIALES },
-              createdAt: rangoTotal,
-            },
+            where: { tipo: { in: TIPOS_COMERCIALES }, OR: ramasPromocion },
             _count: { _all: true },
           }),
       productosDelLote.length === 0
@@ -224,7 +275,16 @@ export async function metricasComerciales(req, res, next) {
       };
     });
 
-    res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, truncado, items: salida });
+    res.json({
+      registraDesde: arranque ? aClaveDia(arranque) : null,
+      truncado,
+      // Sobre qué ventana se contaron las `etapas` de TODOS los ítems. Es el
+      // rango total del lote y puede ser mucho más ancho que el `periodo` de
+      // un ítem viejo: se declara en vez de quedar escondido en un comentario.
+      etapasEnRango: { desde: aClaveDia(rangoTotal.gte), hasta: aClaveDia(rangoTotal.lte) },
+      origenes,
+      items: salida,
+    });
   } catch (err) {
     next(err);
   }

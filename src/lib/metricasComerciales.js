@@ -1,5 +1,9 @@
 import { MS_POR_DIA } from "./horarioArgentino.js";
-import { ORIGENES_COMERCIALES, TIPOS_COMERCIALES } from "./eventosComerciales.js";
+import {
+  ETIQUETA_DESTINO_COMERCIAL,
+  ORIGENES_COMERCIALES,
+  TIPOS_COMERCIALES,
+} from "./eventosComerciales.js";
 
 /**
  * La aritmética del endpoint de métricas comerciales, sin Prisma.
@@ -109,7 +113,15 @@ export function repartirEventos(filas, clave) {
 
   for (const [id, porDestino] of destinos) {
     mapa.get(id).clicksPorDestino = [...porDestino.entries()]
-      .map(([destino, clicks]) => ({ destino, clicks }))
+      // La etiqueta viaja RESUELTA, mismo criterio que `etapas[].etiqueta`: el
+      // sobre no puede emitir la mitad de sus claves con diccionario y la otra
+      // mitad cruda, o el panel termina con su propia copia de los destinos.
+      // Un destino desconocido cae a su propio valor en vez de a `undefined`.
+      .map(([destino, clicks]) => ({
+        destino,
+        etiqueta: ETIQUETA_DESTINO_COMERCIAL[destino] ?? destino,
+        clicks,
+      }))
       // Clicks descendente, y desempate alfabético por destino para que dos
       // destinos empatados no salgan en distinto orden entre dos requests
       // (el orden de un `Map` sigue el de inserción, que depende del orden

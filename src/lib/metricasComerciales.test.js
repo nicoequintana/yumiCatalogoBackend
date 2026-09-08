@@ -105,9 +105,11 @@ describe("repartirEventos", () => {
     expect(mapa.get(1)).toEqual({
       impresiones: { MODAL: 1240, BANNER: 3810 },
       clicks: { MODAL: 41, BANNER: 127 },
+      // La etiqueta viaja resuelta: el panel no tiene diccionario propio,
+      // mismo criterio que `etapas[].etiqueta` y que `GET /ordenes/estados`.
       clicksPorDestino: [
-        { destino: "CAMPANIA", clicks: 161 },
-        { destino: "PRODUCTO", clicks: 7 },
+        { destino: "CAMPANIA", etiqueta: "Los productos de la campaña", clicks: 161 },
+        { destino: "PRODUCTO", etiqueta: "Un producto", clicks: 7 },
       ],
     });
     // Un origen sin filas es un CERO explícito, no una clave ausente: el
@@ -125,7 +127,7 @@ describe("repartirEventos", () => {
       { promocionId: 7, tipo: "CLICK_COMERCIAL", origen: "MODAL", destino: "PROMOCION", _count: { _all: 50 } },
     ];
     expect(repartirEventos(filas, "promocionId").get(7).clicksPorDestino).toEqual([
-      { destino: "PROMOCION", clicks: 53 },
+      { destino: "PROMOCION", etiqueta: "Los productos de la promoción", clicks: 53 },
     ]);
   });
 

@@ -307,7 +307,7 @@ describe("GET /api/admin/metricas-comerciales", () => {
     expect(res.status).toBe(401);
   });
 
-  it("responde la forma { registraDesde, items } con token", async () => {
+  it("responde la forma { registraDesde, truncado, etapasEnRango, origenes, items } con token", async () => {
     // Los mocks de campania.findMany / promocion.findMany / eventoTrafico.groupBy
     // devuelven vacío: acá se prueba la RUTA, el controller ya tiene los suyos.
     campaniaFindManyMock.mockResolvedValue([]);
@@ -319,6 +319,18 @@ describe("GET /api/admin/metricas-comerciales", () => {
       .set("Authorization", authHeader);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ registraDesde: null, truncado: false, items: [] });
+    // `etapasEnRango` y `origenes` viajan SIEMPRE, también sin ítems: un sobre
+    // que a veces trae una clave y a veces no obliga a la pantalla a
+    // distinguir "no vino" de "no aplica".
+    expect(res.body).toEqual({
+      registraDesde: null,
+      truncado: false,
+      etapasEnRango: null,
+      origenes: [
+        { valor: "MODAL", etiqueta: "Cartel" },
+        { valor: "BANNER", etiqueta: "Slide del carrusel" },
+      ],
+      items: [],
+    });
   });
 });
