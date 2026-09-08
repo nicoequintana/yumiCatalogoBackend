@@ -19,11 +19,21 @@ import { validarEventoComercial } from "../lib/eventosComerciales.js";
  *
  * Lo que NO se valida, a propósito: la vigencia. Para una promoción exige el
  * `where` completo de `condicionPromocionVigente` —dos `OR` y dos joins— por
- * cada impresión, en un endpoint público. Y no evita ningún daño: la lectura
- * acota al período de la campaña, así que un evento de una campaña vencida
- * cae fuera de su rango y no aparece, y uno de una programada cae antes de su
- * inicio. Hay un test que fija que una FINALIZADA se acepta igual, para que
+ * cada impresión, en un endpoint público. Y no evita ningún daño, porque el
+ * daño lo ataja la LECTURA: `GET /admin/metricas-comerciales` acota al período
+ * de CADA ítem —un `OR` con el rango propio de cada campaña y de cada
+ * promoción, no un rango único del lote—, así que un evento de una vencida
+ * cae fuera de SU rango y no se cuenta, y uno de una programada cae antes de
+ * su inicio. Hay un test que fija que una FINALIZADA se acepta igual, para que
  * nadie sume esa consulta "por prolijidad".
+ *
+ * ⚠️ **Ese argumento estuvo ROTO hasta el 08/09/2026.** La lectura acotaba a
+ * un rango ÚNICO —del `desde` más viejo del lote al `hasta` más nuevo—, así
+ * que un evento posteado hoy contra una campaña terminada en enero caía
+ * dentro de él siempre que existiera alguna campaña vigente, y SE CONTABA:
+ * cualquier anónimo podía inflar los números de una campaña ya terminada. Si
+ * alguna vez se vuelve a un rango común, esta decisión de no validar la
+ * vigencia deja de ser gratis y hay que rehacerla, no solo reescribir esto.
  */
 
 /** @param {unknown} raw */
