@@ -569,12 +569,33 @@ model Usuario {
 
 model EventoTrafico {
   id        Int      @id @default(autoincrement())
-  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO | IMPRESION_COMERCIAL | CLICK_COMERCIAL
   // Es VarChar y no un enum de Prisma a propósito: agregar un tipo nuevo es una
-  // línea en `TIPOS_VALIDOS` (eventos.controller.js), sin migración de base.
-  // La fuente de verdad es esa constante — este comentario debe seguirla.
+  // línea en la constante que lo valida (`TIPOS_VALIDOS` en eventos.controller.js
+  // para los públicos por `/eventos`; `TIPOS_COMERCIALES` en lib/eventosComerciales.js
+  // para los del cartel y el slide), sin migración de base. La fuente de verdad
+  // son esas constantes — este comentario debe seguirlas.
   productId Int?
   product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  // Métricas comerciales (07/09/2026). Las cuatro son nulas para los seis tipos
+  // históricos y solo las llenan IMPRESION_COMERCIAL y CLICK_COMERCIAL.
+  //
+  // ⚠️ `campaniaId` y `promocionId` NO llevan FK, y no es descuido: una FK a
+  // Campania abriría un segundo camino EventoTrafico → Campania → CampaniaProducto
+  // además del que ya existe vía Product, y SQL Server rechaza la migración con
+  // el error 1785 — el mismo que impidió la FK de `modalCtaReferenciaId`. La
+  // integridad va en las dos puntas: la escritura exige que la referencia
+  // exista (findUnique por PK), la lectura parte de las campañas y busca sus
+  // eventos, así que uno huérfano nunca se lee.
+  //
+  // Son mutuamente excluyentes, uno siempre en null: es el contrato que ya
+  // tienen los `slides` de GET /campanias/activas.
+  campaniaId  Int?
+  promocionId Int?
+  origen      String? @db.VarChar(20) // MODAL | BANNER
+  destino     String? @db.VarChar(20) // CAMPANIA | CATALOGO | CATEGORIA | PRODUCTO | PROMOCION — solo en CLICK_COMERCIAL
+
   referrer  String?
   userAgent String?
   createdAt DateTime @default(now())
@@ -582,6 +603,10 @@ model EventoTrafico {
   @@index([tipo, createdAt])
   @@index([productId, tipo])
   @@index([createdAt])
+  // Exactamente las dos consultas del endpoint de lectura (groupBy por
+  // referencia + tipo, acotado por fecha).
+  @@index([campaniaId, tipo, createdAt])
+  @@index([promocionId, tipo, createdAt])
 }
 
 model Cliente {
