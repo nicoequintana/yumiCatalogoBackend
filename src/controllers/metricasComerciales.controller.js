@@ -35,6 +35,19 @@ export const MAX_ITEMS_METRICAS = 50;
  *   3. los eventos por promoción, ídem;
  *   4. las etapas (`VISTA_PRODUCTO`, `AGREGADO_CARRITO`) por producto, para
  *      los productos de TODAS las vitrinas del lote, en el rango total.
+ *      `productosDelLote` va DEDUPLICADO con `Set` antes de armar el `in`:
+ *      el tope de 2.100 parámetros de SQL Server (la misma trampa que
+ *      `?promocion=` documenta en `CLAUDE.md`) lo acota el tamaño del
+ *      CATÁLOGO, no la cantidad de campañas o promociones del lote.
+ *
+ * ⚠️ **El truncado NO filtra por `?estado=`**: `take: MAX_ITEMS_METRICAS`
+ * trae las más recientes de cada tabla y el filtro de `?estado=` corre
+ * DESPUÉS, en memoria, porque `estadoTemporal` es derivado y no tiene
+ * columna (no hay `where` posible). Con más de `MAX_ITEMS_METRICAS`
+ * campañas, un `?estado=FINALIZADA` puede devolver `items: []` sin que
+ * signifique "no hay finalizadas" — significa "no entraron en el corte de
+ * las más recientes". Por eso el sobre declara `truncado`, mismo criterio
+ * que `periodo.recortado` en las cuatro pantallas de analytics.
  *
  * ⚠️ **Imprecisión asumida en la 4**: un `groupBy` por `[productId, tipo]`
  * no puede acotarse al período de CADA ítem a la vez, así que se acota al
@@ -90,12 +103,18 @@ export async function metricasComerciales(req, res, next) {
       .map((fecha) => new Date(fecha))
       .sort((a, b) => a.getTime() - b.getTime())[0] ?? null;
 
+    // El `take` recortó alguna de las dos tablas: ver la nota del docblock
+    // sobre por qué esto NO se resuelve filtrando por estado en la base.
+    const truncado =
+      campanias.length === MAX_ITEMS_METRICAS || promociones.length === MAX_ITEMS_METRICAS;
+
     // Los ítems con su período. Una promoción sin período queda afuera.
     const items = [
       ...campanias.map((c) => ({
         tipo: "CAMPANIA",
         id: c.id,
         nombre: c.nombre,
+        estado: c.estado,
         periodo: { desde: new Date(c.desde), hasta: new Date(c.hasta) },
         productos: new Set(c.productos.map((p) => p.productId)),
       })),
@@ -106,6 +125,7 @@ export async function metricasComerciales(req, res, next) {
           tipo: "PROMOCION",
           id: promocion.id,
           nombre: promocion.nombre,
+          activa: promocion.activa,
           periodo,
           productos: new Set(promocion.items.map((i) => i.productId)),
         })),
@@ -115,7 +135,7 @@ export async function metricasComerciales(req, res, next) {
       .sort((a, b) => b.periodo.desde.getTime() - a.periodo.desde.getTime());
 
     if (items.length === 0) {
-      res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, items: [] });
+      res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, truncado, items: [] });
       return;
     }
 
@@ -179,6 +199,7 @@ export async function metricasComerciales(req, res, next) {
         tipo: item.tipo,
         id: item.id,
         nombre: item.nombre,
+        ...(item.tipo === "CAMPANIA" ? { estado: item.estado } : { activa: item.activa }),
         estadoTemporal: item.estadoTemporal,
         periodo: { desde: aClaveDia(item.periodo.desde), hasta: aClaveDia(item.periodo.hasta) },
         // Empezó antes de que la medición existiera: sus números están
@@ -203,7 +224,7 @@ export async function metricasComerciales(req, res, next) {
       };
     });
 
-    res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, items: salida });
+    res.json({ registraDesde: arranque ? aClaveDia(arranque) : null, truncado, items: salida });
   } catch (err) {
     next(err);
   }

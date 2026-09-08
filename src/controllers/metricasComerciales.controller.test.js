@@ -31,7 +31,7 @@ function buildReqRes(query = {}) {
   return { req, res, next };
 }
 
-// `eventoTrafico.groupBy` se llama TRES veces y en un orden fijo (ver el
+// `eventoTrafico.groupBy` se llama CUATRO veces y en un orden fijo (ver el
 // controller): arranque global, eventos por campaña, eventos por promoción, y
 // después una cuarta para las etapas. El mock responde según el `by`.
 function programarGroupBy({ arranque = [], porCampania = [], porPromocion = [], etapas = [] }) {
@@ -94,6 +94,7 @@ describe("metricasComerciales", () => {
       tipo: "CAMPANIA",
       id: 1054,
       nombre: "Primavera",
+      estado: "HABILITADA",
       estadoTemporal: "ACTIVA",
       periodo: { desde: "2026-09-06", hasta: "2026-09-16" },
       // Empezó el 06, la medición el 08: está subcontada.
@@ -170,9 +171,6 @@ describe("metricasComerciales", () => {
     expect(llamadaEtapas.where.tipo).toEqual({ in: ["VISTA_PRODUCTO", "AGREGADO_CARRITO"] });
   });
 
-  // El período de cada ítem acota SUS eventos en memoria: la consulta trae el
-  // rango total del lote, y acá se descartan los que caen fuera del período
-  // de ESE ítem. Este test fija que una etapa fuera del período no suma.
   it("las etapas se agrupan en el rango TOTAL del lote, no en el de cada ítem (imprecisión asumida)", async () => {
     campaniaFindManyMock.mockResolvedValue([CAMPANIA]);
     promocionFindManyMock.mockResolvedValue([]);
@@ -215,12 +213,29 @@ describe("metricasComerciales", () => {
     expect(res.body.items[0]).toMatchObject({
       tipo: "PROMOCION",
       id: 7,
+      activa: true,
       estadoTemporal: "ACTIVA",
       periodo: { desde: "2026-09-08", hasta: "2026-09-14" },
       subregistrada: false,
       impresiones: { MODAL: 0, BANNER: 100 },
       clicksPorDestino: [{ destino: "PROMOCION", clicks: 9 }],
     });
+  });
+
+  it("una campaña en BORRADOR emite su estado administrativo tal cual", async () => {
+    campaniaFindManyMock.mockResolvedValue([{ ...CAMPANIA, estado: "BORRADOR" }]);
+    promocionFindManyMock.mockResolvedValue([]);
+    programarGroupBy({});
+    const { req, res, next } = buildReqRes();
+
+    await metricasComerciales(req, res, next);
+
+    // Fechas que cubren hoy pero nunca se publicó: estadoTemporal la marca
+    // ACTIVA igual (es derivado, no sabe de BORRADOR), y por eso el endpoint
+    // tiene que emitir el estado administrativo aparte para que el admin
+    // distinga "corriendo sin verse" de "nunca salió al aire".
+    expect(res.body.items[0].estado).toBe("BORRADOR");
+    expect(res.body.items[0].estadoTemporal).toBe("ACTIVA");
   });
 
   it("una promoción sin programaciones ni campañas NO aparece", async () => {
@@ -297,5 +312,47 @@ describe("metricasComerciales", () => {
     await metricasComerciales(req, res, next);
 
     expect(res.body.items.map((i) => i.nombre)).toEqual(["Reciente", "Primavera"]);
+  });
+
+  it("con impresiones y cero clicks, la tasa es 0 y no null", async () => {
+    campaniaFindManyMock.mockResolvedValue([CAMPANIA]);
+    promocionFindManyMock.mockResolvedValue([]);
+    programarGroupBy({
+      porCampania: [
+        { campaniaId: 1054, tipo: "IMPRESION_COMERCIAL", origen: "MODAL", destino: null, _count: { _all: 100 } },
+      ],
+    });
+    const { req, res, next } = buildReqRes();
+
+    await metricasComerciales(req, res, next);
+
+    expect(res.body.items[0].tasaClicks.MODAL).toBe(0);
+  });
+
+  it("truncado es true cuando el tope de MAX_ITEMS_METRICAS recortó el lote", async () => {
+    const campanias = Array.from({ length: MAX_ITEMS_METRICAS }, (_, i) => ({
+      ...CAMPANIA,
+      id: i + 1,
+      nombre: `Campaña ${i + 1}`,
+    }));
+    campaniaFindManyMock.mockResolvedValue(campanias);
+    promocionFindManyMock.mockResolvedValue([]);
+    programarGroupBy({});
+    const { req, res, next } = buildReqRes();
+
+    await metricasComerciales(req, res, next);
+
+    expect(res.body.truncado).toBe(true);
+  });
+
+  it("truncado es false cuando el lote entra completo", async () => {
+    campaniaFindManyMock.mockResolvedValue([CAMPANIA]);
+    promocionFindManyMock.mockResolvedValue([]);
+    programarGroupBy({});
+    const { req, res, next } = buildReqRes();
+
+    await metricasComerciales(req, res, next);
+
+    expect(res.body.truncado).toBe(false);
   });
 });

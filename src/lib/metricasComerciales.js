@@ -110,7 +110,11 @@ export function repartirEventos(filas, clave) {
   for (const [id, porDestino] of destinos) {
     mapa.get(id).clicksPorDestino = [...porDestino.entries()]
       .map(([destino, clicks]) => ({ destino, clicks }))
-      .sort((a, b) => b.clicks - a.clicks);
+      // Clicks descendente, y desempate alfabético por destino para que dos
+      // destinos empatados no salgan en distinto orden entre dos requests
+      // (el orden de un `Map` sigue el de inserción, que depende del orden
+      // de las filas del `groupBy`, no garantizado).
+      .sort((a, b) => b.clicks - a.clicks || a.destino.localeCompare(b.destino));
   }
 
   return mapa;
@@ -123,8 +127,8 @@ export function repartirEventos(filas, clave) {
  * ese producto es una vista para cada campaña que lo exhibe.
  *
  * @param {Array<{productId: number|null, tipo: string, _count: {_all: number}}>} filas
- * @param {Map<number, Set<number>>} vitrinas
- * @returns {Map<number, Record<string, number>>}
+ * @param {Map<string, Set<number>>} vitrinas
+ * @returns {Map<string, Record<string, number>>}
  */
 export function repartirEtapas(filas, vitrinas) {
   const mapa = new Map();

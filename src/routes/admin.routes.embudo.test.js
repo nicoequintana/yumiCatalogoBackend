@@ -319,6 +319,6 @@ describe("GET /api/admin/metricas-comerciales", () => {
       .set("Authorization", authHeader);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ registraDesde: null, items: [] });
+    expect(res.body).toEqual({ registraDesde: null, truncado: false, items: [] });
   });
 });
