@@ -88,6 +88,12 @@ describe("notificarOrdenCreada", () => {
     await expect(notificarOrdenCreada(ORDEN)).resolves.toBeUndefined();
   });
 
+  it("manda los mails de orden con categoria 'orden'", async () => {
+    await notificarOrdenCreada(ORDEN);
+
+    expect(enviarMailMock).toHaveBeenCalledWith(expect.objectContaining({ categoria: "orden" }));
+  });
+
   it("registra cada fallo en ErrorLog", async () => {
     enviarMailMock.mockRejectedValue(new Error("SMTP caído"));
 

@@ -67,6 +67,7 @@ async function enviarYRegistrar({ para, armarPlantilla, descripcion }) {
       asunto: plantilla.asunto,
       texto: plantilla.texto,
       html: plantilla.html,
+      categoria: "orden",
     });
     return { enviada: true };
   } catch (err) {

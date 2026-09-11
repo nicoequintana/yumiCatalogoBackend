@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { logError } from "../lib/logError.js";
 
 /**
  * Transporte de correo. ÚNICO módulo del proyecto que conoce SMTP.
@@ -58,13 +59,55 @@ function obtenerTransporter() {
   return transporter;
 }
 
-/**
- * @param {{para: string, asunto: string, texto: string, html: string}} mensaje
- * @returns {Promise<void>}
- */
-export async function enviarMail({ para, asunto, texto, html }) {
-  const cliente = obtenerTransporter();
+const HORA_MS = 60 * 60 * 1000;
+const PRESUPUESTO_POR_DEFECTO = { orden: 200, acceso: 60, resto: 100 };
+const VAR_ENV_PRESUPUESTO = {
+  orden: "PRESUPUESTO_MAIL_ORDEN_HORA",
+  acceso: "PRESUPUESTO_MAIL_ACCESO_HORA",
+  resto: "PRESUPUESTO_MAIL_RESTO_HORA",
+};
 
+function presupuestoDe(categoria) {
+  const valor = Number.parseInt(process.env[VAR_ENV_PRESUPUESTO[categoria]] ?? "", 10);
+  return Number.isInteger(valor) && valor > 0 ? valor : PRESUPUESTO_POR_DEFECTO[categoria];
+}
+
+function estadoInicial() {
+  const ahora = Date.now();
+  return {
+    orden: { contador: 0, ventanaInicio: ahora, avisado: false },
+    acceso: { contador: 0, ventanaInicio: ahora, avisado: false, cola: [] },
+    resto: { contador: 0, ventanaInicio: ahora, avisado: false },
+  };
+}
+
+let presupuesto = estadoInicial();
+
+/** Solo para tests: las env de presupuesto y el reloj cambian entre casos. */
+export function _reiniciarPresupuestoParaTests() {
+  presupuesto = estadoInicial();
+}
+
+function refrescarVentana(categoria) {
+  const s = presupuesto[categoria];
+  if (Date.now() - s.ventanaInicio >= HORA_MS) {
+    s.contador = 0;
+    s.ventanaInicio = Date.now();
+    s.avisado = false;
+  }
+}
+
+function avisarTope(categoria) {
+  const s = presupuesto[categoria];
+  if (s.avisado) return;
+  s.avisado = true;
+  logError({
+    mensaje: `Presupuesto de correo agotado: categoría "${categoria}" (${presupuestoDe(categoria)}/hora).`,
+  });
+}
+
+async function despacharAhora({ para, asunto, texto, html }) {
+  const cliente = obtenerTransporter();
   await cliente.sendMail({
     from: `${NOMBRE_REMITENTE} <${process.env.SMTP_USER}>`,
     to: para,
@@ -72,6 +115,64 @@ export async function enviarMail({ para, asunto, texto, html }) {
     text: texto,
     html,
   });
+}
+
+/**
+ * Drena la cola de `acceso` mientras haya lugar. Corre AL PRINCIPIO de cada
+ * `enviarMail`, sea cual sea su categoría: es el único gancho sin depender de
+ * un timer, y `acceso` es la única categoría que encola (RESET + CODIGO_ACCESO
+ * bloquean la entrada, así que perder uno en silencio no es aceptable —
+ * Amenaza 10 de la spec).
+ */
+async function drenarColaAcceso() {
+  refrescarVentana("acceso");
+  const s = presupuesto.acceso;
+  const tope = presupuestoDe("acceso");
+  while (s.cola.length > 0 && s.contador < tope) {
+    const item = s.cola.shift();
+    if (Date.now() - item.encoladoEn > HORA_MS) continue; // vencido: se descarta, no se manda tarde
+    s.contador += 1;
+    try {
+      await despacharAhora(item);
+    } catch (err) {
+      logError({
+        mensaje: `No se pudo drenar un mail de acceso encolado para ${item.para}`,
+        stack: err.stack,
+        causa: err,
+      });
+    }
+  }
+}
+
+/**
+ * Presupuesto por hora, con `acceso` (RESET + CODIGO_ACCESO) y `resto`
+ * corriendo en contadores INDEPENDIENTES — Amenaza 10 de la spec (v3 tenía la
+ * prioridad invertida): agotar `resto` nunca frena un mail de `acceso`, que es
+ * del que depende poder comprar. `orden` y `resto` descartan en silencio al
+ * llegar al tope (perder uno es preferible a saturar la cuota); `acceso`
+ * encola y drena en el próximo `enviarMail` con lugar, porque perder un mail
+ * de acceso en silencio no es aceptable.
+ *
+ * @param {{para: string, asunto: string, texto: string, html: string, categoria?: "orden"|"acceso"|"resto"}} mensaje
+ * @returns {Promise<void>}
+ */
+export async function enviarMail({ para, asunto, texto, html, categoria = "resto" }) {
+  await drenarColaAcceso();
+  refrescarVentana(categoria);
+
+  const s = presupuesto[categoria];
+  if (s.contador < presupuestoDe(categoria)) {
+    s.contador += 1;
+    return despacharAhora({ para, asunto, texto, html });
+  }
+
+  avisarTope(categoria);
+  if (categoria === "acceso") {
+    s.cola.push({ para, asunto, texto, html, encoladoEn: Date.now() });
+    return;
+  }
+  // "orden" y "resto" DESCARTAN: perder uno de estos es preferible a que
+  // saturen la cuota y le coman el lugar al mail de acceso.
 }
 
 /**
