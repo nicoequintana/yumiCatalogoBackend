@@ -296,15 +296,28 @@ function credencialesInvalidas() {
 }
 
 /**
- * La condición "llegó a MAX_INTENTOS_LOGIN" va en el WHERE de una SEGUNDA
- * escritura, nunca en un `if` que leyera el contador entre las dos: dos fallos
- * concurrentes podrían leer 9 los dos y ninguno bloquear (mismo criterio que
- * `stockDescontado`).
+ * Tres escrituras, todas con la condición en el WHERE, nunca en un `if` que
+ * leyera el contador: dos fallos concurrentes podrían leer 9 los dos y ninguno
+ * bloquear (mismo criterio que `stockDescontado`).
+ *
+ * 1. Bloqueo VENCIDO: el contador arranca de nuevo en 1 (esa escritura cuenta
+ *    este fallo). Sin esto el contador seguía en 10 y un solo error después
+ *    del bloqueo re-bloqueaba otra hora. El perdedor de la carrera ve count 0
+ *    y pasa al incremento (1 → 2).
+ * 2. Incremento.
+ * 3. Bloqueo, solo si NO hay uno vigente (`bloqueadoHasta: null`): si no, cada
+ *    reintento durante el bloqueo — incluso la víctima con la clave correcta —
+ *    lo estiraba otros 60 min.
  */
 async function registrarFallo(cuenta) {
+  const reinicio = await prisma.cuentaCliente.updateMany({
+    where: { id: cuenta.id, bloqueadoHasta: { lt: new Date() } },
+    data: { intentosFallidos: 1, bloqueadoHasta: null },
+  });
+  if (reinicio.count > 0) return;
   await prisma.cuentaCliente.updateMany({ where: { id: cuenta.id }, data: { intentosFallidos: { increment: 1 } } });
   await prisma.cuentaCliente.updateMany({
-    where: { id: cuenta.id, intentosFallidos: { gte: MAX_INTENTOS_LOGIN } },
+    where: { id: cuenta.id, intentosFallidos: { gte: MAX_INTENTOS_LOGIN }, bloqueadoHasta: null },
     data: { bloqueadoHasta: new Date(Date.now() + DURACION_BLOQUEO_MS) },
   });
 }
@@ -381,7 +394,13 @@ export async function login(req, res, next) {
 
     const bloqueada = Boolean(cuenta?.bloqueadoHasta && cuenta.bloqueadoHasta > new Date());
     if (!cuenta || !cuenta.emailVerificado || bloqueada || !ok) {
-      if (cuenta) await registrarFallo(cuenta);
+      // En segundo plano: esperar las escrituras haría el 401 de una cuenta
+      // existente más lento que el de una inexistente (enumeración por tiempo).
+      if (cuenta) {
+        registrarFallo(cuenta).catch((err) => {
+          logError({ mensaje: `No se pudo registrar el fallo de login de la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
+        });
+      }
       throw credencialesInvalidas();
     }
 
@@ -394,7 +413,11 @@ export async function login(req, res, next) {
     } else {
       // Sin cookie de sesión: la clave sola no alcanza en un navegador nuevo.
       const { codigo, expiraEn } = await emitirCodigoAcceso(cuenta.id);
-      enviarCodigoAcceso(cuenta, { codigo, expiraEn });
+      // `.catch` aunque el sender ya atrape lo suyo: un rechazo sin manejar
+      // en el camino del mail ya tumbó el proceso una vez.
+      enviarCodigoAcceso(cuenta, { codigo, expiraEn }).catch((err) => {
+        logError({ mensaje: `No se pudo enviar el código de acceso a la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
+      });
       res.json({ requiereCodigo: true });
     }
   } catch (err) {

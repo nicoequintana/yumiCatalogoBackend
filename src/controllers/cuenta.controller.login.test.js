@@ -12,13 +12,14 @@ const findFirstDispMock = vi.fn();
 const tokenUpdateManyMock = vi.fn();
 const tokenCreateMock = vi.fn();
 const enviarCodigoAccesoMock = vi.fn();
+const errorLogCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     cuentaCliente: { findUnique: (...a) => findUniqueMock(...a), updateMany: (...a) => updateManyMock(...a) },
     dispositivoConocido: { findFirst: (...a) => findFirstDispMock(...a) },
     tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a), create: (...a) => tokenCreateMock(...a) },
-    errorLog: { create: vi.fn().mockResolvedValue({}) },
+    errorLog: { create: (...a) => errorLogCreateMock(...a) },
   },
 }));
 vi.mock("../services/notificacionesCuenta.service.js", () => ({
@@ -80,6 +81,7 @@ beforeEach(async () => {
   tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 0 });
   tokenCreateMock.mockReset().mockResolvedValue({});
   enviarCodigoAccesoMock.mockReset().mockResolvedValue(undefined);
+  errorLogCreateMock.mockReset().mockResolvedValue({});
   reservarSlot.mockClear();
   estaBajoPresion.mockClear();
   HASH = HASH ?? (await hashearPassword(CLAVE));
@@ -112,7 +114,7 @@ describe("login — aislamiento: mismo cuerpo para los tres casos", () => {
     const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });
     expect(res.status).toBe(401);
     expect(res.body).toEqual(CUERPO_GENERICO);
-    expect(updateManyMock).toHaveBeenCalled();
+    await vi.waitFor(() => expect(updateManyMock).toHaveBeenCalled());
   });
 
   it("no verificada de más de 24 h: igual que inexistente (401, corre bcrypt, NO escribe)", async () => {
@@ -121,6 +123,7 @@ describe("login — aislamiento: mismo cuerpo para los tres casos", () => {
     const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });
     expect(res.status).toBe(401);
     expect(res.body).toEqual(CUERPO_GENERICO);
+    await new Promise((r) => setTimeout(r, 50));
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
@@ -137,16 +140,84 @@ describe("login — aislamiento: mismo cuerpo para los tres casos", () => {
     expect(res.status).toBe(401);
     expect(res.body).toEqual(CUERPO_GENERICO);
   });
+
+  it("los cinco 401 son idénticos: status, cuerpo y Set-Cookie (ninguno)", async () => {
+    const vieja = new Date(Date.now() - (HORAS_PURGA_NO_VERIFICADAS * 60 + 1) * 60 * 1000);
+    const casos = [
+      [null, CLAVE],
+      [cuentaVerificada({ emailVerificado: false }), CLAVE],
+      [cuentaVerificada({ emailVerificado: false, createdAt: vieja }), CLAVE],
+      [cuentaVerificada({ bloqueadoHasta: new Date(Date.now() + 60_000) }), CLAVE],
+      [cuentaVerificada(), "mal"],
+    ];
+    const respuestas = [];
+    for (const [cuenta, password] of casos) {
+      findUniqueMock.mockResolvedValueOnce(cuenta);
+      const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password });
+      respuestas.push({ status: res.status, body: res.body, cookies: res.headers["set-cookie"] ?? null });
+    }
+    for (const r of respuestas) expect(r).toEqual({ status: 401, body: CUERPO_GENERICO, cookies: null });
+  });
+
+  it("el 401 NO espera las escrituras del contador (el tiempo no distingue cuenta existente)", async () => {
+    updateManyMock.mockReturnValue(new Promise(() => {}));
+    findUniqueMock.mockResolvedValue(cuentaVerificada());
+    const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: "mal" });
+    expect(res.status).toBe(401);
+  });
+
+  it("si registrarFallo falla, el 401 sale igual y el error se loguea (sin rechazo sin manejar)", async () => {
+    updateManyMock.mockRejectedValue(new Error("base caida"));
+    findUniqueMock.mockResolvedValue(cuentaVerificada());
+    const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: "mal" });
+    expect(res.status).toBe(401);
+    // El errorHandler también loguea el 401: se busca el log PROPIO del fallo.
+    await vi.waitFor(() => expect(JSON.stringify(errorLogCreateMock.mock.calls)).toContain("registrar el fallo de login"));
+  });
+
+  it("si enviarCodigoAcceso rechaza, el 200 sale igual y el error se loguea (sin rechazo sin manejar)", async () => {
+    enviarCodigoAccesoMock.mockRejectedValue(new Error("smtp caido"));
+    findUniqueMock.mockResolvedValue(cuentaVerificada());
+    const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });
+    expect(res.body).toEqual({ requiereCodigo: true });
+    await vi.waitFor(() => expect(JSON.stringify(errorLogCreateMock.mock.calls)).toContain("enviar el código de acceso"));
+  });
 });
 
 describe("login — bloqueo persistido", () => {
-  it("el where de la escritura de bloqueo exige intentosFallidos >= MAX_INTENTOS_LOGIN, nunca un if previo", async () => {
+  it("fallo común: reinicio vencido no escribe (count 0) → incremento → bloqueo guardado en el where", async () => {
+    updateManyMock.mockResolvedValueOnce({ count: 0 });
     findUniqueMock.mockResolvedValue(cuentaVerificada());
     await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: "mal" });
-    expect(updateManyMock).toHaveBeenCalledTimes(2);
-    expect(updateManyMock.mock.calls[0][0]).toMatchObject({ where: { id: 1 }, data: { intentosFallidos: { increment: 1 } } });
-    expect(updateManyMock.mock.calls[1][0].where).toMatchObject({ id: 1, intentosFallidos: { gte: MAX_INTENTOS_LOGIN } });
-    expect(updateManyMock.mock.calls[1][0].data.bloqueadoHasta).toBeInstanceOf(Date);
+    await vi.waitFor(() => expect(updateManyMock).toHaveBeenCalledTimes(3));
+    expect(updateManyMock.mock.calls[0][0]).toMatchObject({
+      where: { id: 1, bloqueadoHasta: { lt: expect.any(Date) } },
+      data: { intentosFallidos: 1, bloqueadoHasta: null },
+    });
+    expect(updateManyMock.mock.calls[1][0]).toEqual({ where: { id: 1 }, data: { intentosFallidos: { increment: 1 } } });
+    expect(updateManyMock.mock.calls[2][0].where).toEqual({
+      id: 1, intentosFallidos: { gte: MAX_INTENTOS_LOGIN }, bloqueadoHasta: null,
+    });
+    expect(updateManyMock.mock.calls[2][0].data.bloqueadoHasta).toBeInstanceOf(Date);
+  });
+
+  it("bloqueo vencido + clave mal: el contador arranca en 1 y NO se re-bloquea", async () => {
+    updateManyMock.mockResolvedValueOnce({ count: 1 });
+    findUniqueMock.mockResolvedValue(cuentaVerificada({ bloqueadoHasta: new Date(Date.now() - 1000), intentosFallidos: 10 }));
+    const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: "mal" });
+    expect(res.status).toBe(401);
+    await vi.waitFor(() => expect(updateManyMock).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock.mock.calls[0][0].data).toEqual({ intentosFallidos: 1, bloqueadoHasta: null });
+  });
+
+  it("un bloqueo ACTIVO nunca se extiende: la escritura de bloqueo exige bloqueadoHasta null", async () => {
+    updateManyMock.mockResolvedValueOnce({ count: 0 });
+    findUniqueMock.mockResolvedValue(cuentaVerificada({ bloqueadoHasta: new Date(Date.now() + 60_000) }));
+    await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });
+    await vi.waitFor(() => expect(updateManyMock).toHaveBeenCalledTimes(3));
+    expect(updateManyMock.mock.calls[2][0].where.bloqueadoHasta).toBeNull();
   });
 
   it("el 11.o intento CON LA CLAVE CORRECTA sigue dando 401 (la cuenta ya esta bloqueada)", async () => {
@@ -217,11 +288,11 @@ describe("login — cola de bcrypt", () => {
     const liberadoAlEscribir = [];
     updateManyMock.mockImplementation(async () => {
       liberadoAlEscribir.push(estado.liberado);
-      return { count: 1 };
+      return { count: 0 };
     });
     findUniqueMock.mockResolvedValue(cuentaVerificada());
     await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: "mal" });
-    expect(liberadoAlEscribir).toEqual([true, true]);
+    await vi.waitFor(() => expect(liberadoAlEscribir).toEqual([true, true, true]));
   });
 
   it("el slot se libera ANTES del reset, del dispositivo y del código", async () => {
