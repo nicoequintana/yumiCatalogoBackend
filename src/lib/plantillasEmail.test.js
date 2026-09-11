@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  envolver,
   escaparHtml,
   formatearFecha,
   formatearFechaHora,
@@ -303,6 +304,23 @@ describe("detalle de items", () => {
     const { html } = plantillaOrdenCreadaCliente(ORDEN, { urlSitio: "https://yima.test" });
     expect(html).toContain("$12.500 c/u");
     expect(html).toContain("$25.000");
+  });
+});
+
+describe("envolver — exportada", () => {
+  it("arma un documento HTML completo reusable fuera de este módulo", () => {
+    const html = envolver({
+      urlSitio: "https://yima.test",
+      vistaPrevia: "vp",
+      rotulo: "Rótulo",
+      titulo: "Título",
+      contexto: "ctx",
+      cuerpo: "<p>cuerpo</p>",
+      pie: "<p>pie</p>",
+    });
+    expect(html).toContain("<!DOCTYPE html>");
+    expect(html).toContain("Título");
+    expect(html).toContain("<p>cuerpo</p>");
   });
 });
 

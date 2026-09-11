@@ -300,7 +300,7 @@ function preheader(texto) {
  * que los tres mails se lean como de la misma casa aunque digan cosas
  * distintas: quien recibe uno reconoce dónde mirar en los otros dos.
  */
-function envolver({ vistaPrevia, rotulo, titulo, contexto, cuerpo, pie, urlSitio }) {
+export function envolver({ vistaPrevia, rotulo, titulo, contexto, cuerpo, pie, urlSitio }) {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -373,6 +373,18 @@ function pieCliente(urlSitio) {
         <p style="margin:0;color:${COLOR_TEXTO_TENUE};font-size:12px;line-height:1.6;">
           Recibís este correo porque hiciste un pedido en ${enlace}
         </p>`;
+}
+
+/** Botón de acción primario. Mismo estilo que el CTA de `plantillaOrdenCreadaAdmin`. */
+function botonCta(href, texto) {
+  return `
+      <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:24px 0;">
+        <tr>
+          <td bgcolor="${COLOR_PRIMARIO}" style="background-color:${COLOR_PRIMARIO};border-radius:8px;">
+            <a href="${escaparHtml(href)}" style="display:inline-block;padding:14px 30px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;font-family:${FUENTE};">${escaparHtml(texto)}</a>
+          </td>
+        </tr>
+      </table>`;
 }
 
 /** Línea de contexto de la banda: número de pedido y, si se conoce, fecha. */
