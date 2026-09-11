@@ -9,6 +9,7 @@ process.env.CORS_ORIGIN = "http://localhost:5173";
 const findUniqueMock = vi.fn();
 const createMock = vi.fn();
 const deleteMock = vi.fn();
+const deleteManyMock = vi.fn();
 const updateMock = vi.fn();
 const dispositivoCreateMock = vi.fn();
 
@@ -18,6 +19,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => findUniqueMock(...args),
       create: (...args) => createMock(...args),
       delete: (...args) => deleteMock(...args),
+      deleteMany: (...args) => deleteManyMock(...args),
       update: (...args) => updateMock(...args),
     },
     dispositivoConocido: { create: (...args) => dispositivoCreateMock(...args) },
@@ -51,6 +53,9 @@ vi.mock("../lib/tokensCuenta.js", () => ({
   consumirToken: (...args) => consumirTokenMock(...args),
 }));
 
+const logErrorMock = vi.fn();
+vi.mock("../lib/logError.js", () => ({ logError: (...args) => logErrorMock(...args) }));
+
 const { manejadorDeErrores } = await import("../middlewares/errorHandler.js");
 const { default: cuentaRouter } = await import("./cuenta.routes.js");
 const colaBcrypt = await import("../lib/colaBcrypt.js");
@@ -66,22 +71,35 @@ function buildApp() {
 
 const ORIGIN = "http://localhost:5173";
 
-// El envío es fire-and-forget FUERA del camino de la respuesta: hay que
-// esperar un tick para que el mock de notificaciones se haya llamado.
-const esperarUnTick = () => new Promise((r) => setTimeout(r, 50));
+// La purga global es SIEMPRE el último paso de `procesarRegistro` (todas las
+// ramas caen en ella menos la 503 por capacidad, que ni arranca, y la que
+// deliberadamente cuelga en el envío). Esperarla es la señal determinista de
+// "esta corrida terminó del todo": evita el mismo sleep fijo racy que el
+// review marcó en la línea 218 original, acá y en cualquier otro test que
+// dispare `procesarRegistro` y no pueda dejar trabajo colgando entre tests
+// (dos mocks compartidos — `findUniqueMock`, `deleteManyMock` — se resetean
+// recién en el `beforeEach` SIGUIENTE, así que una corrida sin terminar de
+// un test se cuela en las aserciones del que sigue).
+const esperarPurga = (vecesEsperadas = 1) =>
+  vi.waitFor(() => {
+    expect(deleteManyMock).toHaveBeenCalledTimes(vecesEsperadas);
+  });
 
 beforeEach(() => {
   [
     findUniqueMock,
     createMock,
     deleteMock,
+    deleteManyMock,
     updateMock,
     dispositivoCreateMock,
     enviarVerificacionMock,
     enviarYaTenesCuentaMock,
     invalidarTokensDeMock,
     consumirTokenMock,
+    logErrorMock,
   ].forEach((m) => m.mockReset());
+  deleteManyMock.mockResolvedValue({ count: 0 });
   process.env.BCRYPT_CONCURRENCIA = "3";
   colaBcrypt._reiniciarParaTests();
 });
@@ -128,6 +146,10 @@ describe("POST /api/cuenta/registro", () => {
     expect(resExistente.status).toBe(200);
     expect(resNuevo.body).toEqual(resExistente.body);
     expect(resNuevo.body).toEqual({ mensaje: "Te mandamos un mail para confirmar tu cuenta." });
+
+    // Las dos corridas de fondo (crear+enviar, y "ya tenés cuenta"+enviar)
+    // terminan cada una en la purga global — dos requests, dos purgas.
+    await esperarPurga(2);
   });
 
   it("email nuevo: crea la cuenta con lista blanca — un body con emailVerificado/tokenVersion/id/origenRegistro NO los pisa", async () => {
@@ -138,19 +160,21 @@ describe("POST /api/cuenta/registro", () => {
       .post("/api/cuenta/registro")
       .set("Origin", ORIGIN)
       .send({ ...BODY_VALIDO, emailVerificado: true, tokenVersion: 99, origenRegistro: "GOOGLE", id: 555 });
-    await esperarUnTick();
 
-    expect(createMock).toHaveBeenCalledWith({
-      data: {
-        email: "juan@gmail.com",
-        passwordHash: expect.any(String),
-        origenRegistro: "LOCAL",
-        nombre: "Juan",
-        telefono: "1122334455",
-        dni: "12345678",
-      },
+    await vi.waitFor(() => {
+      expect(createMock).toHaveBeenCalledWith({
+        data: {
+          email: "juan@gmail.com",
+          passwordHash: expect.any(String),
+          origenRegistro: "LOCAL",
+          nombre: "Juan",
+          telefono: "1122334455",
+          dni: "12345678",
+        },
+      });
+      expect(enviarVerificacionMock).toHaveBeenCalled();
     });
-    expect(enviarVerificacionMock).toHaveBeenCalled();
+    await esperarPurga(1);
   });
 
   it("password de la lista de comunes: 400 con el motivo, sin llegar a tocar la base", async () => {
@@ -173,7 +197,9 @@ describe("POST /api/cuenta/registro", () => {
   });
 
   it("email de mas de 254 caracteres: 400 sin tocar la base (limite del indice UNIQUE)", async () => {
-    const emailLargo = `${"a".repeat(250)}@x.com`; // > 254
+    // Dominio largo (no parte local): así el 400 sale SOLO por el guard de
+    // largo y no también, por su cuenta, por la forma que exige `esEmailValido`.
+    const emailLargo = `a@${"b".repeat(250)}.com`; // > 254
     const res = await request(buildApp())
       .post("/api/cuenta/registro")
       .set("Origin", ORIGIN)
@@ -191,6 +217,24 @@ describe("POST /api/cuenta/registro", () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
+  it("nombre demasiado largo: 400 ANTES de responder (columna NVarChar(1000))", async () => {
+    const res = await request(buildApp())
+      .post("/api/cuenta/registro")
+      .set("Origin", ORIGIN)
+      .send({ ...BODY_VALIDO, nombre: "a".repeat(1001) });
+    expect(res.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("telefono demasiado largo: 400 ANTES de responder (columna NVarChar(1000))", async () => {
+    const res = await request(buildApp())
+      .post("/api/cuenta/registro")
+      .set("Origin", ORIGIN)
+      .send({ ...BODY_VALIDO, telefono: "1".repeat(1001) });
+    expect(res.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
   it("sin Origin: 403 antes de cualquier otra cosa (segunda capa CSRF)", async () => {
     const res = await request(buildApp()).post("/api/cuenta/registro").send(BODY_VALIDO);
     expect(res.status).toBe(403);
@@ -203,11 +247,13 @@ describe("POST /api/cuenta/registro", () => {
     createMock.mockResolvedValueOnce({ id: 10, email: "juan@gmail.com", nombre: "Juan" });
 
     await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
-    await esperarUnTick();
 
-    expect(deleteMock).toHaveBeenCalledWith({ where: { id: 3 } });
-    expect(createMock).toHaveBeenCalled();
-    expect(enviarVerificacionMock).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(deleteMock).toHaveBeenCalledWith({ where: { id: 3 } });
+      expect(createMock).toHaveBeenCalled();
+      expect(enviarVerificacionMock).toHaveBeenCalled();
+    });
+    await esperarPurga(1);
   });
 
   it("no verificada y con menos de 24 h: reenvía SIN pisar la contraseña (no llama a create)", async () => {
@@ -215,22 +261,26 @@ describe("POST /api/cuenta/registro", () => {
     findUniqueMock.mockResolvedValueOnce({ id: 4, email: "juan@gmail.com", emailVerificado: false, createdAt: hace1h });
 
     await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
-    await esperarUnTick();
 
+    await vi.waitFor(() => {
+      expect(invalidarTokensDeMock).toHaveBeenCalledWith(4, "VERIFICACION");
+      expect(enviarVerificacionMock).toHaveBeenCalled();
+    });
     expect(createMock).not.toHaveBeenCalled();
     expect(deleteMock).not.toHaveBeenCalled();
-    expect(invalidarTokensDeMock).toHaveBeenCalledWith(4, "VERIFICACION");
-    expect(enviarVerificacionMock).toHaveBeenCalled();
+    await esperarPurga(1);
   });
 
   it("existente y verificada: manda 'ya tenés cuenta', no toca create ni delete", async () => {
     findUniqueMock.mockResolvedValueOnce({ id: 5, email: "juan@gmail.com", emailVerificado: true });
 
     await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
-    await esperarUnTick();
 
+    await vi.waitFor(() => {
+      expect(enviarYaTenesCuentaMock).toHaveBeenCalledWith("juan@gmail.com");
+    });
     expect(createMock).not.toHaveBeenCalled();
-    expect(enviarYaTenesCuentaMock).toHaveBeenCalledWith("juan@gmail.com");
+    await esperarPurga(1);
   });
 
   it("cola de bcrypt saturada: 503 CAPACIDAD ANTES de mandar ninguna respuesta, sin tocar la base", async () => {
@@ -247,5 +297,69 @@ describe("POST /api/cuenta/registro", () => {
     liberar1();
     liberar2();
     liberar3();
+  });
+
+  it("libera el slot de bcrypt apenas termina el hash, sin esperar el envío del mail (un SMTP colgado no debe tumbar el login)", async () => {
+    process.env.BCRYPT_CONCURRENCIA = "1";
+    colaBcrypt._reiniciarParaTests();
+
+    findUniqueMock.mockResolvedValueOnce(null);
+    createMock.mockResolvedValueOnce({ id: 30, email: "juan@gmail.com", nombre: "Juan" });
+    // El mail nunca resuelve durante este test — simula un Gmail colgado/lento.
+    enviarVerificacionMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    const res = await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+    expect(res.status).toBe(200);
+
+    // Con capacidad 1, si el slot siguiera tomado (esperando el mail que
+    // nunca llega) esta reserva colgaría hasta el timeout del test.
+    await vi.waitFor(async () => {
+      const liberar = await colaBcrypt.reservarSlot();
+      liberar();
+    });
+  });
+
+  it("purga GLOBAL oportunista: borra TODAS las cuentas no verificadas vencidas, no solo la del email que llegó (spec, paso 5)", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 6, email: "juan@gmail.com", emailVerificado: true });
+    const antes = Date.now();
+
+    await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+
+    await esperarPurga(1);
+    const [{ where }] = deleteManyMock.mock.calls[0];
+    expect(where.emailVerificado).toBe(false);
+    // El corte es ~24 h atrás del momento del registro, no un valor fijo.
+    const horasAtras = (antes - where.createdAt.lt.getTime()) / (60 * 60 * 1000);
+    expect(horasAtras).toBeGreaterThan(23.9);
+    expect(horasAtras).toBeLessThan(24.1);
+  });
+
+  it("purga global: un error al purgar no rompe nada y se loguea, nunca afecta la respuesta ya enviada", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 7, email: "juan@gmail.com", emailVerificado: true });
+    deleteManyMock.mockRejectedValueOnce(new Error("boom"));
+
+    const res = await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+    expect(res.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(logErrorMock).toHaveBeenCalled();
+    });
+  });
+
+  it("carrera de alta duplicada (P2002 al crear): se descarta en silencio, sin loguear error — el primer request ya mandó el mail", async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+    const errorDuplicado = Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
+    createMock.mockRejectedValueOnce(errorDuplicado);
+
+    const res = await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+    expect(res.status).toBe(200);
+
+    // La purga es el paso siguiente al `catch` que descarta el P2002: para
+    // cuando se dispara, la rama entera (incluido un eventual logError
+    // indeseado) ya corrió — sin esto, un sleep fijo sería tan racy como el
+    // que reemplaza.
+    await esperarPurga(1);
+    expect(logErrorMock).not.toHaveBeenCalled();
+    expect(enviarVerificacionMock).not.toHaveBeenCalled();
   });
 });
