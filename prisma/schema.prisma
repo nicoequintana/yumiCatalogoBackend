@@ -635,6 +635,11 @@ model CuentaCliente {
   /// Una cuenta local no verificada NO puede iniciar sesión y se purga a las
   /// 24 h. Google nace verificada.
   emailVerificado  Boolean   @default(false)
+  /// Se setea en la PRIMERA verificación y nunca se borra. La regla de las
+  /// 24 h (purga, login, reenvío, reseteo) aplica SOLO mientras es NULL: la
+  /// reasignación operada del email apaga `emailVerificado` en una cuenta
+  /// real con pedidos, que no puede tratarse como un registro abandonado.
+  verificadaEn     DateTime?
   /// Revocación de sesión, mismo mecanismo que `Usuario.tokenVersion`.
   tokenVersion     Int       @default(0)
   /// Bloqueo por cuenta persistido: sobrevive reinicios del contenedor.
