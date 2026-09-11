@@ -24,6 +24,9 @@
 //   crackeable offline (hashcat) y equivale a un admin abierto. Por eso se
 //   valida también su longitud mínima (`JWT_SECRET_MIN_BYTES`), no solo su
 //   presencia.
+// - JWT_SECRET_CLIENTE firma la sesión de los CLIENTES; distinto del de admin
+//   a propósito — con el mismo secreto, un cliente con sub: 3 entra como el
+//   Usuario 3 (ver spec de cuentas de cliente, "Secreto separado").
 // - CLOUDINARY_*: storage principal de fotos y video (ver CLAUDE.md).
 // - SMTP_USER / SMTP_PASSWORD: sin credenciales de Gmail no sale ninguna
 //   notificación de órdenes. Van acá y no en una validación perezosa por el
@@ -51,6 +54,7 @@
 export const VARIABLES_REQUERIDAS = [
   "DATABASE_URL",
   "JWT_SECRET",
+  "JWT_SECRET_CLIENTE",
   "CLOUDINARY_CLOUD_NAME",
   "CLOUDINARY_API_KEY",
   "CLOUDINARY_API_SECRET",
@@ -66,6 +70,9 @@ export const VARIABLES_REQUERIDAS = [
 // es crackeable offline. 32 bytes es el tamaño de bloque de SHA-256, el piso
 // razonable para la clave de un HMAC-SHA256.
 export const JWT_SECRET_MIN_BYTES = 32;
+
+/** Los dos secretos que firman JWT; cada uno se valida con el mismo mínimo. */
+export const SECRETOS_JWT = ["JWT_SECRET", "JWT_SECRET_CLIENTE"];
 
 /**
  * Devuelve el listado de variables requeridas que faltan o están vacías.
@@ -94,14 +101,21 @@ export function variablesFaltantes(entorno = process.env) {
  * importa al HMAC.
  *
  * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @param {string} [nombre="JWT_SECRET"] nombre de la variable a chequear —
+ *   permite reusar la misma función para JWT_SECRET_CLIENTE.
  * @returns {boolean}
  */
-export function jwtSecretDebil(entorno = process.env) {
-  const valor = entorno.JWT_SECRET;
+export function jwtSecretDebil(entorno = process.env, nombre = "JWT_SECRET") {
+  const valor = entorno[nombre];
   if (valor === undefined || valor === null || String(valor).trim() === "") {
     return false;
   }
   return Buffer.byteLength(String(valor), "utf8") < JWT_SECRET_MIN_BYTES;
+}
+
+/** Los secretos de `SECRETOS_JWT` presentes pero por debajo del mínimo. */
+export function secretosDebiles(entorno = process.env) {
+  return SECRETOS_JWT.filter((nombre) => jwtSecretDebil(entorno, nombre));
 }
 
 /**
@@ -130,19 +144,21 @@ export function mensajeDeFaltantes(faltantes) {
  *
  * @param {object} problemas
  * @param {string[]} [problemas.faltantes=[]]
- * @param {boolean} [problemas.secretoDebil=false]
+ * @param {boolean} [problemas.secretoDebil=false] compatibilidad con el booleano viejo (solo JWT_SECRET)
+ * @param {string[]} [problemas.secretosDebiles=[]]
  * @returns {string}
  */
-export function mensajeDeProblemas({ faltantes = [], secretoDebil = false } = {}) {
+export function mensajeDeProblemas({ faltantes = [], secretoDebil = false, secretosDebiles = [] } = {}) {
   const bloques = [];
   if (faltantes.length > 0) {
     bloques.push(mensajeDeFaltantes(faltantes));
   }
-  if (secretoDebil) {
+  const debiles = secretoDebil ? ["JWT_SECRET", ...secretosDebiles] : secretosDebiles;
+  for (const nombre of new Set(debiles)) {
     bloques.push(
       [
-        `No se puede arrancar el backend: JWT_SECRET es demasiado corto (necesita al menos ${JWT_SECRET_MIN_BYTES} bytes).`,
-        "Con HS256 un secreto corto es crackeable offline y deja el admin abierto.",
+        `No se puede arrancar el backend: ${nombre} es demasiado corto (necesita al menos ${JWT_SECRET_MIN_BYTES} bytes).`,
+        "Con HS256 un secreto corto es crackeable offline y deja la sesión abierta.",
         "Generá uno nuevo con `openssl rand -base64 48` y volvé a desplegar.",
       ].join("\n"),
     );
@@ -151,10 +167,63 @@ export function mensajeDeProblemas({ faltantes = [], secretoDebil = false } = {}
 }
 
 /**
- * Valida el entorno y corta el arranque si falta algo o si JWT_SECRET es débil.
+ * Decisión 7 de la spec: el corte a login obligatorio sale por env, no por
+ * deploy, porque no existe orden de publicación que deje el checkout vivo.
+ *
+ * Ausente = false, que es el estado seguro para publicar. Un valor que no es
+ * "true" ni "false" cae a TRUE y se loguea: es un campo que se edita a mano en
+ * producción, y un typo tiene que costar una venta menos, nunca el catálogo
+ * caído por un crash loop.
+ *
+ * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @returns {boolean}
+ */
+export function checkoutRequiereCuenta(entorno = process.env) {
+  const crudo = entorno.CHECKOUT_REQUIERE_CUENTA;
+  if (crudo === undefined || crudo === null) return false;
+  const valor = String(crudo).trim().toLowerCase();
+  if (valor === "" || valor === "false") return false;
+  return true;
+}
+
+/**
+ * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @returns {boolean} true si CHECKOUT_REQUIERE_CUENTA está seteado con un
+ *   valor que no es ni "true" ni "false" (cae a true, pero es un typo).
+ */
+export function flagCheckoutInvalido(entorno = process.env) {
+  const crudo = entorno.CHECKOUT_REQUIERE_CUENTA;
+  if (crudo === undefined || crudo === null) return false;
+  const valor = String(crudo).trim().toLowerCase();
+  return valor !== "" && valor !== "true" && valor !== "false";
+}
+
+/**
+ * Dominio de las cookies de sesión de cliente. Ausente en desarrollo
+ * (localhost, sin dominio raíz compartido entre front y back).
+ *
+ * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @returns {string | undefined}
+ */
+export function cookieDominio(entorno = process.env) {
+  const valor = entorno.COOKIE_DOMINIO;
+  if (typeof valor !== "string" || valor.trim() === "") return undefined;
+  return valor.trim();
+}
+
+/**
+ * Valida el entorno y corta el arranque si falta algo o si algún JWT_SECRET*
+ * es débil. Además, en el camino feliz, deja un testigo de arranque con el
+ * valor efectivo de CHECKOUT_REQUIERE_CUENTA (contrato de la spec de cuentas
+ * de cliente, "Publicación") y avisa si el flag trae un valor no reconocido.
  *
  * `exit` y `log` se inyectan para poder testear el camino de falla sin matar
- * el proceso de test.
+ * el proceso de test. `exit` NO corta la ejecución de esta función por sí
+ * solo — en producción es `process.exit` y sí la corta; en un test es un
+ * `vi.fn()` que no interrumpe nada, por eso el `return` explícito después de
+ * llamarlo: sin él, un test que inyecta `exit` seguiría de largo hacia el
+ * testigo del flag y el mock de `log` recibiría una segunda llamada además
+ * del mensaje de error, rompiendo cualquier aserción de "un solo log".
  *
  * @param {object} [opciones]
  * @param {Record<string, string | undefined>} [opciones.entorno=process.env]
@@ -164,10 +233,17 @@ export function mensajeDeProblemas({ faltantes = [], secretoDebil = false } = {}
  */
 export function validarEntorno({ entorno = process.env, exit = process.exit, log = console.error } = {}) {
   const faltantes = variablesFaltantes(entorno);
-  const secretoDebil = jwtSecretDebil(entorno);
-  if (faltantes.length > 0 || secretoDebil) {
-    log(mensajeDeProblemas({ faltantes, secretoDebil }));
+  const debiles = secretosDebiles(entorno);
+  if (faltantes.length > 0 || debiles.length > 0) {
+    log(mensajeDeProblemas({ faltantes, secretosDebiles: debiles }));
     exit(1);
+    return faltantes;
   }
+  if (flagCheckoutInvalido(entorno)) {
+    log(
+      `CHECKOUT_REQUIERE_CUENTA tiene un valor no reconocido (${JSON.stringify(entorno.CHECKOUT_REQUIERE_CUENTA)}); se toma como "true". Valores válidos: "true" o "false".`,
+    );
+  }
+  log(`CHECKOUT_REQUIERE_CUENTA efectivo: ${checkoutRequiereCuenta(entorno)}`);
   return faltantes;
 }

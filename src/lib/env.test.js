@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   JWT_SECRET_MIN_BYTES,
   VARIABLES_REQUERIDAS,
+  checkoutRequiereCuenta,
+  cookieDominio,
   jwtSecretDebil,
   mensajeDeFaltantes,
+  mensajeDeProblemas,
   validarEntorno,
   variablesFaltantes,
 } from "./env.js";
@@ -12,6 +15,9 @@ const entornoCompleto = {
   DATABASE_URL: "sqlserver://localhost:1433;database=yima",
   // >= 32 bytes: un entorno válido de verdad exige un JWT_SECRET fuerte (AUTH-03).
   JWT_SECRET: "un-secreto-largo-de-mas-de-treinta-y-dos-bytes",
+  // Secreto separado del de admin a propósito (ver "Secreto separado" en la
+  // spec de cuentas de cliente): >= 32 bytes también.
+  JWT_SECRET_CLIENTE: "otro-secreto-largo-de-mas-de-treinta-y-dos-bytes",
   CLOUDINARY_CLOUD_NAME: "yima",
   CLOUDINARY_API_KEY: "123",
   CLOUDINARY_API_SECRET: "abc",
@@ -32,6 +38,7 @@ describe("variablesFaltantes", () => {
 
     expect(faltantes).toEqual([
       "JWT_SECRET",
+      "JWT_SECRET_CLIENTE",
       "CLOUDINARY_CLOUD_NAME",
       "CLOUDINARY_API_KEY",
       "CLOUDINARY_API_SECRET",
@@ -53,6 +60,7 @@ describe("variablesFaltantes", () => {
     };
 
     expect(variablesFaltantes(entorno)).toEqual([
+      "JWT_SECRET_CLIENTE",
       "SMTP_USER",
       "SMTP_PASSWORD",
       "MAIL_ADMIN_DESTINO",
@@ -105,8 +113,14 @@ describe("validarEntorno", () => {
 
     validarEntorno({ entorno: entornoCompleto, exit, log });
 
+    // Camino feliz: no aborta. El único log permitido es el testigo
+    // informativo del flag de checkout (contrato de la spec, "Publicación"),
+    // nunca una advertencia o error de faltantes/secreto débil.
     expect(exit).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("CHECKOUT_REQUIERE_CUENTA efectivo: false");
+    expect(
+      log.mock.calls.every(([mensaje]) => !/demasiado corto|faltan variables/i.test(mensaje)),
+    ).toBe(true);
   });
 
   it("loguea el detalle y corta con código 1 cuando falta algo", () => {
@@ -183,7 +197,10 @@ describe("validarEntorno — fortaleza de JWT_SECRET (AUTH-03)", () => {
     validarEntorno({ entorno: { ...entornoCompleto, JWT_SECRET: "a".repeat(32) }, exit, log });
 
     expect(exit).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("CHECKOUT_REQUIERE_CUENTA efectivo: false");
+    expect(
+      log.mock.calls.every(([mensaje]) => !/demasiado corto|faltan variables/i.test(mensaje)),
+    ).toBe(true);
   });
 
   it("un JWT_SECRET ausente sigue reportándose como faltante (no como débil)", () => {
@@ -215,5 +232,73 @@ describe("validarEntorno — fortaleza de JWT_SECRET (AUTH-03)", () => {
     const mensaje = log.mock.calls[0][0];
     expect(mensaje).toContain("FRONTEND_URL");
     expect(mensaje).toContain("JWT_SECRET");
+  });
+});
+
+// Fixture propia de estas suites nuevas: todas las VARIABLES_REQUERIDAS con un
+// valor fuerte parejo, para no acoplar estos tests al contenido puntual de
+// `entornoCompleto` de arriba.
+const ENTORNO_COMPLETO = Object.fromEntries(VARIABLES_REQUERIDAS.map((n) => [n, "x".repeat(40)]));
+
+describe("JWT_SECRET_CLIENTE", () => {
+  it("es obligatoria", () => {
+    expect(VARIABLES_REQUERIDAS).toContain("JWT_SECRET_CLIENTE");
+  });
+
+  it("jwtSecretDebil acepta el nombre de la variable y aplica el mismo minimo de 32 bytes", () => {
+    expect(jwtSecretDebil({ JWT_SECRET_CLIENTE: "corto" }, "JWT_SECRET_CLIENTE")).toBe(true);
+    expect(jwtSecretDebil({ JWT_SECRET_CLIENTE: "x".repeat(32) }, "JWT_SECRET_CLIENTE")).toBe(false);
+    // Sin nombre sigue mirando JWT_SECRET, como siempre.
+    expect(jwtSecretDebil({ JWT_SECRET: "corto" })).toBe(true);
+  });
+
+  it("validarEntorno corta el arranque si el secreto de cliente es debil, nombrandolo", () => {
+    const exit = vi.fn();
+    const log = vi.fn();
+    validarEntorno({ entorno: { ...ENTORNO_COMPLETO, JWT_SECRET_CLIENTE: "corto" }, exit, log });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(log.mock.calls[0][0]).toMatch(/JWT_SECRET_CLIENTE/);
+  });
+
+  it("mensajeDeProblemas nombra cada secreto debil por separado", () => {
+    const mensaje = mensajeDeProblemas({ faltantes: [], secretosDebiles: ["JWT_SECRET", "JWT_SECRET_CLIENTE"] });
+    expect(mensaje).toMatch(/JWT_SECRET es demasiado corto/);
+    expect(mensaje).toMatch(/JWT_SECRET_CLIENTE es demasiado corto/);
+  });
+});
+
+describe("checkoutRequiereCuenta", () => {
+  it("ausente es false: el estado seguro para publicar", () => {
+    expect(checkoutRequiereCuenta({})).toBe(false);
+  });
+
+  it("acepta true/false con espacios y mayusculas", () => {
+    expect(checkoutRequiereCuenta({ CHECKOUT_REQUIERE_CUENTA: " TRUE " })).toBe(true);
+    expect(checkoutRequiereCuenta({ CHECKOUT_REQUIERE_CUENTA: "False" })).toBe(false);
+  });
+
+  it("cualquier otro valor cae a TRUE (exige cuenta): una venta menos, nunca el sitio caido", () => {
+    expect(checkoutRequiereCuenta({ CHECKOUT_REQUIERE_CUENTA: "1" })).toBe(true);
+    expect(checkoutRequiereCuenta({ CHECKOUT_REQUIERE_CUENTA: "si" })).toBe(true);
+    expect(checkoutRequiereCuenta({ CHECKOUT_REQUIERE_CUENTA: "" })).toBe(false);
+  });
+
+  it("validarEntorno NO aborta por un flag invalido, pero lo loguea", () => {
+    const exit = vi.fn();
+    const log = vi.fn();
+    validarEntorno({ entorno: { ...ENTORNO_COMPLETO, CHECKOUT_REQUIERE_CUENTA: "1" }, exit, log });
+    expect(exit).not.toHaveBeenCalled();
+    expect(log.mock.calls.some(([m]) => /CHECKOUT_REQUIERE_CUENTA/.test(m) && /"1"/.test(m))).toBe(true);
+  });
+});
+
+describe("cookieDominio", () => {
+  it("devuelve undefined si no esta o esta vacia (desarrollo en localhost)", () => {
+    expect(cookieDominio({})).toBeUndefined();
+    expect(cookieDominio({ COOKIE_DOMINIO: "  " })).toBeUndefined();
+  });
+
+  it("devuelve el valor recortado", () => {
+    expect(cookieDominio({ COOKIE_DOMINIO: " .yima-productos.com " })).toBe(".yima-productos.com");
   });
 });
