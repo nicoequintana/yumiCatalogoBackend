@@ -17,11 +17,12 @@ export function crearLimitadorDeVelocidad({
   message = "Demasiadas solicitudes, probá de nuevo más tarde.",
   keyGenerator,
   skip,
+  standardHeaders = true,
 }) {
   return rateLimit({
     windowMs,
     max,
-    standardHeaders: true,
+    standardHeaders,
     legacyHeaders: false,
     ...(keyGenerator && { keyGenerator }),
     ...(skip && { skip }),

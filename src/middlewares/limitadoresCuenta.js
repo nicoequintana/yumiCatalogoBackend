@@ -43,6 +43,11 @@ export function crearLimitadorPorDestino({ windowMs, max }) {
     // deja como red de seguridad explícita, no como código muerto a borrar.
     keyGenerator: (req) => claveDeDestino(req) ?? "sin-destino",
     skip: (req) => claveDeDestino(req) === null,
+    // Sin headers propios: va DETRÁS del de IP en la misma ruta y los
+    // pisaría, y un `RateLimit-Remaining` por email le dice a cualquiera
+    // cuántas veces se sondeó esa dirección — enumeración en `/registro`.
+    // Los legacy (`X-RateLimit-*`) ya van apagados en la fábrica.
+    standardHeaders: false,
   });
 }
 

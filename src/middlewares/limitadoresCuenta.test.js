@@ -65,6 +65,42 @@ describe("crearLimitadorPorDestino", () => {
   });
 });
 
+describe("headers RateLimit-* del limitador por destino", () => {
+  it("un email ya sondeado muestra los MISMOS headers que uno fresco: el contador por email no se filtra (enumeración)", async () => {
+    // Misma cadena que `/registro`: primero el de IP (acá keyeado por un
+    // header para simular IPs distintas), después el por destino.
+    const porIp = crearLimitadorDeVelocidad({
+      windowMs: 60_000,
+      max: 15,
+      message: MENSAJE_429_CUENTA,
+      keyGenerator: (req) => req.get("x-ip-prueba"),
+    });
+    const app = express();
+    app.use(express.json());
+    app.post("/x", porIp, crearLimitadorPorDestino({ windowMs: 60_000, max: 3 }), (_req, res) => res.json({ ok: true }));
+
+    await request(app).post("/x").set("x-ip-prueba", "a").send({ email: "sondeado@gmail.com" });
+    await request(app).post("/x").set("x-ip-prueba", "b").send({ email: "sondeado@gmail.com" });
+
+    const sondeado = await request(app).post("/x").set("x-ip-prueba", "c").send({ email: "sondeado@gmail.com" });
+    const fresco = await request(app).post("/x").set("x-ip-prueba", "d").send({ email: "fresco@gmail.com" });
+
+    expect(sondeado.status).toBe(200);
+    expect(sondeado.headers["ratelimit-limit"]).toBe(fresco.headers["ratelimit-limit"]);
+    expect(sondeado.headers["ratelimit-remaining"]).toBe(fresco.headers["ratelimit-remaining"]);
+    expect(sondeado.headers["ratelimit-policy"]).toBe(fresco.headers["ratelimit-policy"]);
+  });
+
+  it("el limitador por destino no emite headers propios", async () => {
+    const res = await request(appCon(crearLimitadorPorDestino({ windowMs: 60_000, max: 3 })))
+      .post("/x")
+      .send({ email: "v@gmail.com" });
+    expect(res.headers["ratelimit-limit"]).toBeUndefined();
+    expect(res.headers["ratelimit-remaining"]).toBeUndefined();
+    expect(res.headers["x-ratelimit-limit"]).toBeUndefined();
+  });
+});
+
 describe("crearLimitadorDeVelocidad — keyGenerator y skip", () => {
   it("acepta keyGenerator y skip y los pasa a express-rate-limit", async () => {
     const app = appCon(
