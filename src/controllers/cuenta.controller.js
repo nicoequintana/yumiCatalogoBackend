@@ -32,6 +32,7 @@ import {
   revocarTokensPendientes,
 } from "../lib/tokensCuenta.js";
 import { firmarSesionCliente } from "../lib/jwtCliente.js";
+import { purgarVencidaConEmail } from "../lib/cuentaClienteReglas.js";
 import { borrarCookieSesion, leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
 import { randomBytes } from "node:crypto";
 import {
@@ -958,39 +959,45 @@ export async function cambiarEmail(req, res, next) {
 }
 
 /**
- * Consumo y escritura en UNA transacción (spec): el `updateMany` guardado del
- * token va por el cliente `tx`, no por `consumirToken` (que usa el global y
- * quedaría afuera). Si el `update` del email tira P2002 — otra cuenta tomó esa
+ * Consumo y escritura en UNA transacción (spec): `consumirToken` recibe el
+ * cliente `tx`, así el consumo y la clasificación de un token no vivo quedan
+ * adentro. Si el `update` del email tira P2002 — otra cuenta tomó esa
  * dirección entre el pedido y el click —, el rollback des-consume el token
  * solo y se responde 409: el link sigue vivo, sin una escritura compensatoria
- * que pudiera fallar y dejarlo quemado.
+ * que pudiera fallar y dejarlo quemado. Antes del `update` se purga una fila
+ * abandonada que ocupe la dirección (`purgarVencidaConEmail`): no es un 409.
  *
  * `tokenVersion` +1 cierra TODAS las sesiones: la cookie viaja con el email
- * viejo. `emailVerificado: true` porque el click probó la dirección nueva.
+ * viejo, y la de este navegador se borra en la respuesta (quedaría una cookie
+ * muerta que el front leería como sesión). `emailVerificado: true` porque el
+ * click probó la dirección nueva.
  *
- * Con Google vinculado se borra la `IdentidadGoogle` en la MISMA transacción:
- * el login por `sub` y el local apuntarían a emails distintos (spec).
+ * En la MISMA transacción se revocan los RESET y CODIGO_ACCESO pendientes
+ * (fueron al buzón VIEJO: tras la mudanza no pueden seguir abriendo la
+ * cuenta) y cualquier otro CAMBIO_EMAIL. Con Google vinculado se borra la
+ * `IdentidadGoogle`: el login por `sub` y el local apuntarían a emails
+ * distintos (spec).
  */
 export async function confirmarEmail(req, res, next) {
   try {
     const tokenClaro = req.body?.token;
     if (typeof tokenClaro !== "string" || !tokenClaro) throw httpError(400, "Falta el token.");
     if (tokenClaro.length > LARGO_MAX_TOKEN) return responderMotivo(res, "INVALIDO");
-    const tokenHash = hashDeToken(tokenClaro);
 
     let resultado;
     try {
       resultado = await prisma.$transaction(async (tx) => {
-        const ahora = new Date();
-        const { count } = await tx.tokenCuenta.updateMany({
-          where: { tokenHash, tipo: TIPOS_TOKEN.CAMBIO_EMAIL, usadoEn: null, expiraEn: { gt: ahora } },
-          data: { usadoEn: ahora },
-        });
-        if (count === 0) return null;
+        const consumo = await consumirToken({ tokenClaro, tipo: TIPOS_TOKEN.CAMBIO_EMAIL }, tx);
+        // Token no vivo: el `updateMany` guardado no escribió nada y el motivo
+        // ya salió clasificado por el mismo cliente, dentro de la transacción.
+        if (!consumo.ok) return { motivo: consumo.motivo };
 
-        const { cuentaClienteId, emailNuevo } = await tx.tokenCuenta.findUnique({ where: { tokenHash } });
+        const { cuentaClienteId, emailNuevo } = consumo.fila;
+        const ahora = new Date();
         const cuenta = await tx.cuentaCliente.findUnique({ where: { id: cuentaClienteId }, include: { identidadGoogle: true } });
         if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
+
+        await purgarVencidaConEmail(tx, emailNuevo);
 
         // `verificadaEn` solo si faltaba (fila previa a la columna): leído y
         // escrito dentro de la misma transacción, y nunca se pisa.
@@ -1004,6 +1011,11 @@ export async function confirmarEmail(req, res, next) {
           },
         });
         if (cuenta.identidadGoogle) await tx.identidadGoogle.delete({ where: { cuentaClienteId } });
+        await revocarTokensPendientes(tx, cuentaClienteId, [
+          TIPOS_TOKEN.RESET,
+          TIPOS_TOKEN.CODIGO_ACCESO,
+          TIPOS_TOKEN.CAMBIO_EMAIL,
+        ]);
         return { googleDesvinculado: Boolean(cuenta.identidadGoogle) };
       });
     } catch (err) {
@@ -1011,14 +1023,9 @@ export async function confirmarEmail(req, res, next) {
       throw err;
     }
 
-    if (!resultado) {
-      // El token no estaba vivo y la transacción no escribió nada: el motivo
-      // lo clasifica `consumirToken`, que con un token no vivo tampoco escribe
-      // (mismo patrón que `restablecer`).
-      const clasificacion = await consumirToken({ tokenClaro, tipo: TIPOS_TOKEN.CAMBIO_EMAIL });
-      return responderMotivo(res, clasificacion.ok ? "INVALIDO" : clasificacion.motivo);
-    }
+    if (resultado.motivo) return responderMotivo(res, resultado.motivo);
 
+    borrarCookieSesion(res);
     const mensaje = "Tu email fue actualizado. Volvé a entrar.";
     res.json({ mensaje: resultado.googleDesvinculado ? `${mensaje} ${AVISO_DESVINCULA_GOOGLE}` : mensaje });
   } catch (err) {

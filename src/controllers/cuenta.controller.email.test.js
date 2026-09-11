@@ -14,6 +14,7 @@ const txTokenFindUniqueMock = vi.fn();
 const txCuentaFindUniqueMock = vi.fn();
 const txCuentaUpdateMock = vi.fn();
 const txIdentidadDeleteMock = vi.fn();
+const txCuentaDeleteManyMock = vi.fn();
 const invalidarMock = vi.fn();
 const emitirTokenMock = vi.fn();
 const consumirTokenMock = vi.fn();
@@ -47,7 +48,6 @@ vi.mock("../services/notificacionesCuenta.service.js", () => ({
 
 const { cambiarEmail, confirmarEmail } = await import("./cuenta.controller.js");
 const { hashearPassword } = await import("../lib/passwords.js");
-const { hashDeToken } = await import("../lib/tokensCuenta.js");
 
 function buildApp() {
   const app = express();
@@ -67,7 +67,7 @@ let HASH;
 beforeEach(async () => {
   [
     findUniqueMock, updateManyTokenGlobalMock, txMock, txTokenUpdateManyMock, txTokenFindUniqueMock,
-    txCuentaFindUniqueMock, txCuentaUpdateMock, txIdentidadDeleteMock, invalidarMock, emitirTokenMock,
+    txCuentaFindUniqueMock, txCuentaUpdateMock, txIdentidadDeleteMock, txCuentaDeleteManyMock, invalidarMock, emitirTokenMock,
     consumirTokenMock, enviarCambioEmailMock, enviarAvisoMock,
   ].forEach((m) => m.mockReset());
   emitirTokenMock.mockResolvedValue({ tokenClaro: "abc", expiraEn: EXPIRA, id: 88 });
@@ -158,20 +158,23 @@ describe("PUT /cuenta/email (cambiarEmail)", () => {
 });
 
 describe("POST /cuenta/email/confirmar (confirmarEmail)", () => {
-  function mockTx({ consumido = true, identidadGoogle = null, updateRechaza, verificadaEn = new Date("2026-01-01") } = {}) {
-    txTokenUpdateManyMock.mockResolvedValue({ count: consumido ? 1 : 0 });
-    txTokenFindUniqueMock.mockResolvedValue({ cuentaClienteId: 1, emailNuevo: "nuevo@gmail.com" });
+  let TX;
+  function mockTx({ consumido = true, motivo = "USADO", identidadGoogle = null, updateRechaza, verificadaEn = new Date("2026-01-01") } = {}) {
+    consumirTokenMock.mockResolvedValue(
+      consumido ? { ok: true, fila: { cuentaClienteId: 1, emailNuevo: "nuevo@gmail.com" } } : { ok: false, motivo },
+    );
+    txTokenUpdateManyMock.mockResolvedValue({ count: 0 });
     txCuentaFindUniqueMock.mockResolvedValue({ id: 1, identidadGoogle, verificadaEn });
+    txCuentaDeleteManyMock.mockResolvedValue({ count: 0 });
     if (updateRechaza) txCuentaUpdateMock.mockRejectedValue(updateRechaza);
     else txCuentaUpdateMock.mockResolvedValue({});
     txIdentidadDeleteMock.mockResolvedValue({});
-    txMock.mockImplementation(async (fn) =>
-      fn({
-        tokenCuenta: { updateMany: txTokenUpdateManyMock, findUnique: txTokenFindUniqueMock },
-        cuentaCliente: { findUnique: txCuentaFindUniqueMock, update: txCuentaUpdateMock },
-        identidadGoogle: { delete: txIdentidadDeleteMock },
-      }),
-    );
+    TX = {
+      tokenCuenta: { updateMany: txTokenUpdateManyMock, findUnique: txTokenFindUniqueMock },
+      cuentaCliente: { findUnique: txCuentaFindUniqueMock, update: txCuentaUpdateMock, deleteMany: txCuentaDeleteManyMock },
+      identidadGoogle: { delete: txIdentidadDeleteMock },
+    };
+    txMock.mockImplementation(async (fn) => fn(TX));
   }
 
   it("sin token: 400", async () => {
@@ -187,31 +190,62 @@ describe("POST /cuenta/email/confirmar (confirmarEmail)", () => {
     expect(txMock).not.toHaveBeenCalled();
   });
 
-  it("token no vivo: el consumo guardado no escribe, se clasifica el motivo y la cuenta no se toca", async () => {
-    mockTx({ consumido: false });
-    consumirTokenMock.mockResolvedValue({ ok: false, motivo: "USADO" });
+  it("token no vivo: consumirToken lo clasifica DENTRO de la transaccion (una sola llamada) y la cuenta no se toca", async () => {
+    mockTx({ consumido: false, motivo: "USADO" });
     const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
     expect(res.status).toBe(400);
     expect(res.body.motivo).toBe("USADO");
-    expect(consumirTokenMock).toHaveBeenCalledWith({ tokenClaro: "x", tipo: "CAMBIO_EMAIL" });
+    expect(consumirTokenMock).toHaveBeenCalledTimes(1);
+    expect(consumirTokenMock).toHaveBeenCalledWith({ tokenClaro: "x", tipo: "CAMBIO_EMAIL" }, TX);
     expect(txCuentaUpdateMock).not.toHaveBeenCalled();
+    expect(txTokenUpdateManyMock).not.toHaveBeenCalled();
+    expect(res.headers["set-cookie"]).toBeUndefined();
   });
 
-  it("exito sin Google: consume DENTRO de la transaccion con tipo en el where, cambia email, emailVerificado true, tokenVersion+1", async () => {
+  it("exito sin Google: consume por el cliente de la transaccion, cambia email, emailVerificado true, tokenVersion+1", async () => {
     mockTx();
     const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
     expect(res.status).toBe(200);
-    const { where, data } = txTokenUpdateManyMock.mock.calls[0][0];
-    expect(where).toMatchObject({ tokenHash: hashDeToken("x"), tipo: "CAMBIO_EMAIL", usadoEn: null });
-    expect(where.expiraEn.gt).toBeInstanceOf(Date);
-    expect(data.usadoEn).toBeInstanceOf(Date);
+    expect(consumirTokenMock).toHaveBeenCalledWith({ tokenClaro: "x", tipo: "CAMBIO_EMAIL" }, TX);
     expect(txCuentaUpdateMock).toHaveBeenCalledWith({
       where: { id: 1 },
       data: { email: "nuevo@gmail.com", emailVerificado: true, tokenVersion: { increment: 1 } },
     });
     expect(txIdentidadDeleteMock).not.toHaveBeenCalled();
-    expect(consumirTokenMock).not.toHaveBeenCalled();
+    expect(updateManyTokenGlobalMock).not.toHaveBeenCalled();
     expect(res.body.mensaje).not.toMatch(/Google/);
+  });
+
+  it("exito: en la MISMA transaccion revoca los RESET, CODIGO_ACCESO y otros CAMBIO_EMAIL pendientes (fueron al buzon viejo)", async () => {
+    mockTx();
+    await request(buildApp()).post("/email/confirmar").send({ token: "x" });
+    const { where, data } = txTokenUpdateManyMock.mock.calls[0][0];
+    expect(where).toEqual({ cuentaClienteId: 1, tipo: { in: ["RESET", "CODIGO_ACCESO", "CAMBIO_EMAIL"] }, usadoEn: null });
+    expect(data.usadoEn).toBeInstanceOf(Date);
+    expect(updateManyTokenGlobalMock).not.toHaveBeenCalled();
+  });
+
+  it("exito: borra la cookie de sesion del navegador que confirma (su tokenVersion ya no vale)", async () => {
+    mockTx();
+    const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
+    expect(res.status).toBe(200);
+    expect((res.headers["set-cookie"] ?? []).some((c) => c.startsWith("sesion_cliente=;"))).toBe(true);
+  });
+
+  it("una fila abandonada (nunca verificada, vencida, sin pedidos) con el email nuevo se purga ANTES de escribir, dentro de la transaccion", async () => {
+    mockTx();
+    const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
+    expect(res.status).toBe(200);
+    expect(txCuentaDeleteManyMock).toHaveBeenCalledWith({
+      where: {
+        email: "nuevo@gmail.com",
+        emailVerificado: false,
+        verificadaEn: null,
+        createdAt: { lt: expect.any(Date) },
+        ordenes: { none: {} },
+      },
+    });
+    expect(txCuentaDeleteManyMock.mock.invocationCallOrder[0]).toBeLessThan(txCuentaUpdateMock.mock.invocationCallOrder[0]);
   });
 
   it("cuenta sin verificadaEn (fila previa a la columna): la confirmacion lo setea; nunca pisa uno existente (test de arriba)", async () => {
@@ -237,17 +271,11 @@ describe("POST /cuenta/email/confirmar (confirmarEmail)", () => {
   it("P2002 (email ya usado): 409; el consumo fue por el cliente de la transaccion, asi el rollback lo des-consume", async () => {
     const p2002 = Object.assign(new Error("dup"), { code: "P2002" });
     mockTx({ updateRechaza: p2002 });
-    txMock.mockImplementation(async (fn) => {
-      await fn({
-        tokenCuenta: { updateMany: txTokenUpdateManyMock, findUnique: txTokenFindUniqueMock },
-        cuentaCliente: { findUnique: txCuentaFindUniqueMock, update: txCuentaUpdateMock },
-        identidadGoogle: { delete: txIdentidadDeleteMock },
-      });
-    });
     const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
     expect(res.status).toBe(409);
-    expect(txTokenUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(consumirTokenMock).toHaveBeenCalledTimes(1);
+    expect(consumirTokenMock.mock.calls[0][1]).toBe(TX);
     expect(updateManyTokenGlobalMock).not.toHaveBeenCalled();
-    expect(consumirTokenMock).not.toHaveBeenCalled();
+    expect(res.headers["set-cookie"]).toBeUndefined();
   });
 });
