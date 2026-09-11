@@ -7,10 +7,18 @@ import { hashearPassword, motivoPasswordRechazada } from "../lib/passwords.js";
 import { reservarSlot } from "../lib/colaBcrypt.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import { ORIGENES_REGISTRO, HORAS_PURGA_NO_VERIFICADAS, normalizarEmail } from "../lib/cuentasCliente.js";
-import { invalidarTokensDe } from "../lib/tokensCuenta.js";
+import { invalidarTokensDe, consumirToken, hashDeToken } from "../lib/tokensCuenta.js";
+import { setCookieDispositivo } from "../lib/cookiesCliente.js";
+import { DURACION_DISPOSITIVO_MS } from "../lib/cuentasCliente.js";
+import { randomBytes } from "node:crypto";
 import { enviarVerificacion, enviarYaTenesCuenta } from "../services/notificacionesCuenta.service.js";
 
 const MENSAJE_REGISTRO = "Te mandamos un mail para confirmar tu cuenta.";
+const MOTIVO_A_MENSAJE = {
+  INVALIDO: "Ese link no es válido.",
+  USADO: "Ese link ya se usó.",
+  VENCIDO: "Ese link venció. Pedí uno nuevo.",
+};
 /** Límite del índice UNIQUE de `CuentaCliente.email` (1700 bytes): más largo revienta el insert como 500. */
 const LARGO_MAX_EMAIL = 254;
 const MS_PURGA_NO_VERIFICADAS = HORAS_PURGA_NO_VERIFICADAS * 60 * 60 * 1000;
@@ -135,6 +143,51 @@ export async function registro(req, res, next) {
         logError({ mensaje: `No se pudo procesar el registro de ${email}`, stack: err.stack, causa: err });
       })
       .finally(() => liberarSlot());
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Un navegador que hace click en el link YA probó posesión del buzón: se le
+ * ahorra el mail de código de acceso en su primer login (spec, "Verificación").
+ */
+async function marcarDispositivoConocido(res, cuentaClienteId) {
+  const tokenClaro = randomBytes(32).toString("base64url");
+  await prisma.dispositivoConocido.create({
+    data: {
+      cuentaClienteId,
+      tokenHash: hashDeToken(tokenClaro),
+      expiraEn: new Date(Date.now() + DURACION_DISPOSITIVO_MS),
+    },
+  });
+  setCookieDispositivo(res, tokenClaro);
+}
+
+/**
+ * Es POST y no GET a propósito: Outlook Safe Links y varios antivirus
+ * prefetchean todo link de un mail — un GET que consumiera el token lo
+ * quemaría antes de que la persona lo vea.
+ */
+export async function verificar(req, res, next) {
+  try {
+    const tokenClaro = req.body?.token;
+    if (typeof tokenClaro !== "string" || !tokenClaro) throw httpError(400, "Falta el token.");
+
+    const resultado = await consumirToken({ tokenClaro, tipo: "VERIFICACION" });
+    if (!resultado.ok) {
+      return res.status(400).json({ error: MOTIVO_A_MENSAJE[resultado.motivo], motivo: resultado.motivo });
+    }
+
+    const cuenta = await prisma.cuentaCliente.update({
+      where: { id: resultado.fila.cuentaClienteId },
+      data: { emailVerificado: true },
+    });
+    await marcarDispositivoConocido(res, cuenta.id);
+
+    // Sin token ni cookie de sesión: un link de mail que loguea es una sesión
+    // sin contraseña. Entra por login o código, en la Parte 2b.
+    res.json({ mensaje: "Tu cuenta está lista. Entrá." });
   } catch (err) {
     next(err);
   }

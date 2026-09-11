@@ -17,6 +17,7 @@ const router = Router();
 router.use(exigirOrigen);
 
 router.post("/registro", limitadores.registroIp, limitadores.registroDestino, cuentaController.registro);
+router.post("/verificar", limitadores.verificarIp, cuentaController.verificar);
 
 // La Parte 2b agrega las de login, Google, recuperación y perfil DESPUÉS de estas.
 

@@ -51,10 +51,18 @@ const consumirTokenMock = vi.fn();
 vi.mock("../lib/tokensCuenta.js", () => ({
   invalidarTokensDe: (...args) => invalidarTokensDeMock(...args),
   consumirToken: (...args) => consumirTokenMock(...args),
+  // Real, no mockeado: `marcarDispositivoConocido` necesita el hash real
+  // para armar el `DispositivoConocido`, no hay nada que simular acá.
+  hashDeToken: (tokenClaro) => `hash:${tokenClaro}`,
 }));
 
 const logErrorMock = vi.fn();
 vi.mock("../lib/logError.js", () => ({ logError: (...args) => logErrorMock(...args) }));
+
+const setCookieDispositivoMock = vi.fn();
+vi.mock("../lib/cookiesCliente.js", () => ({
+  setCookieDispositivo: (...args) => setCookieDispositivoMock(...args),
+}));
 
 const { manejadorDeErrores } = await import("../middlewares/errorHandler.js");
 const { default: cuentaRouter } = await import("./cuenta.routes.js");
@@ -98,6 +106,7 @@ beforeEach(() => {
     invalidarTokensDeMock,
     consumirTokenMock,
     logErrorMock,
+    setCookieDispositivoMock,
   ].forEach((m) => m.mockReset());
   deleteManyMock.mockResolvedValue({ count: 0 });
   process.env.BCRYPT_CONCURRENCIA = "3";
@@ -361,5 +370,44 @@ describe("POST /api/cuenta/registro", () => {
     await esperarPurga(1);
     expect(logErrorMock).not.toHaveBeenCalled();
     expect(enviarVerificacionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/cuenta/verificar", () => {
+  it("token válido: marca emailVerificado, setea el dispositivo, y NO devuelve sesión", async () => {
+    consumirTokenMock.mockResolvedValueOnce({ ok: true, fila: { cuentaClienteId: 11, tipo: "VERIFICACION" } });
+    updateMock.mockResolvedValueOnce({ id: 11, email: "juan@gmail.com" });
+    dispositivoCreateMock.mockResolvedValueOnce({});
+
+    const res = await request(buildApp())
+      .post("/api/cuenta/verificar")
+      .set("Origin", ORIGIN)
+      .send({ token: "TOKEN-CLARO" });
+
+    expect(consumirTokenMock).toHaveBeenCalledWith({ tokenClaro: "TOKEN-CLARO", tipo: "VERIFICACION" });
+    expect(updateMock).toHaveBeenCalledWith({ where: { id: 11 }, data: { emailVerificado: true } });
+    expect(dispositivoCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ cuentaClienteId: 11 }) }),
+    );
+    expect(setCookieDispositivoMock).toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("token");
+    expect(res.body).not.toHaveProperty("sesion");
+  });
+
+  it("token inválido/usado/vencido: 400 con el motivo, sin tocar update ni el dispositivo", async () => {
+    consumirTokenMock.mockResolvedValueOnce({ ok: false, motivo: "USADO" });
+
+    const res = await request(buildApp()).post("/api/cuenta/verificar").set("Origin", ORIGIN).send({ token: "x" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.motivo).toBe("USADO");
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(setCookieDispositivoMock).not.toHaveBeenCalled();
+  });
+
+  it("solo existe como POST: un GET no está montado en el router (no puede consumir por prefetch)", async () => {
+    const res = await request(buildApp()).get("/api/cuenta/verificar");
+    expect(res.status).toBe(404);
   });
 });
