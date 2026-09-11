@@ -3,10 +3,16 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 const enviarMailMock = vi.fn();
 const logErrorMock = vi.fn();
 const emitirTokenMock = vi.fn();
+const invalidarTokensDeMock = vi.fn();
 
 vi.mock("./email.service.js", () => ({ enviarMail: (...args) => enviarMailMock(...args) }));
 vi.mock("../lib/logError.js", () => ({ logError: (...args) => logErrorMock(...args) }));
-vi.mock("../lib/tokensCuenta.js", () => ({ emitirToken: (...args) => emitirTokenMock(...args) }));
+vi.mock("../lib/tokensCuenta.js", () => ({
+  emitirToken: (...args) => emitirTokenMock(...args),
+  invalidarTokensDe: (...args) => invalidarTokensDeMock(...args),
+  // Fake determinista: acá solo importa que el `excepto` sea el hash del token recién emitido.
+  hashDeToken: (tokenClaro) => `hash:${tokenClaro}`,
+}));
 
 const {
   enviarVerificacion,
@@ -26,6 +32,8 @@ beforeEach(() => {
   logErrorMock.mockReset();
   emitirTokenMock.mockReset();
   emitirTokenMock.mockResolvedValue({ tokenClaro: "TOKEN-XYZ", expiraEn: new Date() });
+  invalidarTokensDeMock.mockReset();
+  invalidarTokensDeMock.mockResolvedValue(undefined);
   process.env.FRONTEND_URL = "https://yima-productos.com";
 });
 
@@ -49,13 +57,45 @@ describe("enviarVerificacion", () => {
     await expect(enviarVerificacion(CUENTA)).resolves.toBeUndefined();
     expect(logErrorMock).toHaveBeenCalled();
   });
+
+  it("invalida los VERIFICACION anteriores DESPUÉS de emitir el nuevo, dejando vivo solo el nuevo", async () => {
+    const orden = [];
+    emitirTokenMock.mockImplementation(async () => {
+      orden.push("emitir");
+      return { tokenClaro: "TOKEN-XYZ", expiraEn: new Date() };
+    });
+    invalidarTokensDeMock.mockImplementation(async () => {
+      orden.push("invalidar");
+    });
+
+    await enviarVerificacion(CUENTA);
+
+    expect(orden).toEqual(["emitir", "invalidar"]);
+    expect(invalidarTokensDeMock).toHaveBeenCalledWith(7, "VERIFICACION", { excepto: "hash:TOKEN-XYZ" });
+  });
+
+  it("si emitir falla, NO invalida los anteriores: el link viejo sigue sirviendo", async () => {
+    emitirTokenMock.mockRejectedValue(new Error("db caida"));
+    await enviarVerificacion(CUENTA);
+    expect(invalidarTokensDeMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("enviarCodigoAcceso", () => {
-  it("manda el código recibido con categoria 'acceso'", async () => {
-    await enviarCodigoAcceso(CUENTA, "482913");
-    expect(enviarMailMock).toHaveBeenCalledWith(expect.objectContaining({ categoria: "acceso" }));
+  it("manda el código recibido con categoria 'acceso' y su vencimiento, para que la cola no lo mande vencido", async () => {
+    const expiraEn = new Date(Date.now() + 10 * 60 * 1000);
+    await enviarCodigoAcceso(CUENTA, { codigo: "482913", expiraEn });
+    expect(enviarMailMock).toHaveBeenCalledWith(expect.objectContaining({ categoria: "acceso", expiraEn }));
     expect(enviarMailMock.mock.calls[0][0].html).toContain("482913");
+  });
+});
+
+describe("enviarReset — vencimiento", () => {
+  it("manda el token recibido y le pasa su vencimiento a enviarMail", async () => {
+    const expiraEn = new Date(Date.now() + 60 * 60 * 1000);
+    await enviarReset(CUENTA, { tokenClaro: "RESET-1", expiraEn });
+    expect(enviarMailMock).toHaveBeenCalledWith(expect.objectContaining({ categoria: "acceso", expiraEn }));
+    expect(enviarMailMock.mock.calls[0][0].html).toContain("RESET-1");
   });
 });
 
@@ -64,7 +104,7 @@ describe("enviarReset — el único que reintenta", () => {
     vi.useFakeTimers();
     try {
       enviarMailMock.mockRejectedValue(new Error("smtp caido"));
-      const promesa = enviarReset(CUENTA, "RESET-1");
+      const promesa = enviarReset(CUENTA, { tokenClaro: "RESET-1", expiraEn: new Date(Date.now() + 3_600_000) });
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(2000);
       await vi.advanceTimersByTimeAsync(8000);
@@ -80,7 +120,7 @@ describe("enviarReset — el único que reintenta", () => {
     vi.useFakeTimers();
     try {
       enviarMailMock.mockRejectedValueOnce(new Error("smtp caido")).mockResolvedValueOnce(undefined);
-      const promesa = enviarReset(CUENTA, "RESET-1");
+      const promesa = enviarReset(CUENTA, { tokenClaro: "RESET-1", expiraEn: new Date(Date.now() + 3_600_000) });
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(2000);
       await promesa;

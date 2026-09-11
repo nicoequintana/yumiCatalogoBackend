@@ -195,4 +195,21 @@ describe("invalidarTokensDe", () => {
     });
     expect(updateManyMock.mock.calls[0][0].data.usadoEn).toBeInstanceOf(Date);
   });
+
+  it("con { excepto } deja vivo ese token (el recién emitido) e invalida el resto", async () => {
+    updateManyMock.mockResolvedValue({ count: 1 });
+    await invalidarTokensDe(7, "VERIFICACION", { excepto: "hash-nuevo" });
+    expect(updateManyMock.mock.calls[0][0].where).toEqual({
+      cuentaClienteId: 7,
+      tipo: "VERIFICACION",
+      usadoEn: null,
+      tokenHash: { not: "hash-nuevo" },
+    });
+  });
+
+  it("sin { excepto } el where no filtra por hash", async () => {
+    updateManyMock.mockResolvedValue({ count: 0 });
+    await invalidarTokensDe(7, "RESET");
+    expect(updateManyMock.mock.calls[0][0].where).not.toHaveProperty("tokenHash");
+  });
 });

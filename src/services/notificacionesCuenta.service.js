@@ -1,6 +1,6 @@
 import { enviarMail } from "./email.service.js";
 import { logError } from "../lib/logError.js";
-import { emitirToken } from "../lib/tokensCuenta.js";
+import { emitirToken, invalidarTokensDe, hashDeToken } from "../lib/tokensCuenta.js";
 import { TIPOS_TOKEN } from "../lib/cuentasCliente.js";
 import {
   plantillaVerificacionEmail,
@@ -25,10 +25,18 @@ function urlSitio() {
   return (process.env.FRONTEND_URL ?? "").replace(/\/+$/, "");
 }
 
-/** Emite el token de verificación y lo manda. Nunca lanza. */
+/**
+ * Emite el token de verificación, invalida los VERIFICACION anteriores de la
+ * cuenta y lo manda. Nunca lanza.
+ *
+ * El orden es a propósito: primero emitir, después invalidar todos MENOS el
+ * nuevo. Al revés (como estaba en el controller), una emisión fallida dejaba
+ * a la cuenta sin ningún link válido — ni el viejo ni el nuevo.
+ */
 export async function enviarVerificacion(cuenta) {
   try {
     const { tokenClaro } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.VERIFICACION });
+    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.VERIFICACION, { excepto: hashDeToken(tokenClaro) });
     const mail = plantillaVerificacionEmail({ nombre: cuenta.nombre, tokenClaro }, { urlSitio: urlSitio() });
     await enviarMail({ para: cuenta.email, categoria: "resto", ...mail });
   } catch (err) {
@@ -36,11 +44,15 @@ export async function enviarVerificacion(cuenta) {
   }
 }
 
-/** El código ya viene generado (`emitirCodigoAcceso`, Parte 2b). Nunca lanza. */
-export async function enviarCodigoAcceso(cuenta, codigo) {
+/**
+ * El código ya viene generado (`emitirCodigoAcceso`, Parte 2b), y con él su
+ * `expiraEn`: si el mail cae en la cola de `acceso`, `enviarMail` lo descarta
+ * en vez de mandarlo vencido. Nunca lanza.
+ */
+export async function enviarCodigoAcceso(cuenta, { codigo, expiraEn }) {
   try {
     const mail = plantillaCodigoAcceso({ codigo }, { urlSitio: urlSitio() });
-    await enviarMail({ para: cuenta.email, categoria: "acceso", ...mail });
+    await enviarMail({ para: cuenta.email, categoria: "acceso", expiraEn, ...mail });
   } catch (err) {
     logError({ mensaje: `No se pudo enviar el código de acceso a ${cuenta.email}`, stack: err.stack, causa: err });
   }
@@ -49,16 +61,17 @@ export async function enviarCodigoAcceso(cuenta, codigo) {
 /**
  * El único mail con reintento: 3 intentos, backoff 2 s / 8 s. Sin retraso
  * antes del primero — el reintento es para el hipo de Gmail, no para retrasar
- * a alguien que está esperando poder entrar.
+ * a alguien que está esperando poder entrar. `expiraEn` es el del token
+ * (`emitirToken`), por el mismo motivo que en `enviarCodigoAcceso`.
  */
-export async function enviarReset(cuenta, tokenClaro) {
+export async function enviarReset(cuenta, { tokenClaro, expiraEn }) {
   const esperas = [0, 2000, 8000];
   let ultimoError;
   for (const espera of esperas) {
     if (espera > 0) await new Promise((resolver) => setTimeout(resolver, espera));
     try {
       const mail = plantillaResetPassword({ tokenClaro }, { urlSitio: urlSitio() });
-      await enviarMail({ para: cuenta.email, categoria: "acceso", ...mail });
+      await enviarMail({ para: cuenta.email, categoria: "acceso", expiraEn, ...mail });
       return;
     } catch (err) {
       ultimoError = err;

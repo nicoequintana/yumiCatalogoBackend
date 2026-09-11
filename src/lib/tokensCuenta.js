@@ -62,10 +62,15 @@ export async function emitirToken({ cuentaClienteId, tipo, emailNuevo = null }) 
   return { tokenClaro, expiraEn };
 }
 
-export async function invalidarTokensDe(cuentaClienteId, tipo) {
+/**
+ * `excepto` (opcional): el `tokenHash` que queda vivo. Sirve para invalidar
+ * DESPUÉS de emitir el reemplazo: invalidar antes deja a la cuenta sin ningún
+ * token válido si la emisión falla.
+ */
+export async function invalidarTokensDe(cuentaClienteId, tipo, { excepto } = {}) {
   exigirTipo(tipo);
   await prisma.tokenCuenta.updateMany({
-    where: { cuentaClienteId, tipo, usadoEn: null },
+    where: { cuentaClienteId, tipo, usadoEn: null, ...(excepto && { tokenHash: { not: excepto } }) },
     data: { usadoEn: new Date() },
   });
 }
