@@ -37,6 +37,10 @@ export function crearLimitadorPorDestino({ windowMs, max }) {
     windowMs,
     max,
     message: MENSAJE_429_CUENTA,
+    // El fallback "sin-destino" es inalcanzable en la práctica: `skip` de
+    // abajo ya devuelve `true` (y `express-rate-limit` ni llama a
+    // `keyGenerator`) exactamente cuando `claveDeDestino(req)` da `null`. Se
+    // deja como red de seguridad explícita, no como código muerto a borrar.
     keyGenerator: (req) => claveDeDestino(req) ?? "sin-destino",
     skip: (req) => claveDeDestino(req) === null,
   });

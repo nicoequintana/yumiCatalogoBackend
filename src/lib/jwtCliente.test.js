@@ -54,6 +54,25 @@ describe("jwtCliente", () => {
     expect(verificarSesionCliente(subFloat)).toBeNull();
   });
 
+  it("un tokenVersion no entero ('0' string, o 1.5) no verifica", () => {
+    // `verificarSesionCliente` exige `Number.isInteger(payload.tokenVersion)`:
+    // un `sub` numérico con `tokenVersion` fraccionario o en string no puede
+    // colarse como si valiera, porque la comparación contra la columna de la
+    // base (siempre un entero) nunca daría un match real de todas formas.
+    const conStringZero = jwt.sign(
+      { sub: 3, email: "x", tokenVersion: "0", tipo: "cliente" },
+      process.env.JWT_SECRET_CLIENTE,
+      { expiresIn: "1h" },
+    );
+    const conFloat = jwt.sign(
+      { sub: 3, email: "x", tokenVersion: 1.5, tipo: "cliente" },
+      process.env.JWT_SECRET_CLIENTE,
+      { expiresIn: "1h" },
+    );
+    expect(verificarSesionCliente(conStringZero)).toBeNull();
+    expect(verificarSesionCliente(conFloat)).toBeNull();
+  });
+
   it("basura, vacio y no-string devuelven null sin lanzar", () => {
     expect(verificarSesionCliente("")).toBeNull();
     expect(verificarSesionCliente("a.b")).toBeNull();
