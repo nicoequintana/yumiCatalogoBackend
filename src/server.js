@@ -25,6 +25,7 @@ import configRouter from "./routes/config.routes.js";
 import eventosRouter from "./routes/eventos.routes.js";
 import ordenesRouter from "./routes/ordenes.routes.js";
 import clientesRouter from "./routes/clientes.routes.js";
+import cuentaRouter from "./routes/cuenta.routes.js";
 import healthRouter from "./routes/health.routes.js";
 import { manejadorDeErrores } from "./middlewares/errorHandler.js";
 import { prisma } from "./lib/prisma.js";
@@ -75,7 +76,11 @@ app.use(
   }),
 );
 
-app.use(cors({ origin: CORS_ORIGIN }));
+// `credentials: true` es lo que deja que el navegador adjunte la cookie de
+// sesión de cliente en un fetch al subdominio de la API. El origen sigue
+// siendo exacto (nunca `*`): con credenciales, `*` está prohibido por el
+// navegador y además sería un CSRF servido en bandeja.
+app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 // Límite de body EXPLÍCITO en vez del default implícito de 100kb: fija el
 // contrato y lo vuelve inmune a un cambio de default de Express. 100kb cubre de
 // sobra a los endpoints públicos de escritura — una orden con el máximo de 100
@@ -101,6 +106,7 @@ app.use("/api/config", configRouter);
 app.use("/api/eventos", eventosRouter);
 app.use("/api/ordenes", ordenesRouter);
 app.use("/api/clientes", clientesRouter);
+app.use("/api/cuenta", cuentaRouter);
 app.use("/og", ogRouter);
 app.use("/sitemap.xml", sitemapRouter);
 app.use("/robots.txt", robotsRouter);
