@@ -34,6 +34,8 @@ import { firmarSesionCliente } from "../lib/jwtCliente.js";
 import { borrarCookieSesion, leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
 import { randomBytes } from "node:crypto";
 import {
+  enviarAvisoCambioEmail,
+  enviarCambioEmail,
   enviarCodigoAcceso,
   enviarReset,
   enviarVerificacion,
@@ -819,6 +821,138 @@ export async function restablecer(req, res, next) {
 
     await marcarDispositivoConocido(res, cuentaClienteId);
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/*
+ * Cambio de email (spec "Cambio de email — `PUT /cuenta/email`"). Dos pasos:
+ * el pedido (sesión + contraseña actual) emite un CAMBIO_EMAIL y el link a la
+ * dirección NUEVA prueba posesión; recién ahí se aplica.
+ */
+
+const AVISO_DESVINCULA_GOOGLE = "Tu cuenta deja de estar vinculada a Google: vas a entrar con tu email y contraseña.";
+
+/**
+ * Exige la contraseña actual: una sesión robada no puede llevarse la cuenta a
+ * otro buzón. Una cuenta de Google sin contraseña recibe el mismo 401 que una
+ * clave equivocada (compara contra el señuelo, igual que `cambiarPassword`);
+ * adquiere contraseña con "olvidé mi contraseña". Además, sin contraseña, la
+ * desvinculación de Google al confirmar la dejaría sin ninguna credencial.
+ *
+ * NO consulta si el email nuevo ya es de otra cuenta: responder distinto acá
+ * sería un oráculo de enumeración para cualquiera con una sesión. La colisión
+ * se resuelve al confirmar (P2002 → 409), cuando el que pregunta ya probó
+ * posesión de esa dirección.
+ *
+ * Slot de bcrypt: la lectura que decide + el `compare` (ruling B, mismo
+ * criterio que `cambiarPassword`); la emisión y los mails van fuera.
+ */
+export async function cambiarEmail(req, res, next) {
+  try {
+    const emailBruto = req.body?.emailNuevo;
+    const password = req.body?.password;
+    if (typeof emailBruto !== "string" || emailBruto.length > LARGO_MAX_EMAIL || !esEmailValido(emailBruto)) {
+      throw httpError(400, "El email nuevo no es válido.");
+    }
+    if (typeof password !== "string") throw httpError(400, "Falta la contraseña actual.");
+    const emailNuevo = normalizarEmail(emailBruto);
+
+    const liberarSlot = await reservarSlot();
+    let cuenta;
+    try {
+      cuenta = await prisma.cuentaCliente.findUnique({
+        where: { id: req.cuentaCliente.id },
+        include: { identidadGoogle: true },
+      });
+      if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
+      const ok = await compararPassword(password, cuenta.passwordHash ?? HASH_SENUELO);
+      if (!cuenta.passwordHash || !ok) throw httpError(401, "La contraseña no es correcta.");
+    } finally {
+      liberarSlot();
+    }
+
+    if (emailNuevo === cuenta.email) throw httpError(400, "Ese ya es tu email.");
+
+    // Se emite y RECIÉN DESPUÉS se invalidan los previos: al revés, una
+    // emisión fallida deja a la cuenta sin link vivo (mismo orden que `olvide`).
+    const { tokenClaro } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.CAMBIO_EMAIL, emailNuevo });
+    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.CAMBIO_EMAIL, { excepto: hashDeToken(tokenClaro) });
+
+    // `.catch` aunque los senders atrapen lo suyo: un rechazo sin manejar en
+    // el camino del mail ya tumbó el proceso una vez.
+    enviarCambioEmail(cuenta, { emailNuevo, tokenClaro }).catch((err) => {
+      logError({ mensaje: `No se pudo enviar el cambio de email de la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
+    });
+    enviarAvisoCambioEmail(cuenta, { emailNuevo }).catch((err) => {
+      logError({ mensaje: `No se pudo avisar el cambio de email a la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
+    });
+
+    const mensaje = "Te mandamos un mail a la nueva dirección para confirmar el cambio.";
+    res.json({ mensaje: cuenta.identidadGoogle ? `${mensaje} Al confirmarlo: ${AVISO_DESVINCULA_GOOGLE}` : mensaje });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Consumo y escritura en UNA transacción (spec): el `updateMany` guardado del
+ * token va por el cliente `tx`, no por `consumirToken` (que usa el global y
+ * quedaría afuera). Si el `update` del email tira P2002 — otra cuenta tomó esa
+ * dirección entre el pedido y el click —, el rollback des-consume el token
+ * solo y se responde 409: el link sigue vivo, sin una escritura compensatoria
+ * que pudiera fallar y dejarlo quemado.
+ *
+ * `tokenVersion` +1 cierra TODAS las sesiones: la cookie viaja con el email
+ * viejo. `emailVerificado: true` porque el click probó la dirección nueva.
+ *
+ * Con Google vinculado se borra la `IdentidadGoogle` en la MISMA transacción:
+ * el login por `sub` y el local apuntarían a emails distintos (spec).
+ */
+export async function confirmarEmail(req, res, next) {
+  try {
+    const tokenClaro = req.body?.token;
+    if (typeof tokenClaro !== "string" || !tokenClaro) throw httpError(400, "Falta el token.");
+    if (tokenClaro.length > LARGO_MAX_TOKEN) return responderMotivo(res, "INVALIDO");
+    const tokenHash = hashDeToken(tokenClaro);
+
+    let resultado;
+    try {
+      resultado = await prisma.$transaction(async (tx) => {
+        const ahora = new Date();
+        const { count } = await tx.tokenCuenta.updateMany({
+          where: { tokenHash, tipo: TIPOS_TOKEN.CAMBIO_EMAIL, usadoEn: null, expiraEn: { gt: ahora } },
+          data: { usadoEn: ahora },
+        });
+        if (count === 0) return null;
+
+        const { cuentaClienteId, emailNuevo } = await tx.tokenCuenta.findUnique({ where: { tokenHash } });
+        const cuenta = await tx.cuentaCliente.findUnique({ where: { id: cuentaClienteId }, include: { identidadGoogle: true } });
+        if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
+
+        await tx.cuentaCliente.update({
+          where: { id: cuentaClienteId },
+          data: { email: emailNuevo, emailVerificado: true, tokenVersion: { increment: 1 } },
+        });
+        if (cuenta.identidadGoogle) await tx.identidadGoogle.delete({ where: { cuentaClienteId } });
+        return { googleDesvinculado: Boolean(cuenta.identidadGoogle) };
+      });
+    } catch (err) {
+      if (err?.code === "P2002") throw httpError(409, "Ese email ya está en uso por otra cuenta.");
+      throw err;
+    }
+
+    if (!resultado) {
+      // El token no estaba vivo y la transacción no escribió nada: el motivo
+      // lo clasifica `consumirToken`, que con un token no vivo tampoco escribe
+      // (mismo patrón que `restablecer`).
+      const clasificacion = await consumirToken({ tokenClaro, tipo: TIPOS_TOKEN.CAMBIO_EMAIL });
+      return responderMotivo(res, clasificacion.ok ? "INVALIDO" : clasificacion.motivo);
+    }
+
+    const mensaje = "Tu email fue actualizado. Volvé a entrar.";
+    res.json({ mensaje: resultado.googleDesvinculado ? `${mensaje} ${AVISO_DESVINCULA_GOOGLE}` : mensaje });
   } catch (err) {
     next(err);
   }
