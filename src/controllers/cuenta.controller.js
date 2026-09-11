@@ -161,8 +161,10 @@ async function procesarRegistro({ email, password, nombre, telefono, dni }, libe
     if (existente) {
       // Vencida: se purga (cascade a sus tokens) y sigue como si "no existiera".
       // `deleteMany` y no `delete`: si la purga global de otra request la
-      // borró primero, `delete` lanzaría P2025 y tumbaría este registro.
-      await prisma.cuentaCliente.deleteMany({ where: { id: existente.id } });
+      // borró primero, `delete` lanzaría P2025 y tumbaría este registro. Las
+      // guardas van también en el `where` (nunca verificada, sin pedidos): no
+      // depender solo del `if` de arriba, que decidió sobre una lectura vieja.
+      await prisma.cuentaCliente.deleteMany({ where: { id: existente.id, verificadaEn: null, ordenes: { none: {} } } });
     }
     try {
       const cuenta = await prisma.cuentaCliente.create({
@@ -645,12 +647,6 @@ export async function obtenerPerfil(req, res, next) {
 }
 
 /**
- * Lista blanca: SOLO nombre/telefono/dni pueden llegar a `data` — ni email,
- * password, `emailVerificado`, `origenRegistro` ni `tokenVersion` (Amenaza 8,
- * mismo criterio que `registro`). Mismas reglas de campo que `registro`
- * (obligatorio no vacío, tope `LARGO_MAX_TEXTO`, DNI normalizado y validado).
- */
-/**
  * Cambio de contraseña autenticado (spec "Contraseña — `PUT /cuenta/password`"):
  * exige la actual y reemite la cookie de sesión con el `tokenVersion` NUEVO
  * — si no, esta MISMA sesión quedaría auto-expulsada por el incremento que
@@ -716,6 +712,12 @@ export async function cambiarPassword(req, res, next) {
   }
 }
 
+/**
+ * Lista blanca: SOLO nombre/telefono/dni pueden llegar a `data` — ni email,
+ * password, `emailVerificado`, `origenRegistro` ni `tokenVersion` (Amenaza 8,
+ * mismo criterio que `registro`). Mismas reglas de campo que `registro`
+ * (obligatorio no vacío, tope `LARGO_MAX_TEXTO`, DNI normalizado y validado).
+ */
 export async function actualizarPerfil(req, res, next) {
   try {
     const data = {};

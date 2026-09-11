@@ -262,8 +262,10 @@ describe("POST /api/cuenta/registro", () => {
 
     await vi.waitFor(() => {
       // `deleteMany` y no `delete`: si la purga global de otra request ya la
-      // borró, `delete` lanzaría P2025 y tumbaría este registro.
-      expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: 3 } });
+      // borró, `delete` lanzaría P2025 y tumbaría este registro. La guarda va
+      // en el propio `where` (nunca verificada, sin pedidos), no solo en el
+      // `if` de `estaFueraDeVentana` que la decidió.
+      expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: 3, verificadaEn: null, ordenes: { none: {} } } });
       expect(createMock).toHaveBeenCalled();
       expect(enviarVerificacionMock).toHaveBeenCalled();
     });
@@ -286,7 +288,7 @@ describe("POST /api/cuenta/registro", () => {
     expect(createMock).not.toHaveBeenCalled();
     // Solo la purga global (que ya excluye a las verificadaEn), nunca la por id.
     await esperarPurga(1);
-    expect(deleteManyMock).not.toHaveBeenCalledWith({ where: { id: 5 } });
+    expect(deleteManyMock).not.toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: 5 }) }));
   });
 
   it("no verificada y con menos de 24 h: reenvía SIN pisar la contraseña (no llama a create)", async () => {
