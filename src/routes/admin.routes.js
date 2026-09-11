@@ -4,6 +4,7 @@ import * as adminController from "../controllers/admin.controller.js";
 import * as adminOperacionController from "../controllers/adminOperacion.controller.js";
 import * as adminClientesController from "../controllers/adminClientes.controller.js";
 import * as metricasComercialesController from "../controllers/metricasComerciales.controller.js";
+import * as adminCuentasClienteController from "../controllers/adminCuentasCliente.controller.js";
 
 const router = Router();
 
@@ -17,5 +18,7 @@ router.get("/embudo", adminController.embudoConversion);
 router.get("/metricas-comerciales", metricasComercialesController.metricasComerciales);
 router.get("/clientes-resumen", adminClientesController.resumenClientes);
 router.get("/operacion", adminOperacionController.resumenOperacion);
+// Camino operado: el operador reasigna el email tras verificar identidad por pedidos.
+router.put("/cuentas-cliente/:id/email", adminCuentasClienteController.reasignarEmail);
 
 export default router;
