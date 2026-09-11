@@ -79,7 +79,7 @@ beforeEach(async () => {
   updateManyMock.mockReset().mockResolvedValue({ count: 1 });
   findFirstDispMock.mockReset().mockResolvedValue(null);
   tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 0 });
-  tokenCreateMock.mockReset().mockResolvedValue({});
+  tokenCreateMock.mockReset().mockResolvedValue({ id: 30 });
   enviarCodigoAccesoMock.mockReset().mockResolvedValue(undefined);
   errorLogCreateMock.mockReset().mockResolvedValue({});
   reservarSlot.mockClear();

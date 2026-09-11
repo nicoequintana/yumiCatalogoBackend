@@ -217,20 +217,24 @@ const MENSAJE_REENVIO_CODIGO = "Si corresponde, te mandamos un código nuevo.";
  * Re-emite SOLO si ya hay un CODIGO_ACCESO vivo — es decir, si alguien pasó
  * la contraseña en `login` hace menos de 10 min. Sin esa condición, pedir un
  * reenvío para cualquier email verificado mandaba un código nuevo: un login
- * sin contraseña para quien controle el buzón, o spam para quien no. La
- * condición va en el `where` de la invalidación (mismo criterio que
- * `stockDescontado`) y el `count` decide. Nunca lanza: la respuesta genérica
- * ya salió antes de llamarla.
+ * sin contraseña para quien controle el buzón, o spam para quien no.
+ *
+ * El gate es de SOLO LECTURA (`count`, sin `data`): invalidar el código vivo
+ * ANTES de emitir el reemplazo dejaba a la cuenta sin ningún código si la
+ * emisión fallaba después. `emitirCodigoAcceso` ya crea el nuevo primero e
+ * invalida DESPUÉS solo lo anterior a él (mismo orden que `procesarOlvide` /
+ * `enviarVerificacion` / cambio de email) — este gate no debe invalidar nada
+ * por su cuenta, o el viejo muere igual antes de que el nuevo exista. Nunca
+ * lanza: la respuesta genérica ya salió antes de llamarla.
  */
 async function procesarReenvioCodigo(email) {
   const cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
   if (!cuenta || !cuenta.emailVerificado) return;
 
-  const { count } = await prisma.tokenCuenta.updateMany({
+  const hayCodigoVivo = await prisma.tokenCuenta.count({
     where: { cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.CODIGO_ACCESO, usadoEn: null, expiraEn: { gt: new Date() } },
-    data: { usadoEn: new Date() },
   });
-  if (count === 0) return;
+  if (hayCodigoVivo === 0) return;
 
   const { codigo, expiraEn } = await emitirCodigoAcceso(cuenta.id);
   await enviarCodigoAcceso(cuenta, { codigo, expiraEn });

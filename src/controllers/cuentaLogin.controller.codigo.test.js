@@ -11,12 +11,13 @@ const consumirCodigoMock = vi.fn();
 const emitirCodigoMock = vi.fn();
 const enviarCodigoMock = vi.fn();
 const tokenUpdateManyMock = vi.fn();
+const tokenCountMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     cuentaCliente: { findUnique: (...a) => findUniqueMock(...a) },
     dispositivoConocido: { create: (...a) => createDispMock(...a) },
-    tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a) },
+    tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a), count: (...a) => tokenCountMock(...a) },
   },
 }));
 vi.mock("../lib/tokensCuenta.js", async (importOriginal) => {
@@ -51,6 +52,7 @@ beforeEach(() => {
   // handler ANTES de responder.
   enviarCodigoMock.mockReset().mockResolvedValue(undefined);
   tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 1 });
+  tokenCountMock.mockReset().mockResolvedValue(1);
 });
 
 /**
@@ -111,26 +113,38 @@ describe("loginConCodigo", () => {
 });
 
 describe("reenviarCodigo", () => {
-  it("cuenta verificada con un codigo VIVO: lo invalida con la condicion en el where y recien ahi emite y manda, 200 generico", async () => {
+  it("cuenta verificada con un codigo VIVO: el gate SOLO lee (no invalida) y recien ahi emite y manda, 200 generico", async () => {
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(emitirCodigoMock).toHaveBeenCalledWith(1));
     await vi.waitFor(() => expect(enviarCodigoMock).toHaveBeenCalledTimes(1));
-    const { where, data } = tokenUpdateManyMock.mock.calls[0][0];
+    const { where } = tokenCountMock.mock.calls[0][0];
     expect(where).toMatchObject({ cuentaClienteId: 1, tipo: "CODIGO_ACCESO", usadoEn: null });
     expect(where.expiraEn.gt).toBeInstanceOf(Date);
-    expect(data.usadoEn).toBeInstanceOf(Date);
-    expect(tokenUpdateManyMock.mock.invocationCallOrder[0]).toBeLessThan(emitirCodigoMock.mock.invocationCallOrder[0]);
+    expect(tokenCountMock.mock.invocationCallOrder[0]).toBeLessThan(emitirCodigoMock.mock.invocationCallOrder[0]);
+    // El gate es de solo lectura: la invalidación del código viejo la hace
+    // `emitirCodigoAcceso` (mockeado acá), nunca el controller por su cuenta.
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("cuenta verificada SIN codigo vivo: MISMO 200 y no emite ni manda — el reenvio no es un login sin contraseña", async () => {
-    tokenUpdateManyMock.mockResolvedValue({ count: 0 });
+    tokenCountMock.mockResolvedValue(0);
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ mensaje: "Si corresponde, te mandamos un código nuevo." });
-    await vi.waitFor(() => expect(tokenUpdateManyMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(tokenCountMock).toHaveBeenCalled());
     await vaciarFondo();
     expect(emitirCodigoMock).not.toHaveBeenCalled();
+    expect(enviarCodigoMock).not.toHaveBeenCalled();
+  });
+
+  it("si emitir el código nuevo falla, el código anterior sigue vivo: el gate no lo invalidó antes", async () => {
+    emitirCodigoMock.mockRejectedValue(new Error("fallo el emit"));
+    const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(emitirCodigoMock).toHaveBeenCalled());
+    await vaciarFondo();
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
     expect(enviarCodigoMock).not.toHaveBeenCalled();
   });
 
@@ -147,6 +161,7 @@ describe("reenviarCodigo", () => {
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
     await vaciarFondo();
+    expect(tokenCountMock).not.toHaveBeenCalled();
     expect(tokenUpdateManyMock).not.toHaveBeenCalled();
     expect(emitirCodigoMock).not.toHaveBeenCalled();
     expect(enviarCodigoMock).not.toHaveBeenCalled();
@@ -160,6 +175,7 @@ describe("reenviarCodigo", () => {
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
     await vaciarFondo();
+    expect(tokenCountMock).not.toHaveBeenCalled();
     expect(tokenUpdateManyMock).not.toHaveBeenCalled();
     expect(emitirCodigoMock).not.toHaveBeenCalled();
     expect(enviarCodigoMock).not.toHaveBeenCalled();
