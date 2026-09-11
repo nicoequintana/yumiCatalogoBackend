@@ -23,7 +23,7 @@ import {
 } from "../lib/cuentasCliente.js";
 import { consumirCodigoAcceso, consumirToken, emitirCodigoAcceso, hashDeToken } from "../lib/tokensCuenta.js";
 import { firmarSesionCliente } from "../lib/jwtCliente.js";
-import { leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
+import { borrarCookieSesion, leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
 import { randomBytes } from "node:crypto";
 import {
   enviarCodigoAcceso,
@@ -506,6 +506,121 @@ export async function reenviarCodigo(req, res, next) {
         logError({ mensaje: `No se pudo procesar el reenvío de código de la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
       });
     }
+  } catch (err) {
+    next(err);
+  }
+}
+
+/*
+ * Sesión / perfil (spec "Sesión del cliente" y "Checkout autenticado › El
+ * guard"). `req.cuentaCliente` solo trae `{ id, email }` (ver
+ * `authCliente.middleware.js`): cualquier otro campo del perfil se relee acá.
+ */
+
+/** Nunca se seleccionan `tokenVersion`/`intentosFallidos`/`bloqueadoHasta`: ni entran al `select`, así no hay forma de que se cuelen en la respuesta. */
+const SELECT_PERFIL = {
+  id: true,
+  email: true,
+  origenRegistro: true,
+  nombre: true,
+  telefono: true,
+  dni: true,
+  passwordHash: true,
+  identidadGoogle: { select: { cuentaClienteId: true } },
+};
+
+/** Forma exacta de `GET /api/cuenta` (spec): `tieneGoogle`/`tienePassword` son derivados, nunca el hash ni la fila de Google. */
+function mapPerfil(cuenta) {
+  return {
+    id: cuenta.id,
+    email: cuenta.email,
+    origenRegistro: cuenta.origenRegistro,
+    nombre: cuenta.nombre,
+    telefono: cuenta.telefono,
+    dni: cuenta.dni,
+    tieneGoogle: Boolean(cuenta.identidadGoogle),
+    tienePassword: Boolean(cuenta.passwordHash),
+  };
+}
+
+/**
+ * "Cierra en todos los dispositivos" (spec): revoca por `tokenVersion`, no
+ * borra ninguna fila. `dispositivo_cliente` NO se toca — es "navegador
+ * conocido", no sesión; una cuenta ya borrada (carrera con otra request) no
+ * es un error acá: no hay nada que revocar y la cookie se borra igual.
+ */
+export async function salir(req, res, next) {
+  try {
+    await prisma.cuentaCliente.updateMany({
+      where: { id: req.cuentaCliente.id },
+      data: { tokenVersion: { increment: 1 } },
+    });
+    borrarCookieSesion(res);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Es lo que lee el guard del checkout y el hook de perfil (spec). Una cuenta borrada entre el middleware y este `findUnique` es 404, nunca un 500. */
+export async function obtenerPerfil(req, res, next) {
+  try {
+    const cuenta = await prisma.cuentaCliente.findUnique({
+      where: { id: req.cuentaCliente.id },
+      select: SELECT_PERFIL,
+    });
+    if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
+    res.json(mapPerfil(cuenta));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Lista blanca: SOLO nombre/telefono/dni pueden llegar a `data` — ni email,
+ * password, `emailVerificado`, `origenRegistro` ni `tokenVersion` (Amenaza 8,
+ * mismo criterio que `registro`). Mismas reglas de campo que `registro`
+ * (obligatorio no vacío, tope `LARGO_MAX_TEXTO`, DNI normalizado y validado).
+ */
+export async function actualizarPerfil(req, res, next) {
+  try {
+    const data = {};
+    if (req.body?.nombre !== undefined) {
+      const nombre = typeof req.body.nombre === "string" ? req.body.nombre.trim() : "";
+      if (!nombre) throw httpError(400, "El nombre no puede estar vacío.");
+      if (nombre.length > LARGO_MAX_TEXTO) {
+        throw httpError(400, `El nombre no puede superar los ${LARGO_MAX_TEXTO} caracteres.`);
+      }
+      data.nombre = nombre;
+    }
+    if (req.body?.telefono !== undefined) {
+      const telefono = typeof req.body.telefono === "string" ? req.body.telefono.trim() : "";
+      if (!telefono) throw httpError(400, "El teléfono no puede estar vacío.");
+      if (telefono.length > LARGO_MAX_TEXTO) {
+        throw httpError(400, `El teléfono no puede superar los ${LARGO_MAX_TEXTO} caracteres.`);
+      }
+      data.telefono = telefono;
+    }
+    if (req.body?.dni !== undefined) {
+      const dni = normalizarDni(req.body.dni);
+      if (!esDniValido(dni)) throw httpError(400, "El DNI debe tener 7 u 8 dígitos.");
+      data.dni = dni;
+    }
+
+    let cuenta;
+    try {
+      cuenta = await prisma.cuentaCliente.update({
+        where: { id: req.cuentaCliente.id },
+        data,
+        select: SELECT_PERFIL,
+      });
+    } catch (err) {
+      // P2025 = la cuenta ya no existe (carrera con un borrado en otro lado):
+      // 404, no el 500 opaco que tiraría `update` sobre una fila inexistente.
+      if (err?.code === "P2025") throw httpError(404, "Cuenta no encontrada.");
+      throw err;
+    }
+    res.json(mapPerfil(cuenta));
   } catch (err) {
     next(err);
   }
