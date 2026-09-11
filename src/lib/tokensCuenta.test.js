@@ -37,7 +37,7 @@ beforeEach(() => {
   updateManyMock.mockReset();
   findUniqueMock.mockReset();
   deleteManyMock.mockReset();
-  createMock.mockResolvedValue({});
+  createMock.mockResolvedValue({ id: 1 });
   deleteManyMock.mockResolvedValue({ count: 0 });
 });
 
@@ -73,6 +73,11 @@ describe("emitirToken", () => {
     createMock.mockResolvedValue({ id: 42 });
     const { id } = await emitirToken({ cuentaClienteId: 7, tipo: "RESET" });
     expect(id).toBe(42);
+  });
+
+  it("si la fila creada no trae id, lanza en vez de devolver un id undefined (invalidarTokensDe lo usa como anterioresA)", async () => {
+    createMock.mockResolvedValue({});
+    await expect(emitirToken({ cuentaClienteId: 7, tipo: "RESET" })).rejects.toThrow(/id/i);
   });
 
   it("CAMBIO_EMAIL guarda emailNuevo", async () => {
@@ -178,6 +183,14 @@ describe("codigo de acceso", () => {
     expect(createMock.mock.invocationCallOrder[0]).toBeLessThan(updateManyMock.mock.invocationCallOrder[0]);
     expect(createMock.mock.calls[0][0].data.tokenHash).toBe(sha256(`7:${codigo}`));
     expect(createMock.mock.calls[0][0].data.tipo).toBe("CODIGO_ACCESO");
+  });
+
+  it("si la fila creada no trae id, lanza en vez de invalidar TODOS los codigos vivos de la cuenta", async () => {
+    createMock.mockResolvedValue({});
+    await expect(emitirCodigoAcceso(7)).rejects.toThrow(/id/i);
+    // El fallback roto invalidaba sin filtro de id (el `where` perdía `id: { lt }`)
+    // y se llevaba puesto el código recién creado: con el fix, ni se llega a invalidar.
+    expect(updateManyMock).not.toHaveBeenCalled();
   });
 
   it("consumirCodigoAcceso cuenta el intento ANTES de comparar: el where exige intentos < 5", async () => {

@@ -57,9 +57,16 @@ export async function emitirToken({ cuentaClienteId, tipo, emailNuevo = null }) 
   const fila = await prisma.tokenCuenta.create({
     data: { cuentaClienteId, tipo, tokenHash: hashDeToken(tokenClaro), emailNuevo, expiraEn },
   });
+  // Sin id no hay `anterioresA` posible: el llamador usa este id para invalidar
+  // SOLO lo anterior. Devolver undefined haría que `invalidarTokensDe` reciba
+  // `anterioresA: undefined`, pierda el filtro por id y se lleve puesto el
+  // token recién emitido (el peor fallback posible) — mejor fallar acá.
+  if (fila?.id == null) {
+    throw new Error("emitirToken: la fila creada no tiene id");
+  }
   await limpiarVencidos();
 
-  return { tokenClaro, expiraEn, id: fila?.id };
+  return { tokenClaro, expiraEn, id: fila.id };
 }
 
 /**
@@ -139,7 +146,13 @@ export async function emitirCodigoAcceso(cuentaClienteId) {
       expiraEn,
     },
   });
-  await invalidarTokensDe(cuentaClienteId, TIPOS_TOKEN.CODIGO_ACCESO, { anterioresA: fila?.id });
+  // Mismo motivo que en `emitirToken`: sin id, `anterioresA` seria undefined y
+  // `invalidarTokensDe` invalidaria TODOS los codigos vivos de la cuenta,
+  // incluido el recien creado.
+  if (fila?.id == null) {
+    throw new Error("emitirCodigoAcceso: la fila creada no tiene id");
+  }
+  await invalidarTokensDe(cuentaClienteId, TIPOS_TOKEN.CODIGO_ACCESO, { anterioresA: fila.id });
 
   return { codigo, expiraEn };
 }
