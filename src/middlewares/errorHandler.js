@@ -98,20 +98,26 @@ export function manejadorDeErrores(err, req, res, _next) {
   const { status, mensaje } = clasificarError(err, req.method);
 
   // Un 503 con codigo CAPACIDAD es `colaBcrypt.js` haciendo load shedding: se
-  // puede disparar cientos de veces por segundo bajo un flood de CPU. NO se
-  // loguea (ni consola ni ErrorLog): registrar cada uno convertiría un flood
-  // de CPU en un flood de escrituras a la base, justo lo que el load shedding
-  // existe para evitar. La respuesta al cliente (status, cuerpo, Retry-After)
-  // no cambia.
-  const esCapacidad = err?.codigo === "CAPACIDAD";
+  // puede disparar cientos de veces por segundo bajo un flood de CPU. Un 503
+  // con codigo GOOGLE_NO_CONFIGURADO es la falta de GOOGLE_CLIENT_ID (variable
+  // opcional a propósito: sin ella no hay botón de Google y el sitio vende
+  // igual) — un deploy sin esa variable repetiría el mismo 503 en cada
+  // request a /cuenta/google. Ninguno de los dos se loguea acá (ni consola ni
+  // ErrorLog): registrar cada uno convertiría una situación esperada en un
+  // flood de escrituras a la base, justo lo que el load shedding existe para
+  // evitar. La respuesta al cliente (status, cuerpo, Retry-After) no cambia.
+  // El aviso de que falta GOOGLE_CLIENT_ID no desaparece: lo emite una sola
+  // vez por proceso el propio controller de Google (ver `cuentaLogin.controller.js`).
+  const CODIGOS_SIN_LOG_POR_REQUEST = new Set(["CAPACIDAD", "GOOGLE_NO_CONFIGURADO"]);
+  const esExentoDeLog = CODIGOS_SIN_LOG_POR_REQUEST.has(err?.codigo);
 
   // Solo los 500 van a la consola. Antes se imprimía SIEMPRE, así que cada bot
   // pegándole a una ruta inexistente o cada validación de formulario rechazada
   // dejaba un stack completo en los logs del contenedor y enterraba las fallas
   // que sí importan.
-  if (status >= 500 && !esCapacidad) console.error(err);
+  if (status >= 500 && !esExentoDeLog) console.error(err);
 
-  if (!esCapacidad) {
+  if (!esExentoDeLog) {
     // Fire-and-forget: la respuesta no espera al insert del log.
     logError({
       mensaje: err?.message,

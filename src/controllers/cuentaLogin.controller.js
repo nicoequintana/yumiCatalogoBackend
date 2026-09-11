@@ -357,6 +357,26 @@ async function resolverCuentaGoogle({ sub, email, nombre }) {
 }
 
 /**
+ * `errorHandler.js` exime el 503 GOOGLE_NO_CONFIGURADO de ErrorLog y de la
+ * consola (mismo trato que CAPACIDAD): sin eso, un deploy sin
+ * GOOGLE_CLIENT_ID dejaría una fila por request. Pero la falta de la
+ * variable tiene que quedar visible en algún lado — esta es esa señal, una
+ * vez por proceso. Mismo patrón que `avisarTope` en `email.service.js`.
+ */
+let avisadoGoogleNoConfigurado = false;
+
+/** Solo para tests: el flag es de proceso, no se resetea entre corridas. */
+export function _reiniciarAvisoGoogleParaTests() {
+  avisadoGoogleNoConfigurado = false;
+}
+
+function avisarGoogleNoConfigurado() {
+  if (avisadoGoogleNoConfigurado) return;
+  avisadoGoogleNoConfigurado = true;
+  console.warn("GOOGLE_CLIENT_ID no está configurado: el login con Google queda deshabilitado.");
+}
+
+/**
  * El ID token se verifica SIEMPRE contra Google (`verifyIdToken`), nunca se
  * decodifica a mano: un JWT sin chequear la firma es un formulario que el
  * atacante completa solo.
@@ -372,6 +392,7 @@ export async function google(req, res, next) {
   try {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     if (!clientId) {
+      avisarGoogleNoConfigurado();
       const err = httpError(503, "El inicio de sesión con Google no está disponible.");
       err.codigo = "GOOGLE_NO_CONFIGURADO";
       throw err;

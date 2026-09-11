@@ -345,6 +345,46 @@ describe("manejadorDeErrores — 503 CAPACIDAD (load shedding, no se loguea)", (
   });
 });
 
+describe("manejadorDeErrores — 503 GOOGLE_NO_CONFIGURADO (falta la env, no se loguea por request)", () => {
+  // Mismo motivo que CAPACIDAD, otra causa: sin GOOGLE_CLIENT_ID (variable
+  // opcional a propósito) cada request a /cuenta/google repite el mismo 503.
+  // Escribirlo en ErrorLog por request llenaría la tabla con una fila por
+  // visita al login mientras el deploy no tenga la variable.
+  it("NO escribe en ErrorLog un 503 con codigo GOOGLE_NO_CONFIGURADO", async () => {
+    const err = new Error("El inicio de sesión con Google no está disponible.");
+    err.status = 503;
+    err.codigo = "GOOGLE_NO_CONFIGURADO";
+
+    const res = await request(appQueLanza(err)).get("/boom");
+
+    expect(res.status).toBe(503);
+    expect(errorLogCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("NO imprime el stack en consola para un 503 GOOGLE_NO_CONFIGURADO", async () => {
+    const err = new Error("El inicio de sesión con Google no está disponible.");
+    err.status = 503;
+    err.codigo = "GOOGLE_NO_CONFIGURADO";
+
+    await request(appQueLanza(err)).get("/boom");
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("la respuesta al cliente no cambia: mismo status y cuerpo que antes", async () => {
+    const err = new Error("El inicio de sesión con Google no está disponible.");
+    err.status = 503;
+    err.codigo = "GOOGLE_NO_CONFIGURADO";
+
+    const res = await request(appQueLanza(err)).get("/boom");
+
+    expect(res.body).toEqual({
+      error: "El inicio de sesión con Google no está disponible.",
+      codigo: "GOOGLE_NO_CONFIGURADO",
+    });
+  });
+});
+
 describe("manejadorDeErrores — propagación de la causa", () => {
   it("manda err.cause a logError para que llegue al ErrorLog", async () => {
     // Este es el caso real de `cloudinary.service.js`: el SDK rechaza con un

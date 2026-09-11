@@ -42,7 +42,7 @@ vi.mock("../lib/prisma.js", () => ({
 const logErrorMock = vi.fn();
 vi.mock("../lib/logError.js", () => ({ logError: (...a) => logErrorMock(...a) }));
 
-const { google } = await import("./cuentaLogin.controller.js");
+const { google, _reiniciarAvisoGoogleParaTests } = await import("./cuentaLogin.controller.js");
 const { manejadorDeErrores } = await import("../middlewares/errorHandler.js");
 
 function buildApp() {
@@ -92,6 +92,7 @@ beforeEach(() => {
   findUniqueMock.mockResolvedValue(null);
   createDispMock.mockResolvedValue({});
   deleteManyMock.mockResolvedValue({ count: 1 });
+  _reiniciarAvisoGoogleParaTests();
 });
 
 describe("google — puerta de entrada", () => {
@@ -101,6 +102,24 @@ describe("google — puerta de entrada", () => {
     expect(res.status).toBe(503);
     expect(res.body.codigo).toBe("GOOGLE_NO_CONFIGURADO");
     expect(verifyIdTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("sin GOOGLE_CLIENT_ID: no escribe en ErrorLog (queda exento, como CAPACIDAD)", async () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    await pedir();
+    expect(logErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("sin GOOGLE_CLIENT_ID: avisa por consola UNA sola vez aunque lleguen varios requests", async () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await pedir();
+    await pedir();
+    await pedir();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
   });
 
   it("sin credential (o no string): 400, sin tocar Google", async () => {
