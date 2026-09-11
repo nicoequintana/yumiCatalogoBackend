@@ -25,6 +25,7 @@ const {
   hashDeCodigo,
   hashDeToken,
   invalidarTokensDe,
+  revocarTokensPendientes,
 } = await import("./tokensCuenta.js");
 
 function sha256(texto) {
@@ -66,6 +67,12 @@ describe("emitirToken", () => {
     expect(expiraEn.getTime() - antes).toBeGreaterThanOrEqual(60 * 60 * 1000 - 50);
     expect(expiraEn.getTime() - antes).toBeLessThan(60 * 60 * 1000 + 5000);
     expect(JSON.stringify(data)).not.toContain(tokenClaro);
+  });
+
+  it("devuelve tambien el id de la fila creada (la invalidacion posterior se ancla en el)", async () => {
+    createMock.mockResolvedValue({ id: 42 });
+    const { id } = await emitirToken({ cuentaClienteId: 7, tipo: "RESET" });
+    expect(id).toBe(42);
   });
 
   it("CAMBIO_EMAIL guarda emailNuevo", async () => {
@@ -141,17 +148,34 @@ describe("consumirToken — escritura guardada", () => {
     expect(await consumirToken({ tokenClaro: 42, tipo: "RESET" })).toEqual({ ok: false, motivo: "INVALIDO" });
     expect(updateManyMock).not.toHaveBeenCalled();
   });
+
+  it("con un cliente explicito (una transaccion) escribe y clasifica por ESE cliente, nunca por el global", async () => {
+    const txUpdateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const txFindUnique = vi.fn().mockResolvedValue({ tipo: "CAMBIO_EMAIL", usadoEn: new Date(), expiraEn: new Date(Date.now() + 1000) });
+    const tx = { tokenCuenta: { updateMany: txUpdateMany, findUnique: txFindUnique } };
+
+    const resultado = await consumirToken({ tokenClaro: "abc", tipo: "CAMBIO_EMAIL" }, tx);
+
+    expect(resultado).toEqual({ ok: false, motivo: "USADO" });
+    expect(txUpdateMany.mock.calls[0][0].where).toMatchObject({ tokenHash: sha256("abc"), tipo: "CAMBIO_EMAIL", usadoEn: null });
+    expect(txFindUnique).toHaveBeenCalledWith({ where: { tokenHash: sha256("abc") } });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("codigo de acceso", () => {
-  it("emitirCodigoAcceso genera seis digitos, invalida los anteriores y guarda el hash con el id de cuenta", async () => {
+  it("emitirCodigoAcceso genera seis digitos, guarda el hash con el id de cuenta y RECIEN DESPUES invalida los anteriores a el", async () => {
     updateManyMock.mockResolvedValue({ count: 1 });
+    createMock.mockResolvedValue({ id: 30 });
     const { codigo } = await emitirCodigoAcceso(7);
 
     expect(codigo).toMatch(/^\d{6}$/);
     expect(updateManyMock.mock.calls[0][0]).toMatchObject({
-      where: { cuentaClienteId: 7, tipo: "CODIGO_ACCESO", usadoEn: null },
+      where: { cuentaClienteId: 7, tipo: "CODIGO_ACCESO", usadoEn: null, id: { lt: 30 } },
     });
+    // Crear primero: invalidar antes deja a la cuenta sin codigo si la emision falla.
+    expect(createMock.mock.invocationCallOrder[0]).toBeLessThan(updateManyMock.mock.invocationCallOrder[0]);
     expect(createMock.mock.calls[0][0].data.tokenHash).toBe(sha256(`7:${codigo}`));
     expect(createMock.mock.calls[0][0].data.tipo).toBe("CODIGO_ACCESO");
   });
@@ -196,20 +220,67 @@ describe("invalidarTokensDe", () => {
     expect(updateManyMock.mock.calls[0][0].data.usadoEn).toBeInstanceOf(Date);
   });
 
-  it("con { excepto } deja vivo ese token (el recién emitido) e invalida el resto", async () => {
+  it("con { anterioresA } invalida SOLO los emitidos antes de ese id (el recien emitido y los posteriores quedan vivos)", async () => {
     updateManyMock.mockResolvedValue({ count: 1 });
-    await invalidarTokensDe(7, "VERIFICACION", { excepto: "hash-nuevo" });
+    await invalidarTokensDe(7, "VERIFICACION", { anterioresA: 12 });
     expect(updateManyMock.mock.calls[0][0].where).toEqual({
       cuentaClienteId: 7,
       tipo: "VERIFICACION",
       usadoEn: null,
-      tokenHash: { not: "hash-nuevo" },
+      id: { lt: 12 },
     });
   });
 
-  it("sin { excepto } el where no filtra por hash", async () => {
+  it("sin { anterioresA } el where no filtra por id", async () => {
     updateManyMock.mockResolvedValue({ count: 0 });
     await invalidarTokensDe(7, "RESET");
-    expect(updateManyMock.mock.calls[0][0].where).not.toHaveProperty("tokenHash");
+    expect(updateManyMock.mock.calls[0][0].where).not.toHaveProperty("id");
+  });
+
+  it("dos emisiones concurrentes (emitir A, emitir B, invalidar B, invalidar A): el MAS NUEVO queda vivo", async () => {
+    // Base en memoria que aplica el `where` real: con el viejo "todos menos
+    // el mio", A invalidaba a B y B a A — ninguno quedaba vivo.
+    const filas = [];
+    createMock.mockImplementation(async ({ data }) => {
+      const fila = { ...data, id: filas.length + 1, usadoEn: null };
+      filas.push(fila);
+      return fila;
+    });
+    updateManyMock.mockImplementation(async ({ where, data }) => {
+      const afectadas = filas.filter(
+        (f) =>
+          f.cuentaClienteId === where.cuentaClienteId &&
+          f.tipo === where.tipo &&
+          f.usadoEn === null &&
+          (where.id === undefined || f.id < where.id.lt),
+      );
+      afectadas.forEach((f) => Object.assign(f, data));
+      return { count: afectadas.length };
+    });
+
+    const a = await emitirToken({ cuentaClienteId: 7, tipo: "RESET" });
+    const b = await emitirToken({ cuentaClienteId: 7, tipo: "RESET" });
+    await invalidarTokensDe(7, "RESET", { anterioresA: b.id });
+    await invalidarTokensDe(7, "RESET", { anterioresA: a.id });
+
+    const vivas = filas.filter((f) => f.usadoEn === null);
+    expect(vivas.map((f) => f.tokenHash)).toEqual([sha256(b.tokenClaro)]);
+  });
+});
+
+describe("revocarTokensPendientes", () => {
+  it("marca usados los tokens vivos de esos tipos, por el cliente que recibe (prisma o una transaccion)", async () => {
+    const txUpdateMany = vi.fn().mockResolvedValue({ count: 2 });
+    await revocarTokensPendientes({ tokenCuenta: { updateMany: txUpdateMany } }, 7, ["CAMBIO_EMAIL", "CODIGO_ACCESO"]);
+    const { where, data } = txUpdateMany.mock.calls[0][0];
+    expect(where).toEqual({ cuentaClienteId: 7, tipo: { in: ["CAMBIO_EMAIL", "CODIGO_ACCESO"] }, usadoEn: null });
+    expect(data.usadoEn).toBeInstanceOf(Date);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza un tipo fuera de la lista cerrada sin escribir", async () => {
+    const txUpdateMany = vi.fn();
+    await expect(revocarTokensPendientes({ tokenCuenta: { updateMany: txUpdateMany } }, 7, ["RESET", "LOGIN"])).rejects.toThrow(/tipo/i);
+    expect(txUpdateMany).not.toHaveBeenCalled();
   });
 });

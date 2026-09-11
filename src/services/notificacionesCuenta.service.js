@@ -1,6 +1,6 @@
 import { enviarMail } from "./email.service.js";
 import { logError } from "../lib/logError.js";
-import { emitirToken, invalidarTokensDe, hashDeToken } from "../lib/tokensCuenta.js";
+import { emitirToken, invalidarTokensDe } from "../lib/tokensCuenta.js";
 import { TIPOS_TOKEN } from "../lib/cuentasCliente.js";
 import {
   plantillaVerificacionEmail,
@@ -29,14 +29,14 @@ function urlSitio() {
  * Emite el token de verificación, invalida los VERIFICACION anteriores de la
  * cuenta y lo manda. Nunca lanza.
  *
- * El orden es a propósito: primero emitir, después invalidar todos MENOS el
- * nuevo. Al revés (como estaba en el controller), una emisión fallida dejaba
+ * El orden es a propósito: primero emitir, después invalidar lo emitido ANTES
+ * del nuevo (`anterioresA`: dos reenvíos concurrentes no se matan entre sí). Al revés (como estaba en el controller), una emisión fallida dejaba
  * a la cuenta sin ningún link válido — ni el viejo ni el nuevo.
  */
 export async function enviarVerificacion(cuenta) {
   try {
-    const { tokenClaro } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.VERIFICACION });
-    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.VERIFICACION, { excepto: hashDeToken(tokenClaro) });
+    const { tokenClaro, id } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.VERIFICACION });
+    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.VERIFICACION, { anterioresA: id });
     const mail = plantillaVerificacionEmail({ nombre: cuenta.nombre, tokenClaro }, { urlSitio: urlSitio() });
     await enviarMail({ para: cuenta.email, categoria: "resto", ...mail });
   } catch (err) {

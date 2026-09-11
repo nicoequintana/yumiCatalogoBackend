@@ -10,7 +10,7 @@ vi.mock("../lib/logError.js", () => ({ logError: (...args) => logErrorMock(...ar
 vi.mock("../lib/tokensCuenta.js", () => ({
   emitirToken: (...args) => emitirTokenMock(...args),
   invalidarTokensDe: (...args) => invalidarTokensDeMock(...args),
-  // Fake determinista: acá solo importa que el `excepto` sea el hash del token recién emitido.
+  // Fake determinista (el sender ya no lo usa: la invalidación se ancla en el id).
   hashDeToken: (tokenClaro) => `hash:${tokenClaro}`,
 }));
 
@@ -31,7 +31,7 @@ beforeEach(() => {
   enviarMailMock.mockResolvedValue(undefined);
   logErrorMock.mockReset();
   emitirTokenMock.mockReset();
-  emitirTokenMock.mockResolvedValue({ tokenClaro: "TOKEN-XYZ", expiraEn: new Date() });
+  emitirTokenMock.mockResolvedValue({ tokenClaro: "TOKEN-XYZ", expiraEn: new Date(), id: 55 });
   invalidarTokensDeMock.mockReset();
   invalidarTokensDeMock.mockResolvedValue(undefined);
   process.env.FRONTEND_URL = "https://yima-productos.com";
@@ -62,7 +62,7 @@ describe("enviarVerificacion", () => {
     const orden = [];
     emitirTokenMock.mockImplementation(async () => {
       orden.push("emitir");
-      return { tokenClaro: "TOKEN-XYZ", expiraEn: new Date() };
+      return { tokenClaro: "TOKEN-XYZ", expiraEn: new Date(), id: 55 };
     });
     invalidarTokensDeMock.mockImplementation(async () => {
       orden.push("invalidar");
@@ -71,7 +71,7 @@ describe("enviarVerificacion", () => {
     await enviarVerificacion(CUENTA);
 
     expect(orden).toEqual(["emitir", "invalidar"]);
-    expect(invalidarTokensDeMock).toHaveBeenCalledWith(7, "VERIFICACION", { excepto: "hash:TOKEN-XYZ" });
+    expect(invalidarTokensDeMock).toHaveBeenCalledWith(7, "VERIFICACION", { anterioresA: 55 });
   });
 
   it("si emitir falla, NO invalida los anteriores: el link viejo sigue sirviendo", async () => {

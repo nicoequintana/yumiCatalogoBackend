@@ -83,11 +83,11 @@ const HACE_UNA_HORA = () => new Date(Date.now() - 60 * 60 * 1000);
 const HACE_DOS_DIAS = () => new Date(Date.now() - 48 * 60 * 60 * 1000);
 
 describe("olvide", () => {
-  it("cuenta verificada: 200 generico y, DESPUES, emite RESET, invalida los previos menos el nuevo y manda el mail", async () => {
+  it("cuenta verificada: 200 generico y, DESPUES, emite RESET, invalida los anteriores al nuevo y manda el mail", async () => {
     const cuenta = { id: 1, email: "juan@gmail.com", emailVerificado: true, createdAt: HACE_DOS_DIAS() };
     const expiraEn = new Date(Date.now() + 60 * 60 * 1000);
     findUniqueMock.mockResolvedValue(cuenta);
-    emitirTokenMock.mockResolvedValue({ tokenClaro: "abc", expiraEn });
+    emitirTokenMock.mockResolvedValue({ tokenClaro: "abc", expiraEn, id: 77 });
 
     const res = await request(buildApp()).post("/olvide").send({ email: "Juan@Gmail.com" });
 
@@ -96,7 +96,7 @@ describe("olvide", () => {
     await vi.waitFor(() => expect(enviarResetMock).toHaveBeenCalledWith(cuenta, { tokenClaro: "abc", expiraEn }));
     expect(findUniqueMock).toHaveBeenCalledWith({ where: { email: "juan@gmail.com" } });
     expect(emitirTokenMock).toHaveBeenCalledWith({ cuentaClienteId: 1, tipo: "RESET" });
-    expect(invalidarMock).toHaveBeenCalledWith(1, "RESET", { excepto: hashDeToken("abc") });
+    expect(invalidarMock).toHaveBeenCalledWith(1, "RESET", { anterioresA: 77 });
   });
 
   it("cuenta inexistente: MISMO status y cuerpo, sin tocar tokens", async () => {

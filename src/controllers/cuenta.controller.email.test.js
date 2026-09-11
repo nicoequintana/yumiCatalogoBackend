@@ -70,7 +70,7 @@ beforeEach(async () => {
     txCuentaFindUniqueMock, txCuentaUpdateMock, txIdentidadDeleteMock, invalidarMock, emitirTokenMock,
     consumirTokenMock, enviarCambioEmailMock, enviarAvisoMock,
   ].forEach((m) => m.mockReset());
-  emitirTokenMock.mockResolvedValue({ tokenClaro: "abc", expiraEn: EXPIRA });
+  emitirTokenMock.mockResolvedValue({ tokenClaro: "abc", expiraEn: EXPIRA, id: 88 });
   invalidarMock.mockResolvedValue();
   enviarCambioEmailMock.mockResolvedValue();
   enviarAvisoMock.mockResolvedValue();
@@ -123,7 +123,7 @@ describe("PUT /cuenta/email (cambiarEmail)", () => {
     const res = await request(buildApp()).put("/email").send({ emailNuevo: "Nuevo@Gmail.com", password: "clave-actual-larga" });
     expect(res.status).toBe(200);
     expect(emitirTokenMock).toHaveBeenCalledWith({ cuentaClienteId: 1, tipo: "CAMBIO_EMAIL", emailNuevo: "nuevo@gmail.com" });
-    expect(invalidarMock).toHaveBeenCalledWith(1, "CAMBIO_EMAIL", { excepto: hashDeToken("abc") });
+    expect(invalidarMock).toHaveBeenCalledWith(1, "CAMBIO_EMAIL", { anterioresA: 88 });
     expect(emitirTokenMock.mock.invocationCallOrder[0]).toBeLessThan(invalidarMock.mock.invocationCallOrder[0]);
     expect(enviarCambioEmailMock).toHaveBeenCalledWith(expect.objectContaining({ id: 1, email: "juan@gmail.com" }), {
       emailNuevo: "nuevo@gmail.com",

@@ -755,15 +755,15 @@ const MENSAJE_OLVIDE = "Si hay una cuenta con ese email, te mandamos las instruc
  * haber borrado. Una de Google sin contraseña SÍ recibe el link: el spec dice
  * que así adquiere contraseña.
  *
- * Se emite el nuevo y RECIÉN DESPUÉS se invalidan los previos (`excepto`):
+ * Se emite el nuevo y RECIÉN DESPUÉS se invalidan los anteriores a él (`anterioresA`):
  * invalidar primero deja a la cuenta sin ningún link válido si la emisión
  * falla (mismo orden que `enviarVerificacion`).
  */
 async function procesarOlvide(email) {
   const cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
   if (!cuenta || (!cuenta.emailVerificado && estaFueraDeVentana(cuenta))) return;
-  const { tokenClaro, expiraEn } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.RESET });
-  await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.RESET, { excepto: hashDeToken(tokenClaro) });
+  const { tokenClaro, expiraEn, id } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.RESET });
+  await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.RESET, { anterioresA: id });
   // `enviarReset` reintenta adentro (hasta ~10 s): por eso nada de esto puede
   // correr antes de `res.json`.
   await enviarReset(cuenta, { tokenClaro, expiraEn });
@@ -916,8 +916,8 @@ export async function cambiarEmail(req, res, next) {
 
     // Se emite y RECIÉN DESPUÉS se invalidan los previos: al revés, una
     // emisión fallida deja a la cuenta sin link vivo (mismo orden que `olvide`).
-    const { tokenClaro } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.CAMBIO_EMAIL, emailNuevo });
-    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.CAMBIO_EMAIL, { excepto: hashDeToken(tokenClaro) });
+    const { tokenClaro, id } = await emitirToken({ cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.CAMBIO_EMAIL, emailNuevo });
+    await invalidarTokensDe(cuenta.id, TIPOS_TOKEN.CAMBIO_EMAIL, { anterioresA: id });
 
     // `.catch` aunque los senders atrapen lo suyo: un rechazo sin manejar en
     // el camino del mail ya tumbó el proceso una vez.

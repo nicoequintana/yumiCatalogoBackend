@@ -54,23 +54,41 @@ export async function emitirToken({ cuentaClienteId, tipo, emailNuevo = null }) 
   const tokenClaro = randomBytes(32).toString("base64url");
   const expiraEn = new Date(Date.now() + DURACION_TOKEN_MS[tipo]);
 
-  await prisma.tokenCuenta.create({
+  const fila = await prisma.tokenCuenta.create({
     data: { cuentaClienteId, tipo, tokenHash: hashDeToken(tokenClaro), emailNuevo, expiraEn },
   });
   await limpiarVencidos();
 
-  return { tokenClaro, expiraEn };
+  return { tokenClaro, expiraEn, id: fila?.id };
 }
 
 /**
- * `excepto` (opcional): el `tokenHash` que queda vivo. Sirve para invalidar
- * DESPUÉS de emitir el reemplazo: invalidar antes deja a la cuenta sin ningún
- * token válido si la emisión falla.
+ * `anterioresA` (opcional): el `id` del token recién emitido. Se invalida
+ * DESPUÉS de emitir el reemplazo (invalidar antes deja a la cuenta sin ningún
+ * token válido si la emisión falla), y SOLO lo emitido antes que él: con el
+ * viejo "todos menos el mío", dos pedidos concurrentes se invalidaban uno al
+ * otro y la cuenta quedaba sin ningún link vivo. Con `id < nuevo`, el más
+ * nuevo sobrevive siempre.
  */
-export async function invalidarTokensDe(cuentaClienteId, tipo, { excepto } = {}) {
+export async function invalidarTokensDe(cuentaClienteId, tipo, { anterioresA } = {}) {
   exigirTipo(tipo);
   await prisma.tokenCuenta.updateMany({
-    where: { cuentaClienteId, tipo, usadoEn: null, ...(excepto && { tokenHash: { not: excepto } }) },
+    where: { cuentaClienteId, tipo, usadoEn: null, ...(anterioresA != null && { id: { lt: anterioresA } }) },
+    data: { usadoEn: new Date() },
+  });
+}
+
+/**
+ * Revoca de un saque los tokens vivos de varios tipos. `cliente` es `prisma`
+ * o el `tx` de una transacción: quien cambia una credencial (contraseña,
+ * email) decide si la revocación va atómica con esa escritura. Un
+ * CAMBIO_EMAIL pendiente que sobreviviera a un cambio de contraseña le
+ * dejaría a quien secuestró la sesión confirmar el cambio más tarde.
+ */
+export async function revocarTokensPendientes(cliente, cuentaClienteId, tipos) {
+  tipos.forEach(exigirTipo);
+  await cliente.tokenCuenta.updateMany({
+    where: { cuentaClienteId, tipo: { in: tipos }, usadoEn: null },
     data: { usadoEn: new Date() },
   });
 }
@@ -80,8 +98,11 @@ export async function invalidarTokensDe(cuentaClienteId, tipo, { excepto } = {})
  * con `motivo` en INVALIDO | USADO | VENCIDO — el usuario necesita saber si
  * tiene que pedir otro o si ya está hecho. La clasificación es una lectura
  * posterior y NO decide nada: la única decisión ya la tomó el `updateMany`.
+ *
+ * `cliente` (opcional, default `prisma`): el `tx` de una transacción, para
+ * que el consumo y su clasificación queden adentro y un rollback lo deshaga.
  */
-export async function consumirToken({ tokenClaro, tipo }) {
+export async function consumirToken({ tokenClaro, tipo }, cliente = prisma) {
   exigirTipo(tipo);
   if (typeof tokenClaro !== "string" || tokenClaro === "") {
     return { ok: false, motivo: "INVALIDO" };
@@ -89,12 +110,12 @@ export async function consumirToken({ tokenClaro, tipo }) {
   const tokenHash = hashDeToken(tokenClaro);
   const ahora = new Date();
 
-  const { count } = await prisma.tokenCuenta.updateMany({
+  const { count } = await cliente.tokenCuenta.updateMany({
     where: { tokenHash, tipo, usadoEn: null, expiraEn: { gt: ahora } },
     data: { usadoEn: ahora },
   });
 
-  const fila = await prisma.tokenCuenta.findUnique({ where: { tokenHash } });
+  const fila = await cliente.tokenCuenta.findUnique({ where: { tokenHash } });
 
   if (count === 1) {
     return { ok: true, fila };
@@ -105,12 +126,12 @@ export async function consumirToken({ tokenClaro, tipo }) {
   return { ok: false, motivo: "INVALIDO" };
 }
 
+/** Crea primero e invalida DESPUÉS lo anterior al nuevo (mismo criterio que `invalidarTokensDe`). */
 export async function emitirCodigoAcceso(cuentaClienteId) {
-  await invalidarTokensDe(cuentaClienteId, TIPOS_TOKEN.CODIGO_ACCESO);
   const codigo = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const expiraEn = new Date(Date.now() + DURACION_TOKEN_MS.CODIGO_ACCESO);
 
-  await prisma.tokenCuenta.create({
+  const fila = await prisma.tokenCuenta.create({
     data: {
       cuentaClienteId,
       tipo: TIPOS_TOKEN.CODIGO_ACCESO,
@@ -118,6 +139,7 @@ export async function emitirCodigoAcceso(cuentaClienteId) {
       expiraEn,
     },
   });
+  await invalidarTokensDe(cuentaClienteId, TIPOS_TOKEN.CODIGO_ACCESO, { anterioresA: fila?.id });
 
   return { codigo, expiraEn };
 }
