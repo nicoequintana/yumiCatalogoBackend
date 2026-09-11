@@ -31,6 +31,9 @@ function identidadDesdeToken(req) {
       // lo trata como revocado. La normalización vive acá para que `requireAuth`
       // y `authOpcional` reciban exactamente la misma forma.
       tokenVersion: Number.isInteger(payload?.tokenVersion) ? payload.tokenVersion : null,
+      // Crudo, sin normalizar: solo lo consume `requireAuth` para la defensa
+      // en profundidad de abajo. Nunca viaja a `req.usuario`.
+      tipo: payload?.tipo,
     };
   } catch {
     return null;
@@ -138,6 +141,14 @@ async function estadoDeSesion(usuario) {
 export async function requireAuth(req, res, next) {
   const usuario = identidadDesdeToken(req);
   if (!usuario) {
+    return res.status(401).json({ error: "No autorizado." });
+  }
+
+  // Defensa en profundidad: un token de CLIENTE nunca puede pasar por acá,
+  // aunque algún día JWT_SECRET y JWT_SECRET_CLIENTE coincidieran (env.js lo
+  // impide al arrancar). Se corta ANTES de tocar la base — mismo 401, mismo
+  // cuerpo, que cualquier otro token inválido, para no revelar el motivo.
+  if (usuario.tipo === "cliente") {
     return res.status(401).json({ error: "No autorizado." });
   }
 

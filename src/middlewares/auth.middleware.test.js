@@ -107,6 +107,30 @@ describe("requireAuth", () => {
   });
 });
 
+describe("requireAuth — defensa en profundidad contra un token de cliente", () => {
+  // Si algún día JWT_SECRET y JWT_SECRET_CLIENTE coincidieran (env.js lo evita
+  // al arrancar, ver env.test.js), un token de cliente firmado con el mismo
+  // secreto no puede colarse acá solo porque `sub`/`tokenVersion` calcen con
+  // un admin real. `requireAuth` rechaza cualquier payload con `tipo: "cliente"`
+  // ANTES de siquiera consultar la base — mismo 401 que un token inválido.
+  it("responde 401 si el payload trae tipo: 'cliente', aunque el resto luzca válido", async () => {
+    const tokenDeCliente = jwt.sign(
+      { sub: 3, email: "cliente@test.com", tokenVersion: 0, tipo: "cliente" },
+      "test-secret",
+      { expiresIn: "7d" },
+    );
+
+    const res = await request(buildApp())
+      .get("/protegido")
+      .set("Authorization", `Bearer ${tokenDeCliente}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: "No autorizado." });
+    // Ni siquiera consulta la base: se corta antes, por la forma del payload.
+    expect(usuarioFindUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("authOpcional", () => {
   it("deja pasar como anónimo si falta el header Authorization", async () => {
     const res = await request(buildApp()).get("/publico");

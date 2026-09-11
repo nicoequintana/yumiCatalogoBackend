@@ -137,18 +137,46 @@ export function mensajeDeFaltantes(faltantes) {
 }
 
 /**
+ * ¿`JWT_SECRET` y `JWT_SECRET_CLIENTE` son el MISMO valor?
+ *
+ * `auth.middleware.js` (el del panel admin) no valida el claim `tipo` del
+ * payload — confía en que un token de cliente JAMÁS pudo firmarse con el
+ * secreto de admin. Si los dos secretos coincidieran, un cliente con
+ * `sub: 3` y `tokenVersion` sincronizada firmaría (con `JWT_SECRET_CLIENTE`,
+ * igual al de admin) un token que `requireAuth` acepta como el `Usuario` 3
+ * del panel completo. Ver "Secreto separado" en la spec de cuentas de
+ * cliente. Ausente o vacío NO cuenta acá: ya lo reporta `variablesFaltantes`.
+ *
+ * @param {Record<string, string | undefined>} [entorno=process.env]
+ * @returns {boolean}
+ */
+export function secretosClienteYAdminIguales(entorno = process.env) {
+  const admin = entorno.JWT_SECRET;
+  const cliente = entorno.JWT_SECRET_CLIENTE;
+  if (admin === undefined || admin === null || String(admin).trim() === "") return false;
+  if (cliente === undefined || cliente === null || String(cliente).trim() === "") return false;
+  return admin === cliente;
+}
+
+/**
  * Arma el mensaje de arranque combinando TODOS los problemas detectados —
- * variables faltantes y un JWT_SECRET débil — en un solo texto. Mismo criterio
- * que `mensajeDeFaltantes`: reportar todo junto para no obligar a un ciclo de
- * reinicio por problema.
+ * variables faltantes, un JWT_SECRET débil y los dos secretos de JWT
+ * coincidiendo — en un solo texto. Mismo criterio que `mensajeDeFaltantes`:
+ * reportar todo junto para no obligar a un ciclo de reinicio por problema.
  *
  * @param {object} problemas
  * @param {string[]} [problemas.faltantes=[]]
  * @param {boolean} [problemas.secretoDebil=false] compatibilidad con el booleano viejo (solo JWT_SECRET)
  * @param {string[]} [problemas.secretosDebiles=[]]
+ * @param {boolean} [problemas.secretosIguales=false]
  * @returns {string}
  */
-export function mensajeDeProblemas({ faltantes = [], secretoDebil = false, secretosDebiles = [] } = {}) {
+export function mensajeDeProblemas({
+  faltantes = [],
+  secretoDebil = false,
+  secretosDebiles = [],
+  secretosIguales = false,
+} = {}) {
   const bloques = [];
   if (faltantes.length > 0) {
     bloques.push(mensajeDeFaltantes(faltantes));
@@ -159,6 +187,15 @@ export function mensajeDeProblemas({ faltantes = [], secretoDebil = false, secre
       [
         `No se puede arrancar el backend: ${nombre} es demasiado corto (necesita al menos ${JWT_SECRET_MIN_BYTES} bytes).`,
         "Con HS256 un secreto corto es crackeable offline y deja la sesión abierta.",
+        "Generá uno nuevo con `openssl rand -base64 48` y volvé a desplegar.",
+      ].join("\n"),
+    );
+  }
+  if (secretosIguales) {
+    bloques.push(
+      [
+        "No se puede arrancar el backend: JWT_SECRET_CLIENTE es igual a JWT_SECRET.",
+        "Tienen que ser distintos: con el mismo secreto, un cliente autenticado podría verificar como un usuario del panel admin.",
         "Generá uno nuevo con `openssl rand -base64 48` y volvé a desplegar.",
       ].join("\n"),
     );
@@ -234,8 +271,9 @@ export function cookieDominio(entorno = process.env) {
 export function validarEntorno({ entorno = process.env, exit = process.exit, log = console.error } = {}) {
   const faltantes = variablesFaltantes(entorno);
   const debiles = secretosDebiles(entorno);
-  if (faltantes.length > 0 || debiles.length > 0) {
-    log(mensajeDeProblemas({ faltantes, secretosDebiles: debiles }));
+  const secretosIguales = secretosClienteYAdminIguales(entorno);
+  if (faltantes.length > 0 || debiles.length > 0 || secretosIguales) {
+    log(mensajeDeProblemas({ faltantes, secretosDebiles: debiles, secretosIguales }));
     exit(1);
     return faltantes;
   }

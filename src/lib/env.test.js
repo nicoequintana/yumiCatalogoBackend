@@ -238,7 +238,13 @@ describe("validarEntorno — fortaleza de JWT_SECRET (AUTH-03)", () => {
 // Fixture propia de estas suites nuevas: todas las VARIABLES_REQUERIDAS con un
 // valor fuerte parejo, para no acoplar estos tests al contenido puntual de
 // `entornoCompleto` de arriba.
-const ENTORNO_COMPLETO = Object.fromEntries(VARIABLES_REQUERIDAS.map((n) => [n, "x".repeat(40)]));
+// JWT_SECRET_CLIENTE lleva un valor DISTINTO al resto: con el mismo valor que
+// JWT_SECRET, `secretosClienteYAdminIguales` cortaría el arranque de cualquier
+// test que use esta fixture, y esa fixture representa el entorno "todo bien".
+const ENTORNO_COMPLETO = {
+  ...Object.fromEntries(VARIABLES_REQUERIDAS.map((n) => [n, "x".repeat(40)])),
+  JWT_SECRET_CLIENTE: "y".repeat(40),
+};
 
 describe("JWT_SECRET_CLIENTE", () => {
   it("es obligatoria", () => {
@@ -264,6 +270,39 @@ describe("JWT_SECRET_CLIENTE", () => {
     const mensaje = mensajeDeProblemas({ faltantes: [], secretosDebiles: ["JWT_SECRET", "JWT_SECRET_CLIENTE"] });
     expect(mensaje).toMatch(/JWT_SECRET es demasiado corto/);
     expect(mensaje).toMatch(/JWT_SECRET_CLIENTE es demasiado corto/);
+  });
+});
+
+describe("JWT_SECRET_CLIENTE distinto de JWT_SECRET (aislamiento admin/cliente)", () => {
+  it("corta el arranque si los dos secretos son IGUALES", () => {
+    // auth.middleware.js no chequea `tipo` en el payload: con el mismo
+    // secreto, un cliente con sub: 3 firmaría un token que verifica como el
+    // Usuario 3 del admin. El arranque tiene que fallar por el mismo camino
+    // que un secreto ausente o débil.
+    const exit = vi.fn();
+    const log = vi.fn();
+    const mismoSecreto = "un-secreto-largo-de-mas-de-treinta-y-dos-bytes";
+
+    validarEntorno({
+      entorno: { ...entornoCompleto, JWT_SECRET: mismoSecreto, JWT_SECRET_CLIENTE: mismoSecreto },
+      exit,
+      log,
+    });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(log).toHaveBeenCalledTimes(1);
+    const mensaje = log.mock.calls[0][0];
+    expect(mensaje).toMatch(/JWT_SECRET_CLIENTE/);
+    expect(mensaje).toMatch(/igual|mismo/i);
+  });
+
+  it("no aborta si los dos secretos son distintos", () => {
+    const exit = vi.fn();
+    const log = vi.fn();
+
+    validarEntorno({ entorno: entornoCompleto, exit, log });
+
+    expect(exit).not.toHaveBeenCalled();
   });
 });
 
