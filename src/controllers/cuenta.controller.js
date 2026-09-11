@@ -59,9 +59,45 @@ const LARGO_MAX_EMAIL = 254;
 const LARGO_MAX_TOKEN = 128;
 const MS_PURGA_NO_VERIFICADAS = HORAS_PURGA_NO_VERIFICADAS * 60 * 60 * 1000;
 
-/** Una no verificada cuenta como vencida pasadas las 24 h, aunque la purga todavía no la haya borrado. */
+/**
+ * Una NUNCA verificada cuenta como vencida pasadas las 24 h, aunque la purga
+ * todavía no la haya borrado. Con `verificadaEn` puesto la ventana no aplica:
+ * la reasignación operada del email apaga `emailVerificado` en un cliente
+ * real, con pedidos, que no es un registro abandonado.
+ */
 function estaFueraDeVentana(cuenta) {
-  return Date.now() - cuenta.createdAt.getTime() > MS_PURGA_NO_VERIFICADAS;
+  return cuenta.verificadaEn == null && Date.now() - cuenta.createdAt.getTime() > MS_PURGA_NO_VERIFICADAS;
+}
+
+/**
+ * Marca la cuenta verificada con las guardas en el `where` (mismo criterio
+ * que `stockDescontado`), en dos escrituras con `where` DISJUNTOS por
+ * `verificadaEn`, cada una atómica por sí sola:
+ *
+ * 1. Primera verificación (`verificadaEn` NULL): exige estar dentro de la
+ *    ventana de 24 h (o ya verificada) y setea `verificadaEn`.
+ * 2. Ya verificada alguna vez (reasignada por el panel): sin ventana, y
+ *    `verificadaEn` no se pisa.
+ *
+ * Una sola escritura más un "setear verificadaEn si es NULL" aparte dejaría,
+ * si la segunda falla, una cuenta verificada con `verificadaEn` NULL: la
+ * próxima reasignación la volvería purgable. Devuelve el `count`.
+ */
+async function marcarVerificada(cuentaClienteId, datos = {}) {
+  const primera = await prisma.cuentaCliente.updateMany({
+    where: {
+      id: cuentaClienteId,
+      verificadaEn: null,
+      OR: [{ emailVerificado: true }, { createdAt: { gte: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) } }],
+    },
+    data: { ...datos, emailVerificado: true, verificadaEn: new Date() },
+  });
+  if (primera.count > 0) return primera.count;
+  const { count } = await prisma.cuentaCliente.updateMany({
+    where: { id: cuentaClienteId, verificadaEn: { not: null } },
+    data: { ...datos, emailVerificado: true },
+  });
+  return count;
 }
 
 /**
@@ -69,11 +105,20 @@ function estaFueraDeVentana(cuenta) {
  * registro se borran TODAS las cuentas no verificadas con más de 24 h, no
  * solo la del email que llegó — no hay cron que lo haga aparte. Nunca lanza:
  * es mantenimiento de fondo y no puede tumbar el registro que lo disparó.
+ *
+ * Solo las NUNCA verificadas (`verificadaEn` NULL) y sin pedidos: una
+ * reasignada por el panel es un cliente real, y una sola fila con órdenes
+ * (FK `NoAction` de `Orden`) haría fallar el `deleteMany` ENTERO.
  */
 async function purgarNoVerificadasVencidas() {
   try {
     await prisma.cuentaCliente.deleteMany({
-      where: { emailVerificado: false, createdAt: { lt: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) } },
+      where: {
+        emailVerificado: false,
+        verificadaEn: null,
+        createdAt: { lt: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) },
+        ordenes: { none: {} },
+      },
     });
   } catch (err) {
     logError({ mensaje: "No se pudo purgar cuentas no verificadas vencidas", stack: err.stack, causa: err });
@@ -274,17 +319,11 @@ export async function verificar(req, res, next) {
     if (!resultado.ok) return responderMotivo(res, resultado.motivo);
 
     // La ventana de 24 h es de la CUENTA, no solo del token: la guarda va en
-    // el `where` de la escritura (mismo criterio que `stockDescontado`), no en
-    // un `findUnique` + `if`. Una no verificada ya fuera de la ventana responde
-    // igual que un link vencido y NO se marca verificada.
+    // el `where` de la escritura (`marcarVerificada`), no en un `findUnique` +
+    // `if`. Una nunca verificada ya fuera de la ventana responde igual que un
+    // link vencido y NO se marca verificada.
     const cuentaClienteId = resultado.fila.cuentaClienteId;
-    const { count } = await prisma.cuentaCliente.updateMany({
-      where: {
-        id: cuentaClienteId,
-        OR: [{ emailVerificado: true }, { createdAt: { gte: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) } }],
-      },
-      data: { emailVerificado: true },
-    });
+    const count = await marcarVerificada(cuentaClienteId);
     if (count === 0) return responderMotivo(res, "VENCIDO");
 
     await marcarDispositivoConocido(res, cuentaClienteId);
@@ -808,14 +847,14 @@ export async function restablecer(req, res, next) {
     if (!resultado.ok) return responderMotivo(res, resultado.motivo);
 
     const cuentaClienteId = resultado.fila.cuentaClienteId;
-    const { count } = await prisma.cuentaCliente.updateMany({
-      where: {
-        id: cuentaClienteId,
-        OR: [{ emailVerificado: true }, { createdAt: { gte: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) } }],
-      },
-      // `tokenVersion` +1 cierra TODAS las sesiones; el contador y el bloqueo
-      // vuelven a cero en la misma escritura (el reseteo desbloquea, Amenaza 19).
-      data: { passwordHash, tokenVersion: { increment: 1 }, emailVerificado: true, intentosFallidos: 0, bloqueadoHasta: null },
+    // `tokenVersion` +1 cierra TODAS las sesiones; el contador y el bloqueo
+    // vuelven a cero en la misma escritura (el reseteo desbloquea, Amenaza 19).
+    // `marcarVerificada` pone `emailVerificado` y, si es la primera vez, `verificadaEn`.
+    const count = await marcarVerificada(cuentaClienteId, {
+      passwordHash,
+      tokenVersion: { increment: 1 },
+      intentosFallidos: 0,
+      bloqueadoHasta: null,
     });
     if (count === 0) return responderMotivo(res, "INVALIDO");
 
@@ -931,9 +970,16 @@ export async function confirmarEmail(req, res, next) {
         const cuenta = await tx.cuentaCliente.findUnique({ where: { id: cuentaClienteId }, include: { identidadGoogle: true } });
         if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
 
+        // `verificadaEn` solo si faltaba (fila previa a la columna): leído y
+        // escrito dentro de la misma transacción, y nunca se pisa.
         await tx.cuentaCliente.update({
           where: { id: cuentaClienteId },
-          data: { email: emailNuevo, emailVerificado: true, tokenVersion: { increment: 1 } },
+          data: {
+            email: emailNuevo,
+            emailVerificado: true,
+            tokenVersion: { increment: 1 },
+            ...(cuenta.verificadaEn ? {} : { verificadaEn: ahora }),
+          },
         });
         if (cuenta.identidadGoogle) await tx.identidadGoogle.delete({ where: { cuentaClienteId } });
         return { googleDesvinculado: Boolean(cuenta.identidadGoogle) };

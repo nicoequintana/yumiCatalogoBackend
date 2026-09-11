@@ -158,10 +158,10 @@ describe("PUT /cuenta/email (cambiarEmail)", () => {
 });
 
 describe("POST /cuenta/email/confirmar (confirmarEmail)", () => {
-  function mockTx({ consumido = true, identidadGoogle = null, updateRechaza } = {}) {
+  function mockTx({ consumido = true, identidadGoogle = null, updateRechaza, verificadaEn = new Date("2026-01-01") } = {}) {
     txTokenUpdateManyMock.mockResolvedValue({ count: consumido ? 1 : 0 });
     txTokenFindUniqueMock.mockResolvedValue({ cuentaClienteId: 1, emailNuevo: "nuevo@gmail.com" });
-    txCuentaFindUniqueMock.mockResolvedValue({ id: 1, identidadGoogle });
+    txCuentaFindUniqueMock.mockResolvedValue({ id: 1, identidadGoogle, verificadaEn });
     if (updateRechaza) txCuentaUpdateMock.mockRejectedValue(updateRechaza);
     else txCuentaUpdateMock.mockResolvedValue({});
     txIdentidadDeleteMock.mockResolvedValue({});
@@ -212,6 +212,18 @@ describe("POST /cuenta/email/confirmar (confirmarEmail)", () => {
     expect(txIdentidadDeleteMock).not.toHaveBeenCalled();
     expect(consumirTokenMock).not.toHaveBeenCalled();
     expect(res.body.mensaje).not.toMatch(/Google/);
+  });
+
+  it("cuenta sin verificadaEn (fila previa a la columna): la confirmacion lo setea; nunca pisa uno existente (test de arriba)", async () => {
+    mockTx({ verificadaEn: null });
+    const res = await request(buildApp()).post("/email/confirmar").send({ token: "x" });
+    expect(res.status).toBe(200);
+    expect(txCuentaUpdateMock.mock.calls[0][0].data).toEqual({
+      email: "nuevo@gmail.com",
+      emailVerificado: true,
+      tokenVersion: { increment: 1 },
+      verificadaEn: expect.any(Date),
+    });
   });
 
   it("con Google vinculado: la MISMA transaccion borra la IdentidadGoogle y la respuesta lo dice", async () => {

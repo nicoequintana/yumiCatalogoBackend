@@ -117,6 +117,15 @@ describe("olvide", () => {
     expect(emitirTokenMock).not.toHaveBeenCalled();
   });
 
+  it("reasignada por el panel (verificadaEn puesto, no verificada, >24 h): SI emite — no es un registro abandonado", async () => {
+    emitirTokenMock.mockResolvedValue({ tokenClaro: "t", expiraEn: new Date() });
+    findUniqueMock.mockResolvedValue({
+      id: 5, email: "reasignada@gmail.com", emailVerificado: false, verificadaEn: HACE_DOS_DIAS(), createdAt: HACE_DOS_DIAS(),
+    });
+    await request(buildApp()).post("/olvide").send({ email: "reasignada@gmail.com" });
+    await vi.waitFor(() => expect(emitirTokenMock).toHaveBeenCalledWith({ cuentaClienteId: 5, tipo: "RESET" }));
+  });
+
   it("no verificada dentro de la ventana y de Google sin contraseña: SI emite (Amenaza 21; Google adquiere contraseña)", async () => {
     emitirTokenMock.mockResolvedValue({ tokenClaro: "t", expiraEn: new Date() });
     for (const cuenta of [
@@ -215,13 +224,17 @@ describe("restablecer", () => {
     const { where, data } = updateManyMock.mock.calls[0][0];
     expect(where.id).toBe(1);
     expect(where.OR).toEqual([{ emailVerificado: true }, { createdAt: { gte: expect.any(Date) } }]);
+    // Primera escritura: solo matchea si verificadaEn es NULL, y lo setea.
+    expect(where.verificadaEn).toBeNull();
     expect(data).toEqual({
       passwordHash: "HASH-NUEVO",
       tokenVersion: { increment: 1 },
       emailVerificado: true,
       intentosFallidos: 0,
       bloqueadoHasta: null,
+      verificadaEn: expect.any(Date),
     });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
     const cookies = res.headers["set-cookie"] ?? [];
     expect(cookies.some((c) => c.startsWith("dispositivo_cliente="))).toBe(true);
     expect(cookies.some((c) => c.startsWith("sesion_cliente="))).toBe(false);
@@ -267,6 +280,28 @@ describe("restablecer", () => {
     const res = await request(buildApp()).post("/restablecer").send({ token: TOKEN, password: "una-clave-larga-2" });
     expect(res.status).toBe(200);
     expect(updateManyMock.mock.calls[0][0].data.emailVerificado).toBe(true);
+  });
+
+  it("reasignada por el panel (verificadaEn puesto, no verificada, >24 h): el reseteo funciona y no pisa verificadaEn", async () => {
+    tokenFindUniqueMock.mockResolvedValue(filaViva());
+    findUniqueMock.mockResolvedValue({
+      ...cuentaVerificada(), emailVerificado: false, verificadaEn: HACE_DOS_DIAS(), createdAt: HACE_DOS_DIAS(),
+    });
+    consumirTokenMock.mockResolvedValue({ ok: true, fila: filaViva() });
+    updateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+
+    const res = await request(buildApp()).post("/restablecer").send({ token: TOKEN, password: "una-clave-larga-2" });
+
+    expect(res.status).toBe(200);
+    const { where, data } = updateManyMock.mock.calls[1][0];
+    expect(where).toEqual({ id: 1, verificadaEn: { not: null } });
+    expect(data).toEqual({
+      passwordHash: "HASH-NUEVO",
+      tokenVersion: { increment: 1 },
+      emailVerificado: true,
+      intentosFallidos: 0,
+      bloqueadoHasta: null,
+    });
   });
 
   it("carrera: otro request consumio el token entre la lectura y el consumo -> USADO, sin escribir", async () => {

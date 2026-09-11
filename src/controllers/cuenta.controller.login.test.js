@@ -127,6 +127,15 @@ describe("login — aislamiento: mismo cuerpo para los tres casos", () => {
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
+  it("reasignada por el panel (verificadaEn puesto, no verificada, >24 h): 401 hasta verificar, pero EXISTE (cuenta el fallo)", async () => {
+    const vieja = new Date(Date.now() - (HORAS_PURGA_NO_VERIFICADAS * 60 + 1) * 60 * 1000);
+    findUniqueMock.mockResolvedValue(cuentaVerificada({ emailVerificado: false, verificadaEn: vieja, createdAt: vieja }));
+    const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual(CUERPO_GENERICO);
+    await vi.waitFor(() => expect(updateManyMock).toHaveBeenCalled());
+  });
+
   it("cuenta bloqueada", async () => {
     findUniqueMock.mockResolvedValue(cuentaVerificada({ bloqueadoHasta: new Date(Date.now() + 60_000) }));
     const res = await request(buildApp()).post("/login").send({ email: "x@gmail.com", password: CLAVE });

@@ -272,6 +272,23 @@ describe("POST /api/cuenta/registro", () => {
     await esperarPurga(2);
   });
 
+  it("reasignada por el panel (verificadaEn puesto, no verificada, >24 h): NO se purga, reenvía la verificación", async () => {
+    const hace30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 5, email: "juan@gmail.com", emailVerificado: false, verificadaEn: hace30d, createdAt: hace30d,
+    });
+
+    await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+
+    await vi.waitFor(() => {
+      expect(enviarVerificacionMock).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
+    });
+    expect(createMock).not.toHaveBeenCalled();
+    // Solo la purga global (que ya excluye a las verificadaEn), nunca la por id.
+    await esperarPurga(1);
+    expect(deleteManyMock).not.toHaveBeenCalledWith({ where: { id: 5 } });
+  });
+
   it("no verificada y con menos de 24 h: reenvía SIN pisar la contraseña (no llama a create)", async () => {
     const hace1h = new Date(Date.now() - 60 * 60 * 1000);
     findUniqueMock.mockResolvedValueOnce({ id: 4, email: "juan@gmail.com", emailVerificado: false, createdAt: hace1h });
@@ -347,6 +364,11 @@ describe("POST /api/cuenta/registro", () => {
     await esperarPurga(1);
     const [{ where }] = deleteManyMock.mock.calls[0];
     expect(where.emailVerificado).toBe(false);
+    // Solo las NUNCA verificadas y sin pedidos: una reasignada por el panel
+    // (verificadaEn puesto) es un cliente real, y una con órdenes haría
+    // fallar el deleteMany entero (FK NoAction de Orden).
+    expect(where.verificadaEn).toBeNull();
+    expect(where.ordenes).toEqual({ none: {} });
     // El corte es ~24 h atrás del momento del registro, no un valor fijo.
     const horasAtras = (antes - where.createdAt.lt.getTime()) / (60 * 60 * 1000);
     expect(horasAtras).toBeGreaterThan(23.9);
@@ -396,8 +418,12 @@ describe("POST /api/cuenta/verificar", () => {
 
     expect(consumirTokenMock).toHaveBeenCalledWith({ tokenClaro: "TOKEN-CLARO", tipo: "VERIFICACION" });
     const [{ where, data }] = updateManyMock.mock.calls[0];
-    expect(data).toEqual({ emailVerificado: true });
+    // Primera verificación: `verificadaEn` se setea en la misma escritura, y
+    // solo si era NULL (guarda en el `where`, nunca se pisa).
+    expect(data).toEqual({ emailVerificado: true, verificadaEn: expect.any(Date) });
     expect(where.id).toBe(11);
+    expect(where.verificadaEn).toBeNull();
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(dispositivoCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ cuentaClienteId: 11 }) }),
     );
@@ -420,8 +446,9 @@ describe("POST /api/cuenta/verificar", () => {
 
   it("cuenta no verificada con más de 24 h: responde EXACTAMENTE como VENCIDO y no la marca verificada", async () => {
     consumirTokenMock.mockResolvedValueOnce({ ok: true, fila: { cuentaClienteId: 12, tipo: "VERIFICACION" } });
-    // El `where` guardado no matchea: la cuenta ya salió de la ventana de 24 h.
-    updateManyMock.mockResolvedValueOnce({ count: 0 });
+    // Ninguno de los dos `where` guardados matchea: nunca verificada y ya
+    // fuera de la ventana de 24 h.
+    updateManyMock.mockResolvedValue({ count: 0 });
 
     const res = await request(buildApp()).post("/api/cuenta/verificar").set("Origin", ORIGIN).send({ token: "t" });
 
@@ -439,6 +466,21 @@ describe("POST /api/cuenta/verificar", () => {
     expect((Date.now() - corte.getTime()) / (60 * 60 * 1000)).toBeCloseTo(24, 1);
     expect(dispositivoCreateMock).not.toHaveBeenCalled();
     expect(setCookieDispositivoMock).not.toHaveBeenCalled();
+  });
+
+  it("reasignada por el panel (verificadaEn puesto, >24 h): verifica sin la ventana y sin pisar verificadaEn", async () => {
+    consumirTokenMock.mockResolvedValueOnce({ ok: true, fila: { cuentaClienteId: 14, tipo: "VERIFICACION" } });
+    // La escritura de "primera verificación" no matchea (verificadaEn no es
+    // NULL); la de "ya verificada alguna vez" sí.
+    updateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+    dispositivoCreateMock.mockResolvedValueOnce({});
+
+    const res = await request(buildApp()).post("/api/cuenta/verificar").set("Origin", ORIGIN).send({ token: "t" });
+
+    expect(res.status).toBe(200);
+    const [{ where, data }] = updateManyMock.mock.calls[1];
+    expect(where).toEqual({ id: 14, verificadaEn: { not: null } });
+    expect(data).toEqual({ emailVerificado: true });
   });
 
   it("si falla registrar el dispositivo conocido, la verificación igual responde 200 y se loguea", async () => {
@@ -525,6 +567,19 @@ describe("POST /api/cuenta/reenviar-verificacion", () => {
     await esperarUnTick();
 
     expect(enviarVerificacionMock).not.toHaveBeenCalled();
+  });
+
+  it("reasignada por el panel (verificadaEn puesto, >24 h): SÍ reenvía — no es un registro abandonado", async () => {
+    const hace30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 24, email: "juan@gmail.com", emailVerificado: false, verificadaEn: hace30d, createdAt: hace30d,
+    });
+
+    await request(buildApp()).post("/api/cuenta/reenviar-verificacion").set("Origin", ORIGIN).send(BODY);
+
+    await vi.waitFor(() => {
+      expect(enviarVerificacionMock).toHaveBeenCalledWith(expect.objectContaining({ id: 24 }));
+    });
   });
 
   it("ya verificada: no reenvía nada (no es 'olvidé mi contraseña')", async () => {
