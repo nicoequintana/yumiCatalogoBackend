@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
+process.env.JWT_SECRET_CLIENTE = "test-secret-cliente-con-largo-suficiente";
 
 const findManyMock = vi.fn();
 const findUniqueMock = vi.fn();
@@ -87,6 +88,16 @@ beforeEach(() => {
 describe("GET /api/usuarios", () => {
   it("responde 401 sin token", async () => {
     const res = await request(buildApp()).get("/api/usuarios");
+    expect(res.status).toBe(401);
+  });
+
+  it("AISLAMIENTO: un token de CLIENTE (firmado con JWT_SECRET_CLIENTE) no entra al panel", async () => {
+    const tokenCliente = jwt.sign(
+      { sub: 1, email: "juan@gmail.com", tokenVersion: 0, tipo: "cliente" },
+      process.env.JWT_SECRET_CLIENTE ?? "test-secret-cliente-con-largo-suficiente",
+      { expiresIn: "7d" },
+    );
+    const res = await request(buildApp()).get("/api/usuarios").set("Authorization", `Bearer ${tokenCliente}`);
     expect(res.status).toBe(401);
   });
 
