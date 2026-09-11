@@ -530,34 +530,46 @@ export async function loginConCodigo(req, res, next) {
 const MENSAJE_REENVIO_CODIGO = "Si corresponde, te mandamos un código nuevo.";
 
 /**
- * Emite un código nuevo (invalida el anterior) y lo manda. Nunca lanza: la
- * respuesta genérica ya salió antes de llamarla.
+ * Re-emite SOLO si ya hay un CODIGO_ACCESO vivo — es decir, si alguien pasó
+ * la contraseña en `login` hace menos de 10 min. Sin esa condición, pedir un
+ * reenvío para cualquier email verificado mandaba un código nuevo: un login
+ * sin contraseña para quien controle el buzón, o spam para quien no. La
+ * condición va en el `where` de la invalidación (mismo criterio que
+ * `stockDescontado`) y el `count` decide. Nunca lanza: la respuesta genérica
+ * ya salió antes de llamarla.
  */
-async function procesarReenvioCodigo(cuenta) {
+async function procesarReenvioCodigo(email) {
+  const cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
+  if (!cuenta || !cuenta.emailVerificado) return;
+
+  const { count } = await prisma.tokenCuenta.updateMany({
+    where: { cuentaClienteId: cuenta.id, tipo: TIPOS_TOKEN.CODIGO_ACCESO, usadoEn: null, expiraEn: { gt: new Date() } },
+    data: { usadoEn: new Date() },
+  });
+  if (count === 0) return;
+
   const { codigo, expiraEn } = await emitirCodigoAcceso(cuenta.id);
   await enviarCodigoAcceso(cuenta, { codigo, expiraEn });
 }
 
 /**
- * SIEMPRE 200 (Amenaza 16, mismo criterio que `/reenviar-verificacion`): el
- * trabajo de base y el envío corren DESPUÉS de responder, para que el
- * tiempo de respuesta no delate si el email pertenece a una cuenta
- * existente y verificada.
+ * SIEMPRE 200 (Amenaza 16, mismo criterio que `/reenviar-verificacion`): la
+ * consulta de la cuenta, la invalidación y el envío corren DESPUÉS de
+ * responder, para que el tiempo de respuesta no delate si el email pertenece
+ * a una cuenta existente y verificada, ni si tenía un código vivo.
  */
 export async function reenviarCodigo(req, res, next) {
   try {
     const emailBruto = req.body?.email;
     const emailValido = typeof emailBruto === "string" && emailBruto.length <= LARGO_MAX_EMAIL;
     const email = emailValido ? normalizarEmail(emailBruto) : "";
-    const cuenta = email ? await prisma.cuentaCliente.findUnique({ where: { email } }) : null;
 
     res.json({ mensaje: MENSAJE_REENVIO_CODIGO });
 
-    if (cuenta && cuenta.emailVerificado) {
-      procesarReenvioCodigo(cuenta).catch((err) => {
-        logError({ mensaje: `No se pudo procesar el reenvío de código de la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
-      });
-    }
+    if (!email) return;
+    procesarReenvioCodigo(email).catch((err) => {
+      logError({ mensaje: `No se pudo procesar el reenvío de código de ${email}`, stack: err.stack, causa: err });
+    });
   } catch (err) {
     next(err);
   }

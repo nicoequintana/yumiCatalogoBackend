@@ -10,11 +10,13 @@ const createDispMock = vi.fn();
 const consumirCodigoMock = vi.fn();
 const emitirCodigoMock = vi.fn();
 const enviarCodigoMock = vi.fn();
+const tokenUpdateManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     cuentaCliente: { findUnique: (...a) => findUniqueMock(...a) },
     dispositivoConocido: { create: (...a) => createDispMock(...a) },
+    tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a) },
   },
 }));
 vi.mock("../lib/tokensCuenta.js", async (importOriginal) => {
@@ -48,7 +50,16 @@ beforeEach(() => {
   // valor resuelto devuelve `undefined`, que no tiene `.catch` y rompe el
   // handler ANTES de responder.
   enviarCodigoMock.mockReset().mockResolvedValue(undefined);
+  tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 1 });
 });
+
+/**
+ * El trabajo de fondo de `reenviarCodigo` corre después de `res.json` y sus
+ * mocks resuelven enseguida: un `setImmediate` corre recién cuando se vació
+ * toda la cadena de microtareas del handler. Es la señal determinista de "el
+ * fondo terminó" para afirmar que algo NO se llamó — sin sleeps por reloj.
+ */
+const vaciarFondo = () => new Promise((resolver) => setImmediate(resolver));
 
 describe("loginConCodigo", () => {
   it("codigo correcto: cookie de sesion Y de dispositivo, 200 ok", async () => {
@@ -100,18 +111,43 @@ describe("loginConCodigo", () => {
 });
 
 describe("reenviarCodigo", () => {
-  it("cuenta existente y verificada: invalida el anterior (via emitirCodigoAcceso) y manda mail, 200 generico", async () => {
+  it("cuenta verificada con un codigo VIVO: lo invalida con la condicion en el where y recien ahi emite y manda, 200 generico", async () => {
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(emitirCodigoMock).toHaveBeenCalledWith(1));
     await vi.waitFor(() => expect(enviarCodigoMock).toHaveBeenCalledTimes(1));
+    const { where, data } = tokenUpdateManyMock.mock.calls[0][0];
+    expect(where).toMatchObject({ cuentaClienteId: 1, tipo: "CODIGO_ACCESO", usadoEn: null });
+    expect(where.expiraEn.gt).toBeInstanceOf(Date);
+    expect(data.usadoEn).toBeInstanceOf(Date);
+    expect(tokenUpdateManyMock.mock.invocationCallOrder[0]).toBeLessThan(emitirCodigoMock.mock.invocationCallOrder[0]);
+  });
+
+  it("cuenta verificada SIN codigo vivo: MISMO 200 y no emite ni manda — el reenvio no es un login sin contraseña", async () => {
+    tokenUpdateManyMock.mockResolvedValue({ count: 0 });
+    const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ mensaje: "Si corresponde, te mandamos un código nuevo." });
+    await vi.waitFor(() => expect(tokenUpdateManyMock).toHaveBeenCalled());
+    await vaciarFondo();
+    expect(emitirCodigoMock).not.toHaveBeenCalled();
+    expect(enviarCodigoMock).not.toHaveBeenCalled();
+  });
+
+  it("la respuesta NO espera a la base (Amenaza 16): con un findUnique colgado igual responde", async () => {
+    findUniqueMock.mockReturnValue(new Promise(() => {}));
+    const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ mensaje: "Si corresponde, te mandamos un código nuevo." });
   });
 
   it("cuenta inexistente: MISMO 200, sin mandar nada", async () => {
     findUniqueMock.mockResolvedValue(null);
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "no@gmail.com" });
     expect(res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
+    await vaciarFondo();
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
     expect(emitirCodigoMock).not.toHaveBeenCalled();
     expect(enviarCodigoMock).not.toHaveBeenCalled();
   });
@@ -122,7 +158,9 @@ describe("reenviarCodigo", () => {
     findUniqueMock.mockResolvedValue({ ...CUENTA, emailVerificado: false });
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email: "x@gmail.com" });
     expect(res.status).toBe(200);
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
+    await vaciarFondo();
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
     expect(emitirCodigoMock).not.toHaveBeenCalled();
     expect(enviarCodigoMock).not.toHaveBeenCalled();
   });
@@ -133,6 +171,9 @@ describe("reenviarCodigo", () => {
   ])("%s: 200 sin tocar la base", async (_caso, email) => {
     const res = await request(buildApp()).post("/codigo/reenviar").send({ email });
     expect(res.status).toBe(200);
+    // La consulta corre después de responder: sin vaciar el fondo, este
+    // `not.toHaveBeenCalled` pasaría aunque el handler sí consultara.
+    await vaciarFondo();
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
