@@ -63,9 +63,9 @@ describe("motivoPasswordRechazada", () => {
   });
 
   it("rechaza las contrasenas mas usadas, sin importar mayusculas", () => {
-    expect(motivoPasswordRechazada("12345678", contexto)).toMatch(/muy comun/);
-    expect(motivoPasswordRechazada("Password1", contexto)).toMatch(/muy comun/);
-    expect(motivoPasswordRechazada("CONTRASEÑA", contexto)).toMatch(/muy comun/);
+    expect(motivoPasswordRechazada("12345678", contexto)).toMatch(/muy común/);
+    expect(motivoPasswordRechazada("Password1", contexto)).toMatch(/muy común/);
+    expect(motivoPasswordRechazada("CONTRASEÑA", contexto)).toMatch(/muy común/);
   });
 
   it("rechaza una clave que contenga el usuario del email o el DNI", () => {

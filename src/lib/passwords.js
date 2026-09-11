@@ -29,6 +29,14 @@ export const LARGO_MAX_PASSWORD = 128;
 /**
  * Hash real de un valor aleatorio, con el costo vigente, para comparar contra
  * él cuando la cuenta no existe: así el login tarda lo mismo exista o no.
+ *
+ * Ventana transitoria y auto-sanable: los admins existentes tienen hashes al
+ * costo VIEJO (10) hasta que cada uno entra una vez y `rehashSiHaceFalta`
+ * (auth.controller.js) los sube al vigente (11). Hasta entonces, un login con
+ * un email INEXISTENTE compara contra este señuelo a costo 11 — casi el
+ * doble de CPU que comparar contra el hash real (costo 10) de un admin que
+ * todavía no re-logueó. Se corrige solo con cada login real; no hace falta
+ * ninguna acción.
  */
 export const HASH_SENUELO = bcrypt.hashSync(randomBytes(32).toString("hex"), COSTO_BCRYPT);
 
@@ -83,7 +91,7 @@ export function motivoPasswordRechazada(password, contexto = {}) {
   }
   const enMinusculas = password.toLowerCase();
   if (PASSWORDS_COMUNES.has(enMinusculas)) {
-    return "Esa contraseña es muy comun. Elegí otra.";
+    return "Esa contraseña es muy común. Elegí otra.";
   }
   for (const { valor, nombre } of fragmentosIdentidad(contexto)) {
     if (enMinusculas.includes(valor)) {
