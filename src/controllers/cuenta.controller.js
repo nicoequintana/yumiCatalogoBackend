@@ -582,6 +582,69 @@ export async function obtenerPerfil(req, res, next) {
  * mismo criterio que `registro`). Mismas reglas de campo que `registro`
  * (obligatorio no vacío, tope `LARGO_MAX_TEXTO`, DNI normalizado y validado).
  */
+/**
+ * Cambio de contraseña autenticado (spec "Contraseña — `PUT /cuenta/password`"):
+ * exige la actual y reemite la cookie de sesión con el `tokenVersion` NUEVO
+ * — si no, esta MISMA sesión quedaría auto-expulsada por el incremento que
+ * ella misma provoca (`tokenVersion` es lo que "cerrar en todos los
+ * dispositivos" revoca, ver `salir`).
+ *
+ * El slot de bcrypt cubre la lectura que decide y los DOS bcrypt (comparar
+ * la actual + hashear la nueva) en un mismo slot: mismo criterio que
+ * `login`, se reserva antes de la primera consulta a la base
+ * (`colaBcrypt.js`) y se libera apenas terminan, ANTES de la escritura.
+ *
+ * Una cuenta de Google sin contraseña (`passwordHash` null) compara igual
+ * contra el señuelo y responde el mismo 401 que una actual equivocada: no
+ * hay un mensaje aparte que delate "esta cuenta no tiene contraseña".
+ *
+ * La escritura lleva el `tokenVersion` leído en el WHERE, no en un `if` que
+ * lee y decide (mismo criterio que `stockDescontado`): si cambió entre el
+ * `findUnique` y acá — otra sesión cerró la cuenta, otro cambio de clave
+ * concurrente —, esta escritura no pisa nada; cuenta 0 y se avisa en vez de
+ * reemitir una cookie que ya no coincide con lo que quedó en la base.
+ */
+export async function cambiarPassword(req, res, next) {
+  try {
+    const { actual, nueva } = req.body ?? {};
+    // `typeof === "string"` ANTES de bcrypt y de reservar el slot: mismo
+    // guard que el resto del archivo, ninguno de los dos puede llegar a
+    // `compararPassword`/`hashearPassword` sin ser realmente texto.
+    if (typeof actual !== "string" || typeof nueva !== "string") {
+      throw httpError(400, "Faltan datos.");
+    }
+
+    const liberarSlot = await reservarSlot();
+    let cuenta;
+    let passwordHash;
+    try {
+      cuenta = await prisma.cuentaCliente.findUnique({ where: { id: req.cuentaCliente.id } });
+      if (!cuenta) throw httpError(404, "Cuenta no encontrada.");
+
+      const ok = await compararPassword(actual, cuenta.passwordHash ?? HASH_SENUELO);
+      if (!cuenta.passwordHash || !ok) throw httpError(401, "La contraseña actual no es correcta.");
+
+      const motivo = motivoPasswordRechazada(nueva, { email: cuenta.email, dni: cuenta.dni });
+      if (motivo) throw httpError(400, motivo);
+
+      passwordHash = await hashearPassword(nueva);
+    } finally {
+      liberarSlot();
+    }
+
+    const { count } = await prisma.cuentaCliente.updateMany({
+      where: { id: cuenta.id, tokenVersion: cuenta.tokenVersion },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
+    });
+    if (count === 0) throw httpError(409, "Tu sesión cambió mientras tanto. Volvé a intentar.");
+
+    setCookieSesion(res, firmarSesionCliente({ id: cuenta.id, email: cuenta.email, tokenVersion: cuenta.tokenVersion + 1 }));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function actualizarPerfil(req, res, next) {
   try {
     const data = {};
