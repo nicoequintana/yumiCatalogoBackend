@@ -10,6 +10,8 @@ const txMock = vi.fn();
 const txCuentaUpdateMock = vi.fn();
 const txTokenUpdateManyMock = vi.fn();
 const txIdentidadDeleteManyMock = vi.fn();
+const txDispositivoDeleteManyMock = vi.fn();
+const txCuentaDeleteManyMock = vi.fn();
 const auditCreateMock = vi.fn();
 const usuarioFindUniqueMock = vi.fn();
 const emitirTokenMock = vi.fn();
@@ -62,11 +64,14 @@ function mockTx({ updateRechaza } = {}) {
   else txCuentaUpdateMock.mockImplementation(async ({ data }) => ({ ...CUENTA, ...data, tokenVersion: 1 }));
   txTokenUpdateManyMock.mockResolvedValue({ count: 0 });
   txIdentidadDeleteManyMock.mockResolvedValue({ count: 0 });
+  txDispositivoDeleteManyMock.mockResolvedValue({ count: 0 });
+  txCuentaDeleteManyMock.mockResolvedValue({ count: 0 });
   txMock.mockImplementation(async (fn) =>
     fn({
-      cuentaCliente: { update: txCuentaUpdateMock },
+      cuentaCliente: { update: txCuentaUpdateMock, deleteMany: txCuentaDeleteManyMock },
       tokenCuenta: { updateMany: txTokenUpdateManyMock },
       identidadGoogle: { deleteMany: txIdentidadDeleteManyMock },
+      dispositivoConocido: { deleteMany: txDispositivoDeleteManyMock },
     }),
   );
 }
@@ -74,6 +79,7 @@ function mockTx({ updateRechaza } = {}) {
 beforeEach(() => {
   [
     findUniqueMock, txMock, txCuentaUpdateMock, txTokenUpdateManyMock, txIdentidadDeleteManyMock,
+    txDispositivoDeleteManyMock, txCuentaDeleteManyMock,
     auditCreateMock, usuarioFindUniqueMock, emitirTokenMock, enviarVerificacionMock,
   ].forEach((m) => m.mockReset());
   auditCreateMock.mockResolvedValue({});
@@ -89,10 +95,38 @@ describe("reasignarEmail (admin, camino operado)", () => {
     mockTx();
     const res = await put(buildApp(), 1, { emailNuevo: "  Nuevo@Gmail.com " });
     expect(res.status).toBe(200);
-    expect(txCuentaUpdateMock).toHaveBeenCalledWith({
-      where: { id: 1 },
-      data: { email: "nuevo@gmail.com", emailVerificado: false, tokenVersion: { increment: 1 } },
+    const { where, data } = txCuentaUpdateMock.mock.calls[0][0];
+    expect(where).toEqual({ id: 1 });
+    expect(data).toMatchObject({ email: "nuevo@gmail.com", emailVerificado: false, tokenVersion: { increment: 1 } });
+    // `verificadaEn` intacto: "olvidé mi contraseña" sigue funcionando pasadas las 24 h.
+    expect(data).not.toHaveProperty("verificadaEn");
+  });
+
+  it("la clave vieja y los dispositivos viejos NO sobreviven: passwordHash null, contador a cero y DispositivoConocido borrados, en la MISMA transaccion", async () => {
+    findUniqueMock.mockResolvedValue({ ...CUENTA, passwordHash: "$2b$12$vieja", intentosFallidos: 4 });
+    mockTx();
+    const res = await put(buildApp(), 1, { emailNuevo: "nuevo@gmail.com" });
+    expect(res.status).toBe(200);
+    // Con passwordHash null el login compara contra el señuelo: la clave vieja da 401.
+    expect(txCuentaUpdateMock.mock.calls[0][0].data).toMatchObject({ passwordHash: null, intentosFallidos: 0, bloqueadoHasta: null });
+    expect(txDispositivoDeleteManyMock).toHaveBeenCalledWith({ where: { cuentaClienteId: 1 } });
+  });
+
+  it("una fila nunca verificada, vencida y sin pedidos que tiene el email nuevo se purga ANTES de escribir (no da 409 por una cuenta muerta)", async () => {
+    findUniqueMock.mockResolvedValue(CUENTA);
+    mockTx();
+    const res = await put(buildApp(), 1, { emailNuevo: "nuevo@gmail.com" });
+    expect(res.status).toBe(200);
+    expect(txCuentaDeleteManyMock).toHaveBeenCalledWith({
+      where: {
+        email: "nuevo@gmail.com",
+        emailVerificado: false,
+        verificadaEn: null,
+        createdAt: { lt: expect.any(Date) },
+        ordenes: { none: {} },
+      },
     });
+    expect(txCuentaDeleteManyMock.mock.invocationCallOrder[0]).toBeLessThan(txCuentaUpdateMock.mock.invocationCallOrder[0]);
   });
 
   it("emite la verificación con enviarVerificacion(cuenta) de 1 argumento, a la dirección NUEVA, sin emitir token propio (ruling E)", async () => {
