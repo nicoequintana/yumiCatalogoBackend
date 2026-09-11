@@ -620,6 +620,119 @@ model Cliente {
   updatedAt DateTime @updatedAt
 }
 
+/// Identidad de la CUENTA. Distinta de `Cliente`, que es la identidad COMERCIAL
+/// (DNI, órdenes, analytics): una persona puede tener dos cuentas y un solo
+/// Cliente. No se le agregan columnas de autenticación a `Cliente` porque
+/// registrarse declarando un DNI existente caería en su misma fila y vería sus
+/// órdenes — lo que la decisión 3 de la spec evita por la FORMA del dato.
+model CuentaCliente {
+  id               Int      @id @default(autoincrement())
+  email            String   @unique
+  /// NULL cuando nació por Google. Lo adquiere con "olvidé mi contraseña".
+  passwordHash     String?
+  /// GOOGLE | LOCAL. Lista cerrada en `src/lib/cuentasCliente.js`.
+  origenRegistro   String   @db.VarChar(20)
+  /// Una cuenta local no verificada NO puede iniciar sesión y se purga a las
+  /// 24 h. Google nace verificada.
+  emailVerificado  Boolean  @default(false)
+  /// Revocación de sesión, mismo mecanismo que `Usuario.tokenVersion`.
+  tokenVersion     Int      @default(0)
+  /// Bloqueo por cuenta persistido: sobrevive reinicios del contenedor.
+  intentosFallidos Int      @default(0)
+  bloqueadoHasta   DateTime?
+
+  /// Los tres NULLABLE: una cuenta de Google existe antes de tenerlos.
+  nombre           String?
+  telefono         String?
+  /// SIN @unique: con unicidad, cualquiera se registra declarando un DNI ajeno
+  /// y la persona real no puede registrarse nunca más.
+  dni              String?  @db.VarChar(8)
+
+  identidadGoogle    IdentidadGoogle?
+  ordenes            Orden[]
+  tokens             TokenCuenta[]
+  clavesIdempotencia ClaveIdempotencia[]
+  dispositivos       DispositivoConocido[]
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([dni])
+  @@index([emailVerificado, createdAt])
+}
+
+/// Decisión 9 de la spec: los hechos escasos van en su propia tabla, nunca en
+/// columnas nullable con @unique. Prisma sobre SQL Server emite un UNIQUE
+/// pelado, y SQL Server admite UNA sola fila NULL por UNIQUE: un
+/// `googleSub String? @unique` habría fallado en el SEGUNDO registro local.
+/// Acá una fila existe solo cuando hay identidad de Google y todo es NOT NULL.
+model IdentidadGoogle {
+  cuentaClienteId Int           @unique
+  cuenta          CuentaCliente @relation(fields: [cuentaClienteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  /// El `sub` del ID token. Inmutable del lado de Google. NUNCA se pisa.
+  sub             String        @unique
+  createdAt       DateTime      @default(now())
+}
+
+/// Decisión 9, mismo patrón. Idempotencia del checkout con scope por cuenta:
+/// la clave la genera el cliente y nada obliga a que sea un UUID, así que un
+/// @unique global dejaría que la cuenta B mande "1" y reciba la orden de A.
+model ClaveIdempotencia {
+  cuentaClienteId Int
+  cuenta          CuentaCliente @relation(fields: [cuentaClienteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clave           String        @db.VarChar(64)
+  ordenId         Int           @unique
+  orden           Orden         @relation(fields: [ordenId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdAt       DateTime      @default(now())
+
+  @@unique([cuentaClienteId, clave])
+}
+
+/// Un navegador donde esta cuenta ya probó posesión del buzón (por código, por
+/// link de verificación o por reseteo). NO es una sesión: sigue haciendo falta
+/// la contraseña. Ahorra el segundo mail.
+model DispositivoConocido {
+  id              Int           @id @default(autoincrement())
+  cuentaClienteId Int
+  cuenta          CuentaCliente @relation(fields: [cuentaClienteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  /// SHA-256 del token que vive en la cookie `dispositivo_cliente`.
+  tokenHash       String        @unique @db.VarChar(64)
+  expiraEn        DateTime
+  createdAt       DateTime      @default(now())
+
+  @@index([cuentaClienteId])
+  @@index([expiraEn])
+}
+
+/// Tokens de un solo uso. UNA tabla para cuatro tipos porque el ciclo de vida
+/// es idéntico. ⚠️ El `tipo` va SIEMPRE en la condición de consumo
+/// (`src/lib/tokensCuenta.js`): sin eso, un VERIFICACION de 24 h que viaja en
+/// cada mail de pedido sirve como RESET de 1 h.
+model TokenCuenta {
+  id              Int      @id @default(autoincrement())
+  cuentaClienteId Int
+  cuenta          CuentaCliente @relation(fields: [cuentaClienteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  /// VERIFICACION | RESET | CAMBIO_EMAIL | CODIGO_ACCESO
+  tipo            String   @db.VarChar(20)
+  /// SHA-256 del token en claro, nunca el token: quien lea la base no puede
+  /// verificar cuentas ajenas ni resetear contraseñas. Para CODIGO_ACCESO es
+  /// sha256(`${cuentaClienteId}:${codigo}`) — seis dígitos colisionan entre
+  /// cuentas y esta columna es @unique.
+  tokenHash       String   @unique @db.VarChar(64)
+  /// Solo CAMBIO_EMAIL: la dirección nueva, todavía no aplicada.
+  emailNuevo      String?
+  /// Solo CODIGO_ACCESO: intentos consumidos.
+  intentos        Int      @default(0)
+  expiraEn        DateTime
+  /// NULL = sin usar. No se borra al consumir: un segundo click tiene que
+  /// distinguirse de un token inventado para dar el mensaje correcto.
+  usadoEn         DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([cuentaClienteId, tipo])
+  @@index([expiraEn])
+}
+
 model Orden {
   id        Int         @id @default(autoincrement())
   clienteId Int
@@ -644,6 +757,13 @@ model Orden {
   items     ItemOrden[]
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
+  /// NULL en las órdenes de invitado. Esa nulidad ES la garantía de la
+  /// decisión 3: "Mis pedidos" filtra por este campo, así que el historial
+  /// previo a la cuenta es invisible para cualquier cuenta.
+  cuentaClienteId   Int?
+  cuentaCliente     CuentaCliente?     @relation(fields: [cuentaClienteId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  claveIdempotencia ClaveIdempotencia?
 
   @@index([clienteId])
   @@index([estado, createdAt])
