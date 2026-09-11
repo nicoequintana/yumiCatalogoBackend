@@ -13,13 +13,13 @@ datasource db {
 }
 
 model Product {
-  id                 Int              @id @default(autoincrement())
+  id                 Int                @id @default(autoincrement())
   nombre             String
-  descripcion        String           @db.NVarChar(Max)
+  descripcion        String             @db.NVarChar(Max)
   // Entero, sin centavos: el catálogo no cotiza en fracciones de peso. La
   // escala 0 es lo que hace que `precio.toString()` salga `"45000"` y no
   // `"45000.00"`, de ahí que el JSON-LD y los mappers no necesiten formatear.
-  precio             Decimal          @db.Decimal(10, 0)
+  precio             Decimal            @db.Decimal(10, 0)
   /// Costo de adquisición y multiplicador con el que se calcula el precio de
   /// venta: `precio = redondearAEntero(costo × coeficiente)`. La cuenta
   /// vive en `src/lib/precios.js`.
@@ -32,12 +32,12 @@ model Product {
   ///
   /// `precio` NO se deriva de estos dos: se escribe cuando el admin aplica el
   /// cálculo desde el panel. Cambiar el costo no mueve el precio publicado.
-  costo              Decimal?         @db.Decimal(10, 0)
+  costo              Decimal?           @db.Decimal(10, 0)
   /// MULTIPLICADOR, no porcentaje: 2,05 significa "×2,05" (un aumento del
   /// 105 %). Es el único número con decimales del sistema, a propósito — bajo
   /// la regla de enteros que gobierna la plata no se podría representar, y
   /// forzarlo a entero perdería la mitad del rango útil.
-  coeficiente        Decimal?         @db.Decimal(5, 2)
+  coeficiente        Decimal?           @db.Decimal(5, 2)
   etiquetaId         Int?
   /// `onUpdate: NoAction` va EXPLÍCITO, a diferencia de `categoriaId`, que lo
   /// deja implícito y por eso su FK quedó en `ON UPDATE CASCADE`. Acá la
@@ -46,20 +46,20 @@ model Product {
   /// fantasma. En la práctica las dos reglas se comportan igual —`Etiqueta.id`
   /// es IDENTITY y nunca se actualiza—, así que lo que se corrige es la
   /// divergencia, no el comportamiento.
-  etiqueta           Etiqueta?        @relation(fields: [etiquetaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  etiqueta           Etiqueta?          @relation(fields: [etiquetaId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   fraseComercial     String?
-  porQueLoVasAQuerer String?          @db.NVarChar(Max)
-  tePasaEsto         String?          @db.NVarChar(Max)
-  sku                String           @unique
-  visibleEnCatalogo  Boolean          @default(false)
-  stock              Int              @default(0)
-  destacado          Boolean          @default(false)
+  porQueLoVasAQuerer String?            @db.NVarChar(Max)
+  tePasaEsto         String?            @db.NVarChar(Max)
+  sku                String             @unique
+  visibleEnCatalogo  Boolean            @default(false)
+  stock              Int                @default(0)
+  destacado          Boolean            @default(false)
   driveFolderId      String?
   categoriaId        Int?
-  categoria          Categoria?       @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
-  vistas             Int              @default(0)
-  compartidos        Int              @default(0)
-  favoritosCount     Int              @default(0)
+  categoria          Categoria?         @relation(fields: [categoriaId], references: [id], onDelete: NoAction)
+  vistas             Int                @default(0)
+  compartidos        Int                @default(0)
+  favoritosCount     Int                @default(0)
   caracteristicas    Caracteristica[]
   listas             ProductoLista[]
   especificaciones   Especificacion[]
@@ -72,8 +72,8 @@ model Product {
   /// En qué vitrinas de campaña aparece. NO implica descuento: un producto
   /// puede estar en la vitrina de Navidad a precio de lista.
   campanias          CampaniaProducto[]
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   // Sostiene la consulta del listado público: filtra por `visibleEnCatalogo` y
   // ordena por `createdAt` (el default `recientes`). Antes el segundo campo era
@@ -282,8 +282,8 @@ model Campania {
   /// Dónde se aplica el Doodle. Son dos flags y no uno porque el catálogo y el
   /// panel son públicos distintos: se puede querer la marca festiva de cara al
   /// cliente sin cambiarle el logo a quien está laburando en el admin.
-  doodleEnCatalogo Boolean @default(true)
-  doodleEnAdmin    Boolean @default(false)
+  doodleEnCatalogo             Boolean @default(true)
+  doodleEnAdmin                Boolean @default(false)
 
   /// Las promociones que esta campaña aplica mientras está activa. Apagar la
   /// campaña las apaga a todas de una.
@@ -293,15 +293,15 @@ model Campania {
   /// SEPARADA de las promociones porque son dos preguntas distintas —"qué
   /// muestro" y "qué descuento"— y Navidad necesita la primera sin la segunda:
   /// los productos navideños se exhiben tengan o no rebaja.
-  productos   CampaniaProducto[]
+  productos CampaniaProducto[]
 
   /// Modal estacional del catálogo público. `modalActivo` es el interruptor:
   /// una campaña puede estar activa por su Doodle y no querer interrumpir a
   /// nadie con un cartel.
-  modalActivo     Boolean @default(false)
-  modalTitulo     String? @db.NVarChar(120)
-  modalTexto      String? @db.NVarChar(1000)
-  modalCtaTexto   String? @db.NVarChar(60)
+  modalActivo          Boolean   @default(false)
+  modalTitulo          String?   @db.NVarChar(120)
+  modalTexto           String?   @db.NVarChar(1000)
+  modalCtaTexto        String?   @db.NVarChar(60)
   /// A dónde lleva el botón: la INTENCIÓN, no la ruta.
   ///
   /// CAMPANIA | CATALOGO | CATEGORIA | PRODUCTO — la lista ejecutable vive en
@@ -313,7 +313,7 @@ model Campania {
   /// aceptaba querystrings que ninguna pantalla lee. La ruta ahora la ARMA el
   /// backend al leer (`resolverDestinoCta`), así que siempre apunta a algo que
   /// existe hoy.
-  modalCtaTipo String? @db.VarChar(20)
+  modalCtaTipo         String?   @db.VarChar(20)
   /// A QUÉ categoría o producto apunta el botón, según `modalCtaTipo`. Sólo
   /// tiene sentido con CATEGORIA y PRODUCTO; con los otros tipos se fuerza a
   /// `null`.
@@ -334,7 +334,7 @@ model Campania {
   /// Es SEPARADO de `hasta` a propósito: la campaña de Navidad corre del 25/11
   /// al 25/12 pero puede contar hacia el 25/12, y la de Primavera termina el 21
   /// contando hacia el 21. Que a veces coincidan no los vuelve el mismo dato.
-  modalFechaObjetivo DateTime?
+  modalFechaObjetivo   DateTime?
 
   /// Banner de la home: la franja que queda DESPUÉS de que el visitante cierra
   /// el cartel. Es una superficie propia y no un reflejo del modal — una
@@ -414,7 +414,7 @@ model Promocion {
   bannerCtaTexto String? @db.NVarChar(60)
   /// Lista cerrada de cinco valores en `lib/campanias.js`. Nullable y SIN
   /// default en la base a propósito: el default vive en un solo lado.
-  bannerColor String? @db.VarChar(20)
+  bannerColor    String? @db.VarChar(20)
 
   /// El arte apaisado del slide. Mismo trío que el Doodle y que la imagen de
   /// `Categoria`. Sin arte, el slide cae al molde compuesto sobre `bannerColor`.
@@ -530,9 +530,9 @@ model CampaniaProducto {
 }
 
 model Usuario {
-  id           Int      @id @default(autoincrement())
-  email        String   @unique
-  passwordHash String
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  passwordHash  String
   /// Versión de sesión del usuario. Se incrementa al cambiar la contraseña
   /// para invalidar TODOS los JWT emitidos antes del cambio: el login copia
   /// este número como claim `tokenVersion` en el token, y `requireAuth`
@@ -544,7 +544,7 @@ model Usuario {
   /// Dockerfile corre al arrancar. Un token viejo emitido antes de esta feature
   /// no trae el claim y por eso NO coincide con este 0 — queda revocado, que es
   /// el comportamiento fail-closed buscado.
-  tokenVersion Int      @default(0)
+  tokenVersion  Int      @default(0)
   /// ¿Este admin puede ejecutar acciones destructivas (borrar productos,
   /// categorías, anuncios y otros usuarios)?
   ///
@@ -563,8 +563,8 @@ model Usuario {
   /// Se lee de la BASE en cada request (misma consulta que ya verifica
   /// `tokenVersion`), nunca del JWT: quitarle el permiso a alguien surte efecto
   /// en la request siguiente, no cuando expire su token 24 horas después.
-  puedeEliminar Boolean @default(true)
-  createdAt    DateTime @default(now())
+  puedeEliminar Boolean  @default(true)
+  createdAt     DateTime @default(now())
 }
 
 model EventoTrafico {
@@ -626,27 +626,27 @@ model Cliente {
 /// registrarse declarando un DNI existente caería en su misma fila y vería sus
 /// órdenes — lo que la decisión 3 de la spec evita por la FORMA del dato.
 model CuentaCliente {
-  id               Int      @id @default(autoincrement())
-  email            String   @unique
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
   /// NULL cuando nació por Google. Lo adquiere con "olvidé mi contraseña".
   passwordHash     String?
   /// GOOGLE | LOCAL. Lista cerrada en `src/lib/cuentasCliente.js`.
-  origenRegistro   String   @db.VarChar(20)
+  origenRegistro   String    @db.VarChar(20)
   /// Una cuenta local no verificada NO puede iniciar sesión y se purga a las
   /// 24 h. Google nace verificada.
-  emailVerificado  Boolean  @default(false)
+  emailVerificado  Boolean   @default(false)
   /// Revocación de sesión, mismo mecanismo que `Usuario.tokenVersion`.
-  tokenVersion     Int      @default(0)
+  tokenVersion     Int       @default(0)
   /// Bloqueo por cuenta persistido: sobrevive reinicios del contenedor.
-  intentosFallidos Int      @default(0)
+  intentosFallidos Int       @default(0)
   bloqueadoHasta   DateTime?
 
   /// Los tres NULLABLE: una cuenta de Google existe antes de tenerlos.
-  nombre           String?
-  telefono         String?
+  nombre   String?
+  telefono String?
   /// SIN @unique: con unicidad, cualquiera se registra declarando un DNI ajeno
   /// y la persona real no puede registrarse nunca más.
-  dni              String?  @db.VarChar(8)
+  dni      String? @db.VarChar(8)
 
   identidadGoogle    IdentidadGoogle?
   ordenes            Orden[]
@@ -654,8 +654,8 @@ model CuentaCliente {
   clavesIdempotencia ClaveIdempotencia[]
   dispositivos       DispositivoConocido[]
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([dni])
   @@index([emailVerificado, createdAt])
@@ -709,38 +709,38 @@ model DispositivoConocido {
 /// (`src/lib/tokensCuenta.js`): sin eso, un VERIFICACION de 24 h que viaja en
 /// cada mail de pedido sirve como RESET de 1 h.
 model TokenCuenta {
-  id              Int      @id @default(autoincrement())
+  id              Int           @id @default(autoincrement())
   cuentaClienteId Int
   cuenta          CuentaCliente @relation(fields: [cuentaClienteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   /// VERIFICACION | RESET | CAMBIO_EMAIL | CODIGO_ACCESO
-  tipo            String   @db.VarChar(20)
+  tipo            String        @db.VarChar(20)
   /// SHA-256 del token en claro, nunca el token: quien lea la base no puede
   /// verificar cuentas ajenas ni resetear contraseñas. Para CODIGO_ACCESO es
   /// sha256(`${cuentaClienteId}:${codigo}`) — seis dígitos colisionan entre
   /// cuentas y esta columna es @unique.
-  tokenHash       String   @unique @db.VarChar(64)
+  tokenHash       String        @unique @db.VarChar(64)
   /// Solo CAMBIO_EMAIL: la dirección nueva, todavía no aplicada.
   emailNuevo      String?
   /// Solo CODIGO_ACCESO: intentos consumidos.
-  intentos        Int      @default(0)
+  intentos        Int           @default(0)
   expiraEn        DateTime
   /// NULL = sin usar. No se borra al consumir: un segundo click tiene que
   /// distinguirse de un token inventado para dar el mensaje correcto.
   usadoEn         DateTime?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime      @default(now())
 
   @@index([cuentaClienteId, tipo])
   @@index([expiraEn])
 }
 
 model Orden {
-  id        Int         @id @default(autoincrement())
-  clienteId Int
-  cliente   Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
+  id              Int         @id @default(autoincrement())
+  clienteId       Int
+  cliente         Cliente     @relation(fields: [clienteId], references: [id], onDelete: NoAction)
   // valores: PENDIENTE | EN_PREPARACION | ENTREGADA | CANCELADA
   // No es un enum porque SQL Server vía Prisma no los soporta: quien valida
   // de verdad es src/lib/estadosOrden.js, que es la única copia ejecutable.
-  estado    String      @default("PENDIENTE") @db.VarChar(20)
+  estado          String      @default("PENDIENTE") @db.VarChar(20)
   // ¿Esta orden tiene stock TOMADO ahora mismo?
   //
   // No se deduce del estado a propósito: la re-confirmación está fuera de
@@ -752,11 +752,11 @@ model Orden {
   // Lo enciende la escritura guardada que descuenta al confirmar y lo apaga la
   // que libera al cancelar; ese par de escrituras es lo que hace que el
   // descuento y la devolución ocurran exactamente una vez cada uno.
-  stockDescontado Boolean @default(false)
-  notas     String?     @db.NVarChar(Max)
-  items     ItemOrden[]
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  stockDescontado Boolean     @default(false)
+  notas           String?     @db.NVarChar(Max)
+  items           ItemOrden[]
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   /// NULL en las órdenes de invitado. Esa nulidad ES la garantía de la
   /// decisión 3: "Mis pedidos" filtra por este campo, así que el historial
@@ -768,12 +768,15 @@ model Orden {
   @@index([clienteId])
   @@index([estado, createdAt])
   @@index([createdAt])
+  // "Mis pedidos" filtra por esta columna (ver el comentario de arriba); sin
+  // índice, ese filtro hace un table scan que crece con cada orden histórica.
+  @@index([cuentaClienteId])
 }
 
 model ItemOrden {
-  id             Int     @id @default(autoincrement())
-  ordenId        Int
-  orden          Orden   @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  id                  Int      @id @default(autoincrement())
+  ordenId             Int
+  orden               Orden    @relation(fields: [ordenId], references: [id], onDelete: Cascade)
   // Nullable con SetNull: borrar un producto DESLIGA sus líneas históricas en
   // vez de quedar bloqueado por ellas. Era `NoAction`, y eso hacía imborrable
   // a cualquier producto que apareciera en una orden — incluidas las
@@ -785,10 +788,10 @@ model ItemOrden {
   // así que el ranking de `admin.controller.js` no puede agrupar por
   // `productId` a secas — con varios borrados, todos caerían en la clave null
   // y sumarían su facturación en una sola fila.
-  productId      Int?
-  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  nombreProducto String // snapshot, no se recalcula
-  precioUnitario Decimal @db.Decimal(10, 0) // snapshot entero, no se recalcula
+  productId           Int?
+  product             Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  nombreProducto      String // snapshot, no se recalcula
+  precioUnitario      Decimal  @db.Decimal(10, 0) // snapshot entero, no se recalcula
   /// Lo que el producto valía SIN promoción, y el porcentaje que se aplicó.
   ///
   /// `precioUnitario` guarda lo que el cliente PAGÓ —el promocional, si había
@@ -815,8 +818,8 @@ model ItemOrden {
   //
   // No se puede rellenar hacia atrás: el costo vigente en el momento de una
   // venta vieja no quedó registrado en ninguna parte.
-  costoUnitario  Decimal? @db.Decimal(10, 0)
-  cantidad       Int
+  costoUnitario       Decimal? @db.Decimal(10, 0)
+  cantidad            Int
 
   @@index([ordenId])
   @@index([productId])
