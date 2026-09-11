@@ -19,14 +19,27 @@ const JWT_EXPIRES_IN = "24h";
  * clave a nadie: cada admin lo hace solo la próxima vez que entra. Corre
  * DESPUÉS de responder y nunca lanza — un fallo acá no puede convertir un
  * login válido en un error.
+ *
+ * `liberarSlot` se le ENTREGA a esta función, no se libera antes de llamarla:
+ * el rehash es una segunda operación de bcrypt (`hashearPassword`), y
+ * liberar el slot antes dejaría correr ese segundo hash SIN estar contado
+ * contra la concurrencia de `colaBcrypt.js` — la cola pensada para acotar
+ * exactamente ese costo de CPU. `liberarSlot` recién se llama cuando el
+ * rehash TERMINA (éxito o error), en el `.finally` de la promesa.
+ *
+ * @returns {boolean} `true` si se hizo cargo del slot (el llamador NO debe
+ *   liberarlo); `false` si no hacía falta rehash y el slot sigue siendo
+ *   responsabilidad del llamador.
  */
-function rehashSiHaceFalta({ id, passwordHash }, password) {
-  if (!necesitaRehash(passwordHash)) return;
+function rehashSiHaceFalta({ id, passwordHash }, password, liberarSlot) {
+  if (!necesitaRehash(passwordHash)) return false;
   hashearPassword(password)
     .then((nuevo) => prisma.usuario.update({ where: { id }, data: { passwordHash: nuevo } }))
     .catch((err) => {
       logError({ mensaje: `No se pudo re-hashear la contraseña del usuario ${id}`, stack: err.stack, causa: err });
-    });
+    })
+    .finally(() => liberarSlot());
+  return true;
 }
 
 export async function login(req, res, next) {
@@ -76,7 +89,14 @@ export async function login(req, res, next) {
     // Bajo presión no se re-hashea: sería una segunda operación de bcrypt
     // solo cuando la clave es correcta, y el 503 pasaría a discriminar
     // credenciales válidas.
-    if (!estaBajoPresion()) rehashSiHaceFalta(usuario, password);
+    if (!estaBajoPresion() && rehashSiHaceFalta(usuario, password, liberarSlot)) {
+      // El rehash se hizo cargo del slot (ver su docstring): el `finally` de
+      // abajo NO tiene que liberarlo — lo libera el `.finally` de esa promesa
+      // cuando el rehash termine. `liberarSlot` ya es idempotente en
+      // `colaBcrypt.js`, pero poner el guard acá deja la intención explícita
+      // en vez de depender de esa segunda red de seguridad.
+      liberarSlot = null;
+    }
   } catch (err) {
     next(err);
   } finally {

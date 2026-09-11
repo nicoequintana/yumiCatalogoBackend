@@ -18,6 +18,13 @@ import { httpError } from "./httpError.js";
  * No hay slot reservado para el admin: `/auth/login` es anónimo y un botnet
  * saturaría esa cola dedicada igual. Bajo saturación el operador también
  * recibe 503; es un incidente y se atiende como tal.
+ *
+ * EXCEPCIÓN CONOCIDA: `usuarios.controller.js` (crear/actualizar un admin)
+ * hashea con `hashearPassword` directo, SIN pasar por esta cola. Es
+ * deliberado y acotado — son rutas admin-only detrás de `requireAuth`, con
+ * volumen y superficie de ataque muy distintos a los cinco endpoints
+ * públicos que sí admiten anónimos. Si algún día se abre esa acción sin auth,
+ * hay que sumarla acá.
  */
 
 const CONCURRENCIA_POR_DEFECTO = 3;
