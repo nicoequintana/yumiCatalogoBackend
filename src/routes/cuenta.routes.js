@@ -35,9 +35,8 @@ router.post(
   loginController.reenviarCodigo,
 );
 
-// `POST /cuenta/google` (Task 3) va acá cuando `google-auth-library` se
-// declare en package.json/lock (Ruling C, progress.md): queda deferida a
-// propósito, no es un olvido.
+// Google es público como el login local: el ID token ES la credencial.
+router.post("/google", limitadores.googleIp, loginController.google);
 
 router.post("/olvide", limitadores.olvideIp, limitadores.olvideDestino, recuperacionController.olvide);
 router.post("/restablecer", limitadores.restablecerIp, recuperacionController.restablecer);

@@ -1,3 +1,4 @@
+import { OAuth2Client } from "google-auth-library";
 import { prisma } from "../lib/prisma.js";
 import { httpError } from "../lib/httpError.js";
 import { logError } from "../lib/logError.js";
@@ -7,7 +8,9 @@ import {
   COOKIE_DISPOSITIVO,
   DURACION_BLOQUEO_MS,
   MAX_INTENTOS_LOGIN,
+  ORIGENES_REGISTRO,
   TIPOS_TOKEN,
+  esGmail,
   normalizarEmail,
 } from "../lib/cuentasCliente.js";
 import {
@@ -257,6 +260,157 @@ export async function reenviarCodigo(req, res, next) {
     procesarReenvioCodigo(email).catch((err) => {
       logError({ mensaje: `No se pudo procesar el reenvío de código de ${email}`, stack: err.stack, causa: err });
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/*
+ * Login con Google (spec "Google — POST /api/cuenta/google", decisión 13).
+ */
+
+/** Un ID token real ronda 1 KB. Lo que pase de esto no se manda a verificar. */
+const LARGO_MAX_CREDENTIAL = 4096;
+
+const MENSAJE_SOLO_GMAIL = "Con una cuenta de Google del trabajo no podemos continuar. Registrate con el formulario.";
+const MENSAJE_EMAIL_TOMADO = "Ya hay una cuenta con ese email. Entrá con tu contraseña, o usá «olvidé mi contraseña».";
+
+function googleInvalido() {
+  return httpError(401, "No pudimos verificar tu cuenta de Google.");
+}
+
+function soloGmail() {
+  const err = httpError(403, MENSAJE_SOLO_GMAIL);
+  err.codigo = "SOLO_GMAIL";
+  return err;
+}
+
+/**
+ * Un cliente por `clientId`, memoizado a propósito: `OAuth2Client` cachea en
+ * la INSTANCIA los certificados públicos de Google. Uno nuevo por request
+ * significaba una llamada HTTP a Google en cada login, y un login que se cae
+ * cuando ese fetch falla.
+ */
+let clienteGoogle = null;
+let clienteGoogleId = null;
+function clienteDeGoogle(clientId) {
+  if (clienteGoogle === null || clienteGoogleId !== clientId) {
+    clienteGoogle = new OAuth2Client(clientId);
+    clienteGoogleId = clientId;
+  }
+  return clienteGoogle;
+}
+
+/**
+ * Los cinco casos de la tabla de la spec, en este orden por una razón: el
+ * `sub` manda (Gmail no reasigna direcciones, así que no se re-sincroniza el
+ * email), y el conflicto con OTRA `IdentidadGoogle` se corta ANTES de
+ * cualquier borrado.
+ *
+ * El "se reemplaza" de la spec vale solo para un registro que NUNCA se
+ * verificó. `verificadaEn` es la diferencia entre eso y una cuenta REAL con
+ * pedidos: la reasignación de email desde el panel apaga `emailVerificado`
+ * sobre un cliente verificado en su día (ver `estaFueraDeVentana` y
+ * `adminCuentasCliente.controller.js`), y borrar esa fila acá sería borrarle
+ * las órdenes al cliente. Por eso las guardas van en el WHERE del borrado
+ * (mismo criterio que `stockDescontado`) y un `count` 0 es 409, no un insert
+ * a ciegas que después choca contra el UNIQUE del email.
+ */
+async function resolverCuentaGoogle({ sub, email, nombre }) {
+  const porSub = await prisma.identidadGoogle.findUnique({ where: { sub }, include: { cuenta: true } });
+  if (porSub) return porSub.cuenta;
+
+  const porEmail = await prisma.cuentaCliente.findUnique({ where: { email }, include: { identidadGoogle: true } });
+
+  if (porEmail) {
+    // Imposible con Gmail (un email ↔ un `sub`); se cubre igual.
+    if (porEmail.identidadGoogle) throw httpError(409, "Ese email ya está vinculado a otra cuenta de Google.");
+
+    if (porEmail.emailVerificado) {
+      // Las dos credenciales están probadas: se vincula y no se toca nada más.
+      await prisma.identidadGoogle.create({ data: { cuentaClienteId: porEmail.id, sub } });
+      return porEmail;
+    }
+
+    if (porEmail.verificadaEn != null) throw httpError(409, MENSAJE_EMAIL_TOMADO);
+
+    const { count } = await prisma.cuentaCliente.deleteMany({
+      where: { id: porEmail.id, emailVerificado: false, verificadaEn: null, ordenes: { none: {} } },
+    });
+    if (count === 0) throw httpError(409, MENSAJE_EMAIL_TOMADO);
+  }
+
+  // `verificadaEn` va en el mismo insert: sin él, la purga de las 24 h vería
+  // un registro abandonado. El `sub` también, o el próximo login por `sub` no
+  // encontraría nada y entraría por el camino del email.
+  return prisma.cuentaCliente.create({
+    data: {
+      email,
+      origenRegistro: ORIGENES_REGISTRO.GOOGLE,
+      emailVerificado: true,
+      verificadaEn: new Date(),
+      passwordHash: null,
+      nombre,
+      identidadGoogle: { create: { sub } },
+    },
+  });
+}
+
+/**
+ * El ID token se verifica SIEMPRE contra Google (`verifyIdToken`), nunca se
+ * decodifica a mano: un JWT sin chequear la firma es un formulario que el
+ * atacante completa solo.
+ *
+ * `GOOGLE_CLIENT_ID` está fuera de `VARIABLES_REQUERIDAS` a propósito (spec):
+ * sin ella no hay botón y el sitio vende igual. Si alguien llega igual acá,
+ * es un 503 explícito, no un 500 con stack.
+ *
+ * No manda código por mail: Google ya hizo su propia verificación de
+ * dispositivo, así que el navegador queda conocido de una.
+ */
+export async function google(req, res, next) {
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      const err = httpError(503, "El inicio de sesión con Google no está disponible.");
+      err.codigo = "GOOGLE_NO_CONFIGURADO";
+      throw err;
+    }
+
+    const credential = req.body?.credential;
+    if (typeof credential !== "string" || credential === "") throw httpError(400, "Falta el credential de Google.");
+    if (credential.length > LARGO_MAX_CREDENTIAL) throw googleInvalido();
+
+    let payload;
+    try {
+      const ticket = await clienteDeGoogle(clientId).verifyIdToken({ idToken: credential, audience: clientId });
+      payload = ticket.getPayload();
+    } catch {
+      // El motivo real (firma, audience, expiración) no se le devuelve al
+      // cliente: es un oráculo para quien está probando tokens.
+      throw googleInvalido();
+    }
+
+    // Ausente es `false`: sin esto se confiaría en un email que Google mismo
+    // no da por probado.
+    if (payload?.email_verified !== true) throw googleInvalido();
+
+    const email = normalizarEmail(payload.email);
+    if (!email) throw googleInvalido();
+    // Decisión 13: `hd` es una cuenta de Workspace — la controla el admin de
+    // su dominio, que entraría como cualquiera de sus empleados.
+    if (payload.hd || !esGmail(email)) throw soloGmail();
+
+    const cuenta = await resolverCuentaGoogle({
+      sub: payload.sub,
+      email,
+      nombre: typeof payload.name === "string" && payload.name !== "" ? payload.name : null,
+    });
+
+    setCookieSesion(res, firmarSesionCliente(cuenta));
+    await marcarDispositivoConocido(res, cuenta.id);
+
+    res.json({ ok: true, completar: !cuenta.nombre || !cuenta.telefono || !cuenta.dni });
   } catch (err) {
     next(err);
   }

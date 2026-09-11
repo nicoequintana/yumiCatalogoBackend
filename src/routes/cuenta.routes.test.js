@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
@@ -627,5 +627,37 @@ describe("POST /api/cuenta/reenviar-verificacion", () => {
     const res = await request(buildApp()).post("/api/cuenta/reenviar-verificacion").send(BODY);
     expect(res.status).toBe(403);
     expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+});
+
+// El camino feliz de Google vive en `cuentaLogin.controller.google.test.js`
+// (acá `cookiesCliente.js` está mockeado a medias, solo con
+// `setCookieDispositivo`). Lo que se prueba a nivel router es el cableado:
+// que la ruta EXISTE y que `exigirOrigen` corre antes que el handler.
+describe("POST /api/cuenta/google — cableado", () => {
+  const GOOGLE_CLIENT_ID_ORIGINAL = process.env.GOOGLE_CLIENT_ID;
+
+  afterEach(() => {
+    if (GOOGLE_CLIENT_ID_ORIGINAL === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID_ORIGINAL;
+  });
+
+  it("sin Origin: 403 ORIGEN_RECHAZADO, sin llegar al handler", async () => {
+    const res = await request(buildApp()).post("/api/cuenta/google").send({ credential: "x" });
+    expect(res.status).toBe(403);
+    expect(res.body.codigo).toBe("ORIGEN_RECHAZADO");
+  });
+
+  it("montada: con Origin y sin GOOGLE_CLIENT_ID llega al handler (503, no 404)", async () => {
+    delete process.env.GOOGLE_CLIENT_ID;
+    const res = await request(buildApp()).post("/api/cuenta/google").set("Origin", ORIGIN).send({ credential: "x" });
+    expect(res.status).toBe(503);
+    expect(res.body.codigo).toBe("GOOGLE_NO_CONFIGURADO");
+  });
+
+  it("con GOOGLE_CLIENT_ID, un credential inválido no es 404 ni 500: es 400", async () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id-de-prueba";
+    const res = await request(buildApp()).post("/api/cuenta/google").set("Origin", ORIGIN).send({});
+    expect(res.status).toBe(400);
   });
 });
