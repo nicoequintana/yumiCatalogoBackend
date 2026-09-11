@@ -97,21 +97,31 @@ function clasificarError(err, metodo) {
 export function manejadorDeErrores(err, req, res, _next) {
   const { status, mensaje } = clasificarError(err, req.method);
 
+  // Un 503 con codigo CAPACIDAD es `colaBcrypt.js` haciendo load shedding: se
+  // puede disparar cientos de veces por segundo bajo un flood de CPU. NO se
+  // loguea (ni consola ni ErrorLog): registrar cada uno convertiría un flood
+  // de CPU en un flood de escrituras a la base, justo lo que el load shedding
+  // existe para evitar. La respuesta al cliente (status, cuerpo, Retry-After)
+  // no cambia.
+  const esCapacidad = err?.codigo === "CAPACIDAD";
+
   // Solo los 500 van a la consola. Antes se imprimía SIEMPRE, así que cada bot
   // pegándole a una ruta inexistente o cada validación de formulario rechazada
   // dejaba un stack completo en los logs del contenedor y enterraba las fallas
   // que sí importan.
-  if (status >= 500) console.error(err);
+  if (status >= 500 && !esCapacidad) console.error(err);
 
-  // Fire-and-forget: la respuesta no espera al insert del log.
-  logError({
-    mensaje: err?.message,
-    stack: err?.stack,
-    causa: err?.cause,
-    ruta: req.originalUrl,
-    metodo: req.method,
-    status,
-  });
+  if (!esCapacidad) {
+    // Fire-and-forget: la respuesta no espera al insert del log.
+    logError({
+      mensaje: err?.message,
+      stack: err?.stack,
+      causa: err?.cause,
+      ruta: req.originalUrl,
+      metodo: req.method,
+      status,
+    });
+  }
 
   if (err?.retryAfter) res.set("Retry-After", String(err.retryAfter));
   res.status(status).json({ error: mensaje, ...(err?.codigo && { codigo: err.codigo }) });

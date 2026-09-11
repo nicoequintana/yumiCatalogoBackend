@@ -291,6 +291,60 @@ describe("manejadorDeErrores — codigo y Retry-After", () => {
   });
 });
 
+describe("manejadorDeErrores — 503 CAPACIDAD (load shedding, no se loguea)", () => {
+  // Un 503 CAPACIDAD es la cola de bcrypt rechazando por saturación (ver
+  // colaBcrypt.js): puede dispararse cientos de veces por segundo bajo un
+  // flood de CPU. Escribir un ErrorLog por cada uno convierte ese flood en un
+  // flood de escrituras a la base — lo mismo que el load shedding existe para
+  // evitar, un piso más abajo.
+  it("NO escribe en ErrorLog un 503 con codigo CAPACIDAD", async () => {
+    const err = new Error("Estamos recibiendo muchas solicitudes. Probá de nuevo en unos segundos.");
+    err.status = 503;
+    err.codigo = "CAPACIDAD";
+    err.retryAfter = 2;
+
+    const res = await request(appQueLanza(err)).get("/boom");
+
+    expect(res.status).toBe(503);
+    expect(errorLogCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("NO imprime el stack en consola para un 503 CAPACIDAD", async () => {
+    const err = new Error("Estamos recibiendo muchas solicitudes. Probá de nuevo en unos segundos.");
+    err.status = 503;
+    err.codigo = "CAPACIDAD";
+    err.retryAfter = 2;
+
+    await request(appQueLanza(err)).get("/boom");
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("la respuesta al cliente no cambia: mismo cuerpo y Retry-After que antes", async () => {
+    const err = new Error("Estamos recibiendo muchas solicitudes. Probá de nuevo en unos segundos.");
+    err.status = 503;
+    err.codigo = "CAPACIDAD";
+    err.retryAfter = 2;
+
+    const res = await request(appQueLanza(err)).get("/boom");
+
+    expect(res.headers["retry-after"]).toBe("2");
+    expect(res.body).toEqual({
+      error: "Estamos recibiendo muchas solicitudes. Probá de nuevo en unos segundos.",
+      codigo: "CAPACIDAD",
+    });
+  });
+
+  it("un 503 SIN codigo CAPACIDAD sigue logueando como cualquier 500 (no es load shedding)", async () => {
+    const err = new Error("La base no contesta.");
+    err.status = 503;
+
+    await request(appQueLanza(err)).get("/boom");
+
+    expect(errorLogCreateMock).toHaveBeenCalled();
+  });
+});
+
 describe("manejadorDeErrores — propagación de la causa", () => {
   it("manda err.cause a logError para que llegue al ErrorLog", async () => {
     // Este es el caso real de `cloudinary.service.js`: el SDK rechaza con un
