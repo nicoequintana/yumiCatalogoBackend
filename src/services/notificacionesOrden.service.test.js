@@ -172,6 +172,16 @@ describe("notificarCambioEstado", () => {
     expect(resultado.error).toContain("535");
   });
 
+  it("un mail DESCARTADO por presupuesto no se reporta como enviado", async () => {
+    enviarMailMock.mockResolvedValue({ descartado: true });
+
+    const resultado = await notificarCambioEstado({ ...ORDEN, estado: "ENTREGADA" });
+
+    expect(resultado.intentada).toBe(true);
+    expect(resultado.enviada).toBe(false);
+    expect(resultado.error).toMatch(/tope|presupuesto/i);
+  });
+
   it("registra el fallo en ErrorLog", async () => {
     enviarMailMock.mockRejectedValue(new Error("Invalid login"));
 

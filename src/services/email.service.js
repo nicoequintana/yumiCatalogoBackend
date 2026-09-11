@@ -60,50 +60,133 @@ function obtenerTransporter() {
 }
 
 const HORA_MS = 60 * 60 * 1000;
-const PRESUPUESTO_POR_DEFECTO = { orden: 200, acceso: 60, resto: 100 };
-const VAR_ENV_PRESUPUESTO = {
-  orden: "PRESUPUESTO_MAIL_ORDEN_HORA",
-  acceso: "PRESUPUESTO_MAIL_ACCESO_HORA",
-  resto: "PRESUPUESTO_MAIL_RESTO_HORA",
-};
+const DIA_MS = 24 * HORA_MS;
 
-function presupuestoDe(categoria) {
-  const valor = Number.parseInt(process.env[VAR_ENV_PRESUPUESTO[categoria]] ?? "", 10);
-  return Number.isInteger(valor) && valor > 0 ? valor : PRESUPUESTO_POR_DEFECTO[categoria];
+/**
+ * Dos ventanas por categoría: por HORA (que una ráfaga no se coma la cuota
+ * de golpe) y por DÍA. La diaria existe porque la cuota de Gmail es diaria y
+ * compartida: con solo topes horarios, `resto` podía mandar ~2.400 mails en un
+ * día sin tocar nunca su tope. Los defaults diarios suman 300 — el "techo
+ * declarado" de la spec (sección "Correo": >300 envíos/día → proveedor
+ * transaccional) —, con la mayor parte para `orden`, que es plata.
+ */
+const PRESUPUESTO_POR_DEFECTO = {
+  hora: { orden: 200, acceso: 60, resto: 100 },
+  dia: { orden: 150, acceso: 90, resto: 60 },
+};
+const VAR_ENV_PRESUPUESTO = {
+  hora: {
+    orden: "PRESUPUESTO_MAIL_ORDEN_HORA",
+    acceso: "PRESUPUESTO_MAIL_ACCESO_HORA",
+    resto: "PRESUPUESTO_MAIL_RESTO_HORA",
+  },
+  dia: {
+    orden: "PRESUPUESTO_MAIL_ORDEN_DIA",
+    acceso: "PRESUPUESTO_MAIL_ACCESO_DIA",
+    resto: "PRESUPUESTO_MAIL_RESTO_DIA",
+  },
+};
+const DURACION_VENTANA = { hora: HORA_MS, dia: DIA_MS };
+const ETIQUETA_VENTANA = { hora: "hora", dia: "día" };
+
+/**
+ * Un mail de acceso encolado no sale si al código/token le queda menos que
+ * esto: llegaría vencido o a punto de vencer, y la persona pediría otro de
+ * todos modos (CODIGO_ACCESO vive 10 min; la cola retiene hasta 1 h).
+ */
+const MARGEN_VENCIMIENTO_MS = 60 * 1000;
+
+/**
+ * Tope de la cola en memoria de `acceso`. Sin él, una avalancha de pedidos de
+ * código con el presupuesto agotado crece sin límite en el heap del proceso.
+ * Al superarlo se descarta el MÁS VIEJO: es el que antes vence.
+ */
+const TOPE_COLA_ACCESO = 200;
+
+function presupuestoDe(categoria, ventana) {
+  const valor = Number.parseInt(process.env[VAR_ENV_PRESUPUESTO[ventana][categoria]] ?? "", 10);
+  return Number.isInteger(valor) && valor > 0 ? valor : PRESUPUESTO_POR_DEFECTO[ventana][categoria];
+}
+
+function contadorInicial(ahora) {
+  return {
+    hora: { contador: 0, inicio: ahora, avisado: false },
+    dia: { contador: 0, inicio: ahora, avisado: false },
+  };
 }
 
 function estadoInicial() {
   const ahora = Date.now();
   return {
-    orden: { contador: 0, ventanaInicio: ahora, avisado: false },
-    acceso: { contador: 0, ventanaInicio: ahora, avisado: false, cola: [] },
-    resto: { contador: 0, ventanaInicio: ahora, avisado: false },
+    orden: contadorInicial(ahora),
+    acceso: { ...contadorInicial(ahora), cola: [], avisoColaLlena: false },
+    resto: contadorInicial(ahora),
   };
 }
 
 let presupuesto = estadoInicial();
+let drenando = false;
 
 /** Solo para tests: las env de presupuesto y el reloj cambian entre casos. */
 export function _reiniciarPresupuestoParaTests() {
   presupuesto = estadoInicial();
+  drenando = false;
 }
 
-function refrescarVentana(categoria) {
-  const s = presupuesto[categoria];
-  if (Date.now() - s.ventanaInicio >= HORA_MS) {
-    s.contador = 0;
-    s.ventanaInicio = Date.now();
-    s.avisado = false;
+function refrescarVentanas(categoria) {
+  const ahora = Date.now();
+  for (const ventana of ["hora", "dia"]) {
+    const v = presupuesto[categoria][ventana];
+    if (ahora - v.inicio >= DURACION_VENTANA[ventana]) {
+      v.contador = 0;
+      v.inicio = ahora;
+      v.avisado = false;
+    }
   }
 }
 
-function avisarTope(categoria) {
-  const s = presupuesto[categoria];
-  if (s.avisado) return;
-  s.avisado = true;
+/** La ventana (hora/día) que está agotada, o `null` si hay lugar en las dos. */
+function ventanaAgotada(categoria) {
+  refrescarVentanas(categoria);
+  for (const ventana of ["hora", "dia"]) {
+    if (presupuesto[categoria][ventana].contador >= presupuestoDe(categoria, ventana)) return ventana;
+  }
+  return null;
+}
+
+function consumirCupo(categoria) {
+  presupuesto[categoria].hora.contador += 1;
+  presupuesto[categoria].dia.contador += 1;
+}
+
+/** Una alarma por ventana agotada, no una por cada mail descartado. */
+function avisarTope(categoria, ventana) {
+  const v = presupuesto[categoria][ventana];
+  if (v.avisado) return;
+  v.avisado = true;
   logError({
-    mensaje: `Presupuesto de correo agotado: categoría "${categoria}" (${presupuestoDe(categoria)}/hora).`,
+    mensaje: `Presupuesto de correo agotado: categoría "${categoria}" (${presupuestoDe(categoria, ventana)}/${ETIQUETA_VENTANA[ventana]}).`,
   });
+}
+
+function estaVencido(item) {
+  const ahora = Date.now();
+  if (ahora - item.encoladoEn > HORA_MS) return true;
+  return item.expiraEn instanceof Date && ahora >= item.expiraEn.getTime() - MARGEN_VENCIMIENTO_MS;
+}
+
+function encolarAcceso(item) {
+  const s = presupuesto.acceso;
+  if (s.cola.length >= TOPE_COLA_ACCESO) {
+    s.cola.shift();
+    if (!s.avisoColaLlena) {
+      s.avisoColaLlena = true;
+      logError({
+        mensaje: `Cola de mails de acceso llena (${TOPE_COLA_ACCESO}): se descartan los más viejos.`,
+      });
+    }
+  }
+  s.cola.push(item);
 }
 
 async function despacharAhora({ para, asunto, texto, html }) {
@@ -118,61 +201,93 @@ async function despacharAhora({ para, asunto, texto, html }) {
 }
 
 /**
- * Drena la cola de `acceso` mientras haya lugar. Corre AL PRINCIPIO de cada
- * `enviarMail`, sea cual sea su categoría: es el único gancho sin depender de
- * un timer, y `acceso` es la única categoría que encola (RESET + CODIGO_ACCESO
- * bloquean la entrada, así que perder uno en silencio no es aceptable —
- * Amenaza 10 de la spec).
+ * Drena la cola de `acceso` mientras haya lugar. Lo dispara cada `enviarMail`,
+ * sea cual sea su categoría: es el único gancho sin depender de un timer, y
+ * `acceso` es la única categoría que encola (RESET + CODIGO_ACCESO bloquean la
+ * entrada, así que perder uno en silencio no es aceptable — Amenaza 10 de la
+ * spec). Los envíos van en serie y en orden de llegada.
  */
 async function drenarColaAcceso() {
-  refrescarVentana("acceso");
   const s = presupuesto.acceso;
-  const tope = presupuestoDe("acceso");
-  while (s.cola.length > 0 && s.contador < tope) {
-    const item = s.cola.shift();
-    if (Date.now() - item.encoladoEn > HORA_MS) continue; // vencido: se descarta, no se manda tarde
-    s.contador += 1;
-    try {
-      await despacharAhora(item);
-    } catch (err) {
-      logError({
-        mensaje: `No se pudo drenar un mail de acceso encolado para ${item.para}`,
-        stack: err.stack,
-        causa: err,
-      });
+  try {
+    while (s.cola.length > 0 && ventanaAgotada("acceso") === null) {
+      const item = s.cola.shift();
+      if (estaVencido(item)) continue; // se descarta: no se manda tarde
+      consumirCupo("acceso");
+      try {
+        await despacharAhora(item);
+      } catch (err) {
+        logError({
+          mensaje: `No se pudo drenar un mail de acceso encolado para ${item.para}`,
+          stack: err.stack,
+          causa: err,
+        });
+      }
     }
+    if (s.cola.length === 0) s.avisoColaLlena = false;
+  } finally {
+    // Acá y no en un `.finally()` encadenado afuera: cuando el loop termina
+    // sin haber esperado nada, esto corre en el MISMO tick y el próximo
+    // `enviarMail` ya puede arrancar otro drenado; un `.finally()` externo lo
+    // liberaría varias microtareas después y ese envío saltearía el drenado.
+    drenando = false;
   }
 }
 
 /**
- * Presupuesto por hora, con `acceso` (RESET + CODIGO_ACCESO) y `resto`
- * corriendo en contadores INDEPENDIENTES — Amenaza 10 de la spec (v3 tenía la
- * prioridad invertida): agotar `resto` nunca frena un mail de `acceso`, que es
- * del que depende poder comprar. `orden` y `resto` descartan en silencio al
- * llegar al tope (perder uno es preferible a saturar la cuota); `acceso`
- * encola y drena en el próximo `enviarMail` con lugar, porque perder un mail
- * de acceso en silencio no es aceptable.
- *
- * @param {{para: string, asunto: string, texto: string, html: string, categoria?: "orden"|"acceso"|"resto"}} mensaje
- * @returns {Promise<void>}
+ * Arranca el drenado SIN esperarlo, y nunca dos a la vez. Esperarlo hacía que
+ * el mail en curso —p. ej. el aviso de cambio de estado, que el admin espera
+ * dentro de `PATCH /ordenes/:id/estado`— quedara detrás de TODA la cola de
+ * acceso, un envío SMTP por vez. El flag evita que dos drenados concurrentes
+ * saquen items en paralelo y los manden fuera de orden.
  */
-export async function enviarMail({ para, asunto, texto, html, categoria = "resto" }) {
-  await drenarColaAcceso();
-  refrescarVentana(categoria);
+function dispararDrenado() {
+  if (drenando || presupuesto.acceso.cola.length === 0) return;
+  drenando = true;
+  drenarColaAcceso().catch((err) =>
+    logError({ mensaje: "Falló el drenado de la cola de acceso", stack: err.stack, causa: err }),
+  );
+}
 
-  const s = presupuesto[categoria];
-  if (s.contador < presupuestoDe(categoria)) {
-    s.contador += 1;
-    return despacharAhora({ para, asunto, texto, html });
+/**
+ * Presupuesto por hora y por día, con `acceso` (RESET + CODIGO_ACCESO) y
+ * `resto` corriendo en contadores INDEPENDIENTES — Amenaza 10 de la spec (v3
+ * tenía la prioridad invertida): agotar `resto` nunca frena un mail de
+ * `acceso`, que es del que depende poder comprar. `orden` y `resto` descartan
+ * al llegar a cualquiera de los dos topes (perder uno es preferible a saturar
+ * la cuota); `acceso` encola y drena después, porque perder un mail de acceso
+ * en silencio no es aceptable. Una categoría desconocida cuenta como `resto`.
+ *
+ * Sigue LANZANDO ante un fallo de transporte. Un descarte por presupuesto NO
+ * lanza —no es una falla— pero se informa en el resultado, para que quien
+ * reporta "se mandó" (`notificacionesOrden`) no mienta.
+ *
+ * `expiraEn` (opcional): vencimiento del código/token que lleva el mail. Si
+ * el mail termina en la cola, se descarta en vez de salir cuando al código le
+ * quedan menos de `MARGEN_VENCIMIENTO_MS`.
+ *
+ * @param {{para: string, asunto: string, texto: string, html: string, categoria?: "orden"|"acceso"|"resto", expiraEn?: Date}} mensaje
+ * @returns {Promise<{descartado: boolean, encolado?: true}>}
+ */
+export async function enviarMail({ para, asunto, texto, html, categoria = "resto", expiraEn }) {
+  dispararDrenado();
+
+  const clave = Object.hasOwn(presupuesto, categoria) ? categoria : "resto";
+  const agotada = ventanaAgotada(clave);
+  if (agotada === null) {
+    consumirCupo(clave);
+    await despacharAhora({ para, asunto, texto, html });
+    return { descartado: false };
   }
 
-  avisarTope(categoria);
-  if (categoria === "acceso") {
-    s.cola.push({ para, asunto, texto, html, encoladoEn: Date.now() });
-    return;
+  avisarTope(clave, agotada);
+  if (clave === "acceso") {
+    encolarAcceso({ para, asunto, texto, html, expiraEn, encoladoEn: Date.now() });
+    return { descartado: false, encolado: true };
   }
   // "orden" y "resto" DESCARTAN: perder uno de estos es preferible a que
   // saturen la cuota y le coman el lugar al mail de acceso.
+  return { descartado: true };
 }
 
 /**

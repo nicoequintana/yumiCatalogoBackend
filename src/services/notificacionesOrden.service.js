@@ -62,13 +62,18 @@ function urlDeOrden(id) {
 async function enviarYRegistrar({ para, armarPlantilla, descripcion }) {
   try {
     const plantilla = armarPlantilla();
-    await enviarMail({
+    const resultado = await enviarMail({
       para,
       asunto: plantilla.asunto,
       texto: plantilla.texto,
       html: plantilla.html,
       categoria: "orden",
     });
+    // Descartado por presupuesto: no lanzó, pero tampoco salió. Sin log acá:
+    // `email.service.js` ya avisó una vez por ventana, uno por mail sería ruido.
+    if (resultado?.descartado) {
+      return { enviada: false, error: "Se alcanzó el tope de envíos de correo; el mail no salió." };
+    }
     return { enviada: true };
   } catch (err) {
     // Fire-and-forget, igual que el resto de los loggers del proyecto: no se
