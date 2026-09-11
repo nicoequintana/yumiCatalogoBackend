@@ -6,10 +6,14 @@ import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { hashearPassword, motivoPasswordRechazada } from "../lib/passwords.js";
 import { reservarSlot } from "../lib/colaBcrypt.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
-import { ORIGENES_REGISTRO, HORAS_PURGA_NO_VERIFICADAS, normalizarEmail } from "../lib/cuentasCliente.js";
-import { invalidarTokensDe, consumirToken, hashDeToken } from "../lib/tokensCuenta.js";
+import {
+  ORIGENES_REGISTRO,
+  HORAS_PURGA_NO_VERIFICADAS,
+  DURACION_DISPOSITIVO_MS,
+  normalizarEmail,
+} from "../lib/cuentasCliente.js";
+import { consumirToken, hashDeToken } from "../lib/tokensCuenta.js";
 import { setCookieDispositivo } from "../lib/cookiesCliente.js";
-import { DURACION_DISPOSITIVO_MS } from "../lib/cuentasCliente.js";
 import { randomBytes } from "node:crypto";
 import { enviarVerificacion, enviarYaTenesCuenta } from "../services/notificacionesCuenta.service.js";
 
@@ -21,7 +25,18 @@ const MOTIVO_A_MENSAJE = {
 };
 /** Límite del índice UNIQUE de `CuentaCliente.email` (1700 bytes): más largo revienta el insert como 500. */
 const LARGO_MAX_EMAIL = 254;
+/**
+ * Un token real mide 43 caracteres (32 bytes en base64url). Lo que pase de
+ * esto no se hashea: se responde como INVALIDO, sin gastar CPU en SHA-256
+ * sobre un body de megas y sin un mensaje distinto que sirva de oráculo.
+ */
+const LARGO_MAX_TOKEN = 128;
 const MS_PURGA_NO_VERIFICADAS = HORAS_PURGA_NO_VERIFICADAS * 60 * 60 * 1000;
+
+/** Una no verificada cuenta como vencida pasadas las 24 h, aunque la purga todavía no la haya borrado. */
+function estaFueraDeVentana(cuenta) {
+  return Date.now() - cuenta.createdAt.getTime() > MS_PURGA_NO_VERIFICADAS;
+}
 
 /**
  * Purga oportunista GLOBAL (spec, paso 5 de "Registro local"): en cada
@@ -65,14 +80,16 @@ async function procesarRegistro({ email, password, nombre, telefono, dni }, libe
 
   if (existente?.emailVerificado) {
     await enviarYaTenesCuenta(existente.email);
-  } else if (existente && Date.now() - existente.createdAt.getTime() <= MS_PURGA_NO_VERIFICADAS) {
+  } else if (existente && !estaFueraDeVentana(existente)) {
     // No verificada y todavía dentro de la ventana: reenvía sin pisar nada.
-    await invalidarTokensDe(existente.id, "VERIFICACION");
+    // `enviarVerificacion` invalida los tokens viejos DESPUÉS de emitir el nuevo.
     await enviarVerificacion(existente);
   } else {
     if (existente) {
       // Vencida: se purga (cascade a sus tokens) y sigue como si "no existiera".
-      await prisma.cuentaCliente.delete({ where: { id: existente.id } });
+      // `deleteMany` y no `delete`: si la purga global de otra request la
+      // borró primero, `delete` lanzaría P2025 y tumbaría este registro.
+      await prisma.cuentaCliente.deleteMany({ where: { id: existente.id } });
     }
     try {
       const cuenta = await prisma.cuentaCliente.create({
@@ -151,35 +168,41 @@ export async function registro(req, res, next) {
 /**
  * Un navegador que hace click en el link YA probó posesión del buzón: se le
  * ahorra el mail de código de acceso en su primer login (spec, "Verificación").
+ *
+ * Best-effort: la cuenta ya quedó verificada. Si esto falla, lo único que se
+ * pierde es el atajo — el primer login pedirá código —, así que se loguea y
+ * la verificación responde igual.
  */
 async function marcarDispositivoConocido(res, cuentaClienteId) {
-  const tokenClaro = randomBytes(32).toString("base64url");
-  await prisma.dispositivoConocido.create({
-    data: {
-      cuentaClienteId,
-      tokenHash: hashDeToken(tokenClaro),
-      expiraEn: new Date(Date.now() + DURACION_DISPOSITIVO_MS),
-    },
-  });
-  setCookieDispositivo(res, tokenClaro);
+  try {
+    const tokenClaro = randomBytes(32).toString("base64url");
+    await prisma.dispositivoConocido.create({
+      data: {
+        cuentaClienteId,
+        tokenHash: hashDeToken(tokenClaro),
+        expiraEn: new Date(Date.now() + DURACION_DISPOSITIVO_MS),
+      },
+    });
+    setCookieDispositivo(res, tokenClaro);
+  } catch (err) {
+    logError({ mensaje: `No se pudo registrar el dispositivo conocido de la cuenta ${cuentaClienteId}`, stack: err.stack, causa: err });
+  }
 }
 
-/**
- * Es POST y no GET a propósito: Outlook Safe Links y varios antivirus
- * prefetchean todo link de un mail — un GET que consumiera el token lo
- * quemaría antes de que la persona lo vea.
- */
 const MENSAJE_REENVIO = "Si tenés una cuenta pendiente de confirmar, te mandamos un mail nuevo.";
 
 /**
  * Mismo trato "silencioso" que la rama ya-verificada de `/registro`: ni
  * cuenta inexistente ni ya verificada mandan nada — acá no aplica "olvidé mi
  * contraseña", solo el mail de verificación de una cuenta pendiente.
+ *
+ * Tampoco la que ya pasó sus 24 h: un reenvío a las 23:59 emitía un token de
+ * 24 h más y la cuenta no verificada vivía ~48 h. Esa cuenta se purga; quien
+ * la quiera, se registra de nuevo.
  */
 async function procesarReenvio(email) {
   const cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
-  if (!cuenta || cuenta.emailVerificado) return;
-  await invalidarTokensDe(cuenta.id, "VERIFICACION");
+  if (!cuenta || cuenta.emailVerificado || estaFueraDeVentana(cuenta)) return;
   await enviarVerificacion(cuenta);
 }
 
@@ -206,21 +229,39 @@ export async function reenviarVerificacion(req, res, next) {
   }
 }
 
+function responderMotivo(res, motivo) {
+  return res.status(400).json({ error: MOTIVO_A_MENSAJE[motivo], motivo });
+}
+
+/**
+ * Es POST y no GET a propósito: Outlook Safe Links y varios antivirus
+ * prefetchean todo link de un mail — un GET que consumiera el token lo
+ * quemaría antes de que la persona lo vea.
+ */
 export async function verificar(req, res, next) {
   try {
     const tokenClaro = req.body?.token;
     if (typeof tokenClaro !== "string" || !tokenClaro) throw httpError(400, "Falta el token.");
+    if (tokenClaro.length > LARGO_MAX_TOKEN) return responderMotivo(res, "INVALIDO");
 
     const resultado = await consumirToken({ tokenClaro, tipo: "VERIFICACION" });
-    if (!resultado.ok) {
-      return res.status(400).json({ error: MOTIVO_A_MENSAJE[resultado.motivo], motivo: resultado.motivo });
-    }
+    if (!resultado.ok) return responderMotivo(res, resultado.motivo);
 
-    const cuenta = await prisma.cuentaCliente.update({
-      where: { id: resultado.fila.cuentaClienteId },
+    // La ventana de 24 h es de la CUENTA, no solo del token: la guarda va en
+    // el `where` de la escritura (mismo criterio que `stockDescontado`), no en
+    // un `findUnique` + `if`. Una no verificada ya fuera de la ventana responde
+    // igual que un link vencido y NO se marca verificada.
+    const cuentaClienteId = resultado.fila.cuentaClienteId;
+    const { count } = await prisma.cuentaCliente.updateMany({
+      where: {
+        id: cuentaClienteId,
+        OR: [{ emailVerificado: true }, { createdAt: { gte: new Date(Date.now() - MS_PURGA_NO_VERIFICADAS) } }],
+      },
       data: { emailVerificado: true },
     });
-    await marcarDispositivoConocido(res, cuenta.id);
+    if (count === 0) return responderMotivo(res, "VENCIDO");
+
+    await marcarDispositivoConocido(res, cuentaClienteId);
 
     // Sin token ni cookie de sesión: un link de mail que loguea es una sesión
     // sin contraseña. Entra por login o código, en la Parte 2b.
