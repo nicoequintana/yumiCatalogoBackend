@@ -16,6 +16,7 @@ const consumirTokenMock = vi.fn();
 const enviarResetMock = vi.fn();
 const reservarSlotMock = vi.fn();
 const hashearMock = vi.fn();
+const revocarMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -31,6 +32,7 @@ vi.mock("../lib/tokensCuenta.js", async (importOriginal) => {
     invalidarTokensDe: (...a) => invalidarMock(...a),
     emitirToken: (...a) => emitirTokenMock(...a),
     consumirToken: (...a) => consumirTokenMock(...a),
+    revocarTokensPendientes: (...a) => revocarMock(...a),
   };
 });
 vi.mock("../lib/colaBcrypt.js", async (importOriginal) => {
@@ -70,7 +72,9 @@ beforeEach(() => {
     reservarSlotMock,
     hashearMock,
     liberarMock,
+    revocarMock,
   ].forEach((m) => m.mockReset());
+  revocarMock.mockResolvedValue(undefined);
   createDispMock.mockResolvedValue({});
   invalidarMock.mockResolvedValue(undefined);
   enviarResetMock.mockResolvedValue(undefined);
@@ -238,6 +242,10 @@ describe("restablecer", () => {
     const cookies = res.headers["set-cookie"] ?? [];
     expect(cookies.some((c) => c.startsWith("dispositivo_cliente="))).toBe(true);
     expect(cookies.some((c) => c.startsWith("sesion_cliente="))).toBe(false);
+    // Un CAMBIO_EMAIL o un código pendiente no sobreviven a la clave nueva:
+    // quien secuestró la sesión no puede confirmarlos después.
+    expect(revocarMock).toHaveBeenCalledWith(expect.anything(), 1, ["CAMBIO_EMAIL", "CODIGO_ACCESO"]);
+    expect(updateManyMock.mock.invocationCallOrder[0]).toBeLessThan(revocarMock.mock.invocationCallOrder[0]);
   });
 
   it("clave rechazada (comun): 400 y el token NO se quema — se puede reintentar con el mismo link", async () => {
@@ -323,5 +331,6 @@ describe("restablecer", () => {
     expect(res.status).toBe(400);
     expect(res.body.motivo).toBe("INVALIDO");
     expect(createDispMock).not.toHaveBeenCalled();
+    expect(revocarMock).not.toHaveBeenCalled();
   });
 });

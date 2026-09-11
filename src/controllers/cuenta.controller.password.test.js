@@ -8,8 +8,12 @@ process.env.COOKIE_DOMINIO = "";
 
 const findUniqueMock = vi.fn();
 const updateManyMock = vi.fn();
+const tokenUpdateManyMock = vi.fn();
 vi.mock("../lib/prisma.js", () => ({
-  prisma: { cuentaCliente: { findUnique: (...a) => findUniqueMock(...a), updateMany: (...a) => updateManyMock(...a) } },
+  prisma: {
+    cuentaCliente: { findUnique: (...a) => findUniqueMock(...a), updateMany: (...a) => updateManyMock(...a) },
+    tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a) },
+  },
 }));
 
 const { cambiarPassword } = await import("./cuenta.controller.js");
@@ -31,6 +35,7 @@ let HASH_ACTUAL;
 beforeEach(async () => {
   findUniqueMock.mockReset();
   updateManyMock.mockReset();
+  tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 0 });
   HASH_ACTUAL = HASH_ACTUAL ?? (await hashearPassword("clave-actual-larga"));
 });
 
@@ -40,6 +45,7 @@ describe("cambiarPassword", () => {
     const res = await request(buildApp()).put("/password").send({ actual: "mal", nueva: "otra-clave-larga" });
     expect(res.status).toBe(401);
     expect(updateManyMock).not.toHaveBeenCalled();
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("nueva clave rechazada (comun): 400, no escribe", async () => {
@@ -73,11 +79,23 @@ describe("cambiarPassword", () => {
     expect(res.headers["set-cookie"].some((c) => c.startsWith("sesion_cliente="))).toBe(true);
   });
 
+  it("exito: revoca los CAMBIO_EMAIL, CODIGO_ACCESO y RESET pendientes (un secuestrador no confirma despues)", async () => {
+    findUniqueMock.mockResolvedValue({ id: 1, email: "juan@gmail.com", dni: null, passwordHash: HASH_ACTUAL, tokenVersion: 3 });
+    updateManyMock.mockResolvedValue({ count: 1 });
+    const res = await request(buildApp()).put("/password").send({ actual: "clave-actual-larga", nueva: "una-clave-nueva-y-larga" });
+    expect(res.status).toBe(200);
+    const { where, data } = tokenUpdateManyMock.mock.calls[0][0];
+    expect(where).toEqual({ cuentaClienteId: 1, tipo: { in: ["CAMBIO_EMAIL", "CODIGO_ACCESO", "RESET"] }, usadoEn: null });
+    expect(data.usadoEn).toBeInstanceOf(Date);
+    expect(updateManyMock.mock.invocationCallOrder[0]).toBeLessThan(tokenUpdateManyMock.mock.invocationCallOrder[0]);
+  });
+
   it("cambio concurrente (tokenVersion ya no coincide): 409, la cookie no se reemite", async () => {
     findUniqueMock.mockResolvedValue({ id: 1, email: "juan@gmail.com", dni: null, passwordHash: HASH_ACTUAL, tokenVersion: 3 });
     updateManyMock.mockResolvedValue({ count: 0 });
     const res = await request(buildApp()).put("/password").send({ actual: "clave-actual-larga", nueva: "una-clave-nueva-y-larga" });
     expect(res.status).toBe(409);
     expect(res.headers["set-cookie"]).toBeUndefined();
+    expect(tokenUpdateManyMock).not.toHaveBeenCalled();
   });
 });

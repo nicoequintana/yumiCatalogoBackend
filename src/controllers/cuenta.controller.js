@@ -29,6 +29,7 @@ import {
   emitirToken,
   hashDeToken,
   invalidarTokensDe,
+  revocarTokensPendientes,
 } from "../lib/tokensCuenta.js";
 import { firmarSesionCliente } from "../lib/jwtCliente.js";
 import { borrarCookieSesion, leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
@@ -606,6 +607,9 @@ export async function salir(req, res, next) {
       where: { id: req.cuentaCliente.id },
       data: { tokenVersion: { increment: 1 } },
     });
+    // "Todos los dispositivos" incluye lo que está en viaje por mail: un
+    // cambio de email o un código pendiente seguirían abriendo la cuenta.
+    await revocarTokensPendientes(prisma, req.cuentaCliente.id, [TIPOS_TOKEN.CAMBIO_EMAIL, TIPOS_TOKEN.CODIGO_ACCESO]);
     borrarCookieSesion(res);
     res.status(204).end();
   } catch (err) {
@@ -688,6 +692,9 @@ export async function cambiarPassword(req, res, next) {
       data: { passwordHash, tokenVersion: { increment: 1 } },
     });
     if (count === 0) throw httpError(409, "Tu sesión cambió mientras tanto. Volvé a intentar.");
+    // Lo pendiente se emitió con la credencial vieja: un CAMBIO_EMAIL pedido
+    // por quien secuestró la sesión se podría confirmar después del cambio.
+    await revocarTokensPendientes(prisma, cuenta.id, [TIPOS_TOKEN.CAMBIO_EMAIL, TIPOS_TOKEN.CODIGO_ACCESO, TIPOS_TOKEN.RESET]);
 
     setCookieSesion(res, firmarSesionCliente({ id: cuenta.id, email: cuenta.email, tokenVersion: cuenta.tokenVersion + 1 }));
     res.json({ ok: true });
@@ -857,6 +864,9 @@ export async function restablecer(req, res, next) {
       bloqueadoHasta: null,
     });
     if (count === 0) return responderMotivo(res, "INVALIDO");
+    // Mismo criterio que `cambiarPassword`: un CAMBIO_EMAIL o un código
+    // pendiente no sobreviven al reseteo (el RESET usado ya quedó consumido).
+    await revocarTokensPendientes(prisma, cuentaClienteId, [TIPOS_TOKEN.CAMBIO_EMAIL, TIPOS_TOKEN.CODIGO_ACCESO]);
 
     await marcarDispositivoConocido(res, cuentaClienteId);
     res.json({ ok: true });

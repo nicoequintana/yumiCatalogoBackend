@@ -6,6 +6,7 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 const updateManyMock = vi.fn();
 const findUniqueMock = vi.fn();
 const updateMock = vi.fn();
+const tokenUpdateManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -14,6 +15,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...a) => findUniqueMock(...a),
       update: (...a) => updateMock(...a),
     },
+    tokenCuenta: { updateMany: (...a) => tokenUpdateManyMock(...a) },
   },
 }));
 
@@ -37,6 +39,7 @@ beforeEach(() => {
   updateManyMock.mockReset().mockResolvedValue({ count: 1 });
   findUniqueMock.mockReset();
   updateMock.mockReset();
+  tokenUpdateManyMock.mockReset().mockResolvedValue({ count: 0 });
 });
 
 describe("salir", () => {
@@ -47,6 +50,14 @@ describe("salir", () => {
     expect(res.headers["set-cookie"].find((c) => c.startsWith("sesion_cliente=;"))).toBeDefined();
     // dispositivo_cliente NO se toca: "navegador conocido" no es sesion.
     expect(res.headers["set-cookie"].some((c) => c.startsWith("dispositivo_cliente="))).toBe(false);
+  });
+
+  it("cierra en todos lados: revoca el CAMBIO_EMAIL y el CODIGO_ACCESO pendientes", async () => {
+    const res = await request(buildApp()).post("/salir");
+    expect(res.status).toBe(204);
+    const { where, data } = tokenUpdateManyMock.mock.calls[0][0];
+    expect(where).toEqual({ cuentaClienteId: 1, tipo: { in: ["CAMBIO_EMAIL", "CODIGO_ACCESO"] }, usadoEn: null });
+    expect(data.usadoEn).toBeInstanceOf(Date);
   });
 });
 
