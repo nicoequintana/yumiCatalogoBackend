@@ -83,6 +83,15 @@ beforeEach(() => {
 });
 
 const MENSAJE = "Si hay una cuenta con ese email, te mandamos las instrucciones.";
+
+/**
+ * `procesarOlvide` corre después de `res.json`: esperar solo a que se llame
+ * `findUnique` deja las aserciones negativas pasando trivialmente (el
+ * `emitirToken` vendría un `await` más tarde). Con los mocks ya resueltos, un
+ * `setImmediate` corre recién cuando se vació la cadena de microtareas — la
+ * señal determinista de que el fondo terminó, sin sleeps por reloj.
+ */
+const vaciarFondo = () => new Promise((resolver) => setImmediate(resolver));
 const HACE_UNA_HORA = () => new Date(Date.now() - 60 * 60 * 1000);
 const HACE_DOS_DIAS = () => new Date(Date.now() - 48 * 60 * 60 * 1000);
 
@@ -109,6 +118,7 @@ describe("olvide", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ mensaje: MENSAJE });
     await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
+    await vaciarFondo();
     expect(emitirTokenMock).not.toHaveBeenCalled();
     expect(enviarResetMock).not.toHaveBeenCalled();
   });
@@ -118,6 +128,7 @@ describe("olvide", () => {
     const res = await request(buildApp()).post("/olvide").send({ email: "vieja@gmail.com" });
     expect(res.body).toEqual({ mensaje: MENSAJE });
     await vi.waitFor(() => expect(findUniqueMock).toHaveBeenCalled());
+    await vaciarFondo();
     expect(emitirTokenMock).not.toHaveBeenCalled();
   });
 
@@ -156,6 +167,7 @@ describe("olvide", () => {
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ mensaje: MENSAJE });
     }
+    await vaciarFondo();
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 });
