@@ -46,7 +46,7 @@ vi.mock("../services/notificacionesCuenta.service.js", () => ({
   enviarYaTenesCuenta: vi.fn(),
 }));
 
-const { cambiarEmail, confirmarEmail } = await import("./cuenta.controller.js");
+const { cambiarEmail, confirmarEmail } = await import("./cuentaPerfil.controller.js");
 const { hashearPassword } = await import("../lib/passwords.js");
 
 function buildApp() {

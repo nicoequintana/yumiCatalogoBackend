@@ -19,7 +19,8 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { actualizarPerfil, obtenerPerfil, salir } = await import("./cuenta.controller.js");
+const { actualizarPerfil, obtenerPerfil } = await import("./cuentaPerfil.controller.js");
+const { salir } = await import("./cuentaLogin.controller.js");
 
 function buildApp() {
   const app = express();

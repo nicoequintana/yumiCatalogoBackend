@@ -4,11 +4,8 @@ import { logAudit } from "../lib/logAudit.js";
 import { logError } from "../lib/logError.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { normalizarEmail } from "../lib/cuentasCliente.js";
-import { purgarVencidaConEmail } from "../lib/cuentaClienteReglas.js";
+import { esEmailAdmisible, purgarVencidaConEmail } from "../lib/cuentaClienteReglas.js";
 import { enviarVerificacion } from "../services/notificacionesCuenta.service.js";
-
-/** Límite del índice UNIQUE de `CuentaCliente.email` (mismo valor que `cuenta.controller.js`). */
-const LARGO_MAX_EMAIL = 254;
 
 /**
  * Reasignación OPERADA del email de una cuenta de cliente, desde el panel
@@ -40,7 +37,7 @@ export async function reasignarEmail(req, res, next) {
     if (!Number.isInteger(id)) throw httpError(404, "Cuenta no encontrada.");
 
     const emailBruto = req.body?.emailNuevo;
-    if (typeof emailBruto !== "string" || emailBruto.length > LARGO_MAX_EMAIL || !esEmailValido(emailBruto)) {
+    if (!esEmailAdmisible(emailBruto) || !esEmailValido(emailBruto)) {
       throw httpError(400, "El email nuevo no es válido.");
     }
     const emailNuevo = normalizarEmail(emailBruto);

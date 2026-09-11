@@ -25,7 +25,7 @@ vi.mock("../lib/tokensCuenta.js", async (importOriginal) => {
 });
 vi.mock("../services/notificacionesCuenta.service.js", () => ({ enviarCodigoAcceso: (...a) => enviarCodigoMock(...a) }));
 
-const { loginConCodigo, reenviarCodigo } = await import("./cuenta.controller.js");
+const { loginConCodigo, reenviarCodigo } = await import("./cuentaLogin.controller.js");
 const { manejadorDeErrores } = await import("../middlewares/errorHandler.js");
 
 function buildApp() {

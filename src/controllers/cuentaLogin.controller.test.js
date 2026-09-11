@@ -33,7 +33,7 @@ vi.mock("../lib/colaBcrypt.js", async (importOriginal) => {
   return { ...real, reservarSlot: vi.fn(real.reservarSlot), estaBajoPresion: vi.fn(real.estaBajoPresion) };
 });
 
-const { login } = await import("./cuenta.controller.js");
+const { login } = await import("./cuentaLogin.controller.js");
 const { manejadorDeErrores } = await import("../middlewares/errorHandler.js");
 const cola = await import("../lib/colaBcrypt.js");
 const { reservarSlot, estaBajoPresion } = cola;

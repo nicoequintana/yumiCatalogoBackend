@@ -16,7 +16,7 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
-const { cambiarPassword } = await import("./cuenta.controller.js");
+const { cambiarPassword } = await import("./cuentaPerfil.controller.js");
 const { hashearPassword } = await import("../lib/passwords.js");
 
 function buildApp() {

@@ -45,7 +45,8 @@ vi.mock("../lib/passwords.js", async (importOriginal) => {
 });
 vi.mock("../services/notificacionesCuenta.service.js", () => ({ enviarReset: (...a) => enviarResetMock(...a) }));
 
-const { olvide, restablecer, MENSAJES_TOKEN } = await import("./cuenta.controller.js");
+const { olvide, restablecer } = await import("./cuentaRecuperacion.controller.js");
+const { MENSAJES_TOKEN } = await import("../lib/cuentaClienteReglas.js");
 const { hashDeToken } = await import("../lib/tokensCuenta.js");
 
 function buildApp() {
