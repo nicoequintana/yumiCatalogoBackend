@@ -309,9 +309,11 @@ describe("login — cola de bcrypt", () => {
     const liberado = [];
     updateManyMock.mockImplementation(async () => (liberado.push(estado.liberado), { count: 1 }));
     findFirstDispMock.mockImplementation(async () => (liberado.push(estado.liberado), null));
-    tokenCreateMock.mockImplementation(async () => (liberado.push(estado.liberado), {}));
+    tokenCreateMock.mockImplementation(async () => (liberado.push(estado.liberado), { id: 30 }));
     findUniqueMock.mockResolvedValue(cuentaVerificada());
-    await request(buildApp()).post("/login").set("Cookie", "dispositivo_cliente=algo").send({ email: "x@gmail.com", password: CLAVE });
+    const res = await request(buildApp()).post("/login").set("Cookie", "dispositivo_cliente=algo").send({ email: "x@gmail.com", password: CLAVE });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ requiereCodigo: true });
     expect(liberado.length).toBeGreaterThanOrEqual(3);
     expect(liberado.every(Boolean)).toBe(true);
   });
