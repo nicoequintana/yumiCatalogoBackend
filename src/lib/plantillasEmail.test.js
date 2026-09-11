@@ -8,6 +8,12 @@ import {
   plantillaCambioEstadoCliente,
   plantillaOrdenCreadaAdmin,
   plantillaOrdenCreadaCliente,
+  plantillaVerificacionEmail,
+  plantillaCodigoAcceso,
+  plantillaResetPassword,
+  plantillaCambioEmail,
+  plantillaAvisoCambioEmail,
+  plantillaYaTenesCuenta,
 } from "./plantillasEmail.js";
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { ESTADOS_ORDEN } from "./estadosOrden.js";
@@ -355,5 +361,80 @@ describe("estado en el mail de cambio de estado", () => {
   it("no muestra la barra de progreso en una orden cancelada", () => {
     const { html } = plantillaCambioEstadoCliente({ ...ORDEN, estado: "CANCELADA" }, OPCIONES);
     expect(html).not.toContain("border-radius:2px");
+  });
+});
+
+const URL_SITIO = "https://yima-productos.com";
+
+describe("plantillas de cuenta — el dato sensible viaja en claro en texto Y html", () => {
+  it("verificación: el token en claro está en el link de texto y de html", () => {
+    const { texto, html } = plantillaVerificacionEmail(
+      { nombre: "Juan", tokenClaro: "TOKEN-ABC" },
+      { urlSitio: URL_SITIO },
+    );
+    expect(texto).toContain("TOKEN-ABC");
+    expect(html).toContain("TOKEN-ABC");
+    expect(texto).toContain(`${URL_SITIO}/cuenta/verificar?token=TOKEN-ABC`);
+    expect(html).not.toContain(`${URL_SITIO}//cuenta`);
+  });
+
+  it("verificación: escapa el nombre del usuario en el html", () => {
+    const { html } = plantillaVerificacionEmail(
+      { nombre: "<b>Juan</b>", tokenClaro: "x" },
+      { urlSitio: URL_SITIO },
+    );
+    expect(html).not.toContain("<b>Juan</b>");
+    expect(html).toContain("&lt;b&gt;Juan&lt;/b&gt;");
+  });
+
+  it("código de acceso: los seis dígitos están en texto y html, sin doble espacio raro", () => {
+    const { asunto, texto, html } = plantillaCodigoAcceso(
+      { codigo: "482913" },
+      { urlSitio: URL_SITIO },
+    );
+    expect(asunto).toContain("482913");
+    expect(texto).toContain("482913");
+    expect(html).toContain("482913");
+  });
+
+  it("reset: el link de restablecer lleva el token, sin barra doble", () => {
+    const { texto, html } = plantillaResetPassword(
+      { tokenClaro: "RESET-1" },
+      { urlSitio: `${URL_SITIO}/` },
+    );
+    const link = `${URL_SITIO}/cuenta/restablecer?token=RESET-1`;
+    expect(texto).toContain(link);
+    expect(html).toContain(link);
+  });
+
+  it("cambio de email (nueva dirección): lleva el link de confirmación con el token", () => {
+    const { texto, html } = plantillaCambioEmail({ tokenClaro: "CE-1" }, { urlSitio: URL_SITIO });
+    const link = `${URL_SITIO}/cuenta/email/confirmar?token=CE-1`;
+    expect(texto).toContain(link);
+    expect(html).toContain(link);
+  });
+
+  it("aviso de cambio de email (dirección vieja): muestra la dirección nueva escapada, sin link de acción", () => {
+    const { texto, html } = plantillaAvisoCambioEmail(
+      { emailNuevo: "nuevo@gmail.com" },
+      { urlSitio: URL_SITIO },
+    );
+    expect(texto).toContain("nuevo@gmail.com");
+    expect(html).toContain("nuevo@gmail.com");
+    expect(html).not.toContain("?token=");
+  });
+
+  it("ya tenés cuenta: ofrece entrar y recuperar contraseña, sin exponer ningún token", () => {
+    const { texto, html } = plantillaYaTenesCuenta({}, { urlSitio: URL_SITIO });
+    expect(texto).toContain(`${URL_SITIO}/cuenta/entrar`);
+    expect(texto).toContain(`${URL_SITIO}/cuenta/olvide`);
+    expect(html).not.toMatch(/token=/);
+  });
+
+  it("aviso de cambio de email y ya tenés cuenta: no imprimen 'null' cuando envolver recibe contexto null", () => {
+    const aviso = plantillaAvisoCambioEmail({ emailNuevo: "nuevo@gmail.com" }, { urlSitio: URL_SITIO });
+    const yaTenes = plantillaYaTenesCuenta({}, { urlSitio: URL_SITIO });
+    expect(aviso.html).not.toContain(">null<");
+    expect(yaTenes.html).not.toContain(">null<");
   });
 });

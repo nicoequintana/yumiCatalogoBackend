@@ -336,7 +336,7 @@ ${preheader(vistaPrevia)}
                 <td class="yima-pad" style="background-color:${COLOR_PANEL};border-bottom:1px solid ${COLOR_BORDE};border-radius:13px 13px 0 0;padding:26px 32px;font-family:${FUENTE};">
                   <p style="margin:0 0 6px;color:${COLOR_PRIMARIO};font-size:11px;letter-spacing:2px;text-transform:uppercase;font-weight:bold;">${escaparHtml(rotulo)}</p>
                   <h1 class="yima-titulo" style="margin:0 0 8px;color:${COLOR_TEXTO};font-size:25px;line-height:1.25;font-weight:600;">${escaparHtml(titulo)}</h1>
-                  <p style="margin:0;color:${COLOR_TEXTO_SUAVE};font-size:14px;">${contexto}</p>
+                  <p style="margin:0;color:${COLOR_TEXTO_SUAVE};font-size:14px;">${contexto ?? ""}</p>
                 </td>
               </tr>
               <tr>
@@ -435,6 +435,191 @@ export function plantillaOrdenCreadaCliente(orden, { urlSitio } = {}) {
               ${rotuloSeccion("Detalle del pedido")}
               ${detalleDelPedido(orden.items)}
               ${bloqueNotas("Tus notas", orden.notas)}`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/** URL absoluta sin barra doble, dado un `urlSitio` que puede o no traer barra final. */
+function linkDeCuenta(urlSitio, ruta) {
+  return `${(urlSitio ?? "").replace(/\/+$/, "")}${ruta}`;
+}
+
+/**
+ * Mail de verificación de cuenta (registro local). El token viaja EN CLARO acá
+ * — la base solo guarda su SHA-256 (`lib/tokensCuenta.js`) — y el link es un
+ * GET a una PANTALLA con botón, nunca al endpoint: `POST /cuenta/verificar`
+ * consume, y un `GET` que consumiera sería comido por el prefetch de Outlook.
+ */
+export function plantillaVerificacionEmail({ nombre, tokenClaro }, { urlSitio } = {}) {
+  const asunto = "Confirmá tu cuenta en YIMA";
+  const link = linkDeCuenta(urlSitio, `/cuenta/verificar?token=${tokenClaro}`);
+  const saludo = nombre ? `Hola ${nombre},` : "Hola,";
+
+  const texto = [
+    saludo,
+    "",
+    "Confirmá tu cuenta con este link:",
+    link,
+    "",
+    "Si no fuiste vos quien se registró, ignorá este mail: la cuenta se borra sola en 24 horas.",
+  ].join("\n");
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: "Un click y ya podés comprar en YIMA.",
+    rotulo: "Confirmá tu cuenta",
+    // `titulo` viaja SIN escapar: `envolver` lo escapa una sola vez (mismo
+    // contrato que el resto de las plantillas, p. ej. `plantillaOrdenCreadaCliente`).
+    // Escaparlo acá también lo dejaría doble-escapado (`&amp;lt;`).
+    titulo: nombre ? `Hola, ${nombre}` : "Confirmá tu cuenta",
+    contexto: "Un solo click y tu cuenta queda lista.",
+    cuerpo: `
+              <p style="margin:0 0 20px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Confirmá tu cuenta para empezar a comprar en YIMA.</p>
+              ${botonCta(link, "Confirmar mi cuenta")}
+              <p style="margin:0;color:${COLOR_TEXTO_TENUE};font-size:13px;line-height:1.6;">Si no fuiste vos quien se registró, ignorá este mail: la cuenta se borra sola en 24 horas.</p>`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/**
+ * Código de seis dígitos al entrar desde un dispositivo nuevo (decisión 14 de
+ * la spec). Vence en 10 minutos y tiene 5 intentos — ambos ya resueltos por
+ * `lib/tokensCuenta.js`; acá solo se muestra.
+ */
+export function plantillaCodigoAcceso({ codigo }, { urlSitio } = {}) {
+  const asunto = `Tu código de acceso: ${codigo}`;
+  const texto = [
+    `Tu código de acceso es: ${codigo}`,
+    "",
+    "Vence en 10 minutos.",
+    "",
+    "Si no fuiste vos, ignorá este mail: nadie puede entrar sin este código.",
+  ].join("\n");
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: `Código ${codigo}, vence en 10 minutos.`,
+    rotulo: "Código de acceso",
+    titulo: "Estás entrando desde un dispositivo nuevo",
+    contexto: "Vence en 10 minutos.",
+    cuerpo: `
+              <p style="margin:0 0 20px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Usá este código para completar el inicio de sesión:</p>
+              <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 22px;">
+                <tr><td style="background-color:${COLOR_PANEL};border-radius:10px;padding:18px 26px;font-size:30px;font-weight:bold;letter-spacing:8px;color:${COLOR_PRIMARIO};">${escaparHtml(codigo)}</td></tr>
+              </table>
+              <p style="margin:0;color:${COLOR_TEXTO_TENUE};font-size:13px;line-height:1.6;">Si no fuiste vos, ignorá este mail: nadie puede entrar sin este código.</p>`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/** Reseteo de contraseña. Ventana de 1 hora — más corta que VERIFICACION a propósito (ver `lib/cuentasCliente.js`). */
+export function plantillaResetPassword({ tokenClaro }, { urlSitio } = {}) {
+  const asunto = "Restablecé tu contraseña en YIMA";
+  const link = linkDeCuenta(urlSitio, `/cuenta/restablecer?token=${tokenClaro}`);
+
+  const texto = [
+    "Restablecé tu contraseña con este link:",
+    link,
+    "",
+    "Vence en 1 hora.",
+    "",
+    "Si no lo pediste vos, ignorá este mail: tu contraseña actual sigue funcionando.",
+  ].join("\n");
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: "El link vence en 1 hora.",
+    rotulo: "Recuperar contraseña",
+    titulo: "Restablecé tu contraseña",
+    contexto: "Vence en 1 hora.",
+    cuerpo: `
+              <p style="margin:0 0 20px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Tocá el botón para elegir una contraseña nueva.</p>
+              ${botonCta(link, "Restablecer contraseña")}
+              <p style="margin:0;color:${COLOR_TEXTO_TENUE};font-size:13px;line-height:1.6;">Si no lo pediste vos, ignorá este mail: tu contraseña actual sigue funcionando.</p>`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/** Confirmación de cambio de email — va a la dirección NUEVA. La Parte 2b arma el `tokenClaro` con `tipo: CAMBIO_EMAIL`. */
+export function plantillaCambioEmail({ tokenClaro }, { urlSitio } = {}) {
+  const asunto = "Confirmá tu nuevo email en YIMA";
+  const link = linkDeCuenta(urlSitio, `/cuenta/email/confirmar?token=${tokenClaro}`);
+
+  const texto = ["Confirmá que esta es tu nueva dirección de correo:", link, "", "Vence en 24 horas."].join(
+    "\n",
+  );
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: "Confirmá tu nueva dirección de correo.",
+    rotulo: "Cambio de email",
+    titulo: "Confirmá tu nuevo email",
+    contexto: "Vence en 24 horas.",
+    cuerpo: `
+              <p style="margin:0 0 20px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Pediste cambiar el email de tu cuenta a esta dirección. Confirmá para que quede activa.</p>
+              ${botonCta(link, "Confirmar este email")}`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/** Aviso a la dirección VIEJA cuando se pide un cambio de email — sin link de acción: es información, no un paso a completar. */
+export function plantillaAvisoCambioEmail({ emailNuevo }, { urlSitio } = {}) {
+  const asunto = "Alguien pidió cambiar el email de tu cuenta";
+  const texto = [
+    `Alguien pidió cambiar el email de tu cuenta a: ${emailNuevo}`,
+    "",
+    "Si fuiste vos, no hace falta que hagas nada más: se confirma desde la dirección nueva.",
+    "Si no fuiste vos, entrá a tu cuenta y cambiá tu contraseña.",
+  ].join("\n");
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: "Un aviso de seguridad sobre tu cuenta.",
+    rotulo: "Aviso de seguridad",
+    titulo: "Pidieron cambiar el email de tu cuenta",
+    contexto: null,
+    cuerpo: `
+              <p style="margin:0 0 14px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Alguien pidió cambiar el email de tu cuenta a <strong>${escaparHtml(emailNuevo)}</strong>.</p>
+              <p style="margin:0;color:${COLOR_TEXTO_SUAVE};font-size:14px;line-height:1.6;">Si fuiste vos, no hace falta que hagas nada más. Si no fuiste vos, entrá a tu cuenta y cambiá tu contraseña.</p>`,
+    pie: pieCliente(urlSitio),
+  });
+
+  return { asunto, texto, html };
+}
+
+/** Alguien intenta registrarse con un email que ya tiene cuenta verificada. Sin esto, el registro filtraría qué emails existen. */
+export function plantillaYaTenesCuenta(_datos, { urlSitio } = {}) {
+  const asunto = "Ya tenés una cuenta en YIMA";
+  const linkEntrar = linkDeCuenta(urlSitio, "/cuenta/entrar");
+  const linkOlvide = linkDeCuenta(urlSitio, "/cuenta/olvide");
+
+  const texto = [
+    "Ya tenés una cuenta en YIMA con este email.",
+    "",
+    `Entrar: ${linkEntrar}`,
+    `¿Olvidaste tu contraseña?: ${linkOlvide}`,
+  ].join("\n");
+
+  const html = envolver({
+    urlSitio,
+    vistaPrevia: "Ya tenés cuenta: entrá o recuperá tu contraseña.",
+    rotulo: "Ya tenés cuenta",
+    titulo: "Ya tenés una cuenta en YIMA",
+    contexto: null,
+    cuerpo: `
+              <p style="margin:0 0 20px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">Alguien intentó registrarse con este email, que ya tiene una cuenta.</p>
+              ${botonCta(linkEntrar, "Iniciar sesión")}
+              <p style="margin:16px 0 0;color:${COLOR_TEXTO_SUAVE};font-size:14px;"><a href="${escaparHtml(linkOlvide)}" style="color:${COLOR_PRIMARIO};">¿Olvidaste tu contraseña?</a></p>`,
     pie: pieCliente(urlSitio),
   });
 
