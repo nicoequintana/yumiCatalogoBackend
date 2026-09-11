@@ -3,19 +3,33 @@ import { httpError } from "../lib/httpError.js";
 import { logError } from "../lib/logError.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { normalizarDni, esDniValido } from "../lib/dni.js";
-import { hashearPassword, motivoPasswordRechazada } from "../lib/passwords.js";
-import { reservarSlot } from "../lib/colaBcrypt.js";
+import {
+  HASH_SENUELO,
+  compararPassword,
+  hashearPassword,
+  motivoPasswordRechazada,
+  necesitaRehash,
+} from "../lib/passwords.js";
+import { reservarSlot, estaBajoPresion } from "../lib/colaBcrypt.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
 import {
   ORIGENES_REGISTRO,
   HORAS_PURGA_NO_VERIFICADAS,
   DURACION_DISPOSITIVO_MS,
+  COOKIE_DISPOSITIVO,
+  MAX_INTENTOS_LOGIN,
+  DURACION_BLOQUEO_MS,
   normalizarEmail,
 } from "../lib/cuentasCliente.js";
-import { consumirToken, hashDeToken } from "../lib/tokensCuenta.js";
-import { setCookieDispositivo } from "../lib/cookiesCliente.js";
+import { consumirToken, emitirCodigoAcceso, hashDeToken } from "../lib/tokensCuenta.js";
+import { firmarSesionCliente } from "../lib/jwtCliente.js";
+import { leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
 import { randomBytes } from "node:crypto";
-import { enviarVerificacion, enviarYaTenesCuenta } from "../services/notificacionesCuenta.service.js";
+import {
+  enviarCodigoAcceso,
+  enviarVerificacion,
+  enviarYaTenesCuenta,
+} from "../services/notificacionesCuenta.service.js";
 
 const MENSAJE_REGISTRO = "Te mandamos un mail para confirmar tu cuenta.";
 const MOTIVO_A_MENSAJE = {
@@ -270,3 +284,128 @@ export async function verificar(req, res, next) {
     next(err);
   }
 }
+
+/*
+ * Login local (spec "Login local", decisiones 11 y 14). El señuelo, el
+ * bloqueo persistido y el código por dispositivo nuevo van juntos: ninguno se
+ * puede tocar por separado sin reabrir una amenaza cerrada.
+ */
+
+function credencialesInvalidas() {
+  return httpError(401, "Email o contraseña incorrectos.");
+}
+
+/**
+ * La condición "llegó a MAX_INTENTOS_LOGIN" va en el WHERE de una SEGUNDA
+ * escritura, nunca en un `if` que leyera el contador entre las dos: dos fallos
+ * concurrentes podrían leer 9 los dos y ninguno bloquear (mismo criterio que
+ * `stockDescontado`).
+ */
+async function registrarFallo(cuenta) {
+  await prisma.cuentaCliente.updateMany({ where: { id: cuenta.id }, data: { intentosFallidos: { increment: 1 } } });
+  await prisma.cuentaCliente.updateMany({
+    where: { id: cuenta.id, intentosFallidos: { gte: MAX_INTENTOS_LOGIN } },
+    data: { bloqueadoHasta: new Date(Date.now() + DURACION_BLOQUEO_MS) },
+  });
+}
+
+/** También lo usa el reseteo de contraseña: "olvidé mi contraseña" desbloquea. */
+async function resetearFallos(cuenta) {
+  await prisma.cuentaCliente.updateMany({ where: { id: cuenta.id }, data: { intentosFallidos: 0, bloqueadoHasta: null } });
+}
+
+/** Cookie `dispositivo_cliente` → hash → fila viva de ESA cuenta (una cookie ajena no sirve). */
+async function dispositivoConocido(req, cuenta) {
+  const claro = leerCookie(req, COOKIE_DISPOSITIVO);
+  if (!claro) return false;
+  const fila = await prisma.dispositivoConocido.findFirst({
+    where: { tokenHash: hashDeToken(claro), cuentaClienteId: cuenta.id, expiraEn: { gt: new Date() } },
+  });
+  return Boolean(fila);
+}
+
+/**
+ * Rehash-al-entrar, DESPUÉS de responder. Se saltea bajo presión de la cola y
+ * pide su propio slot: sin eso, bajo saturación una clave correcta pagaría dos
+ * bcrypt y una incorrecta uno, y el 503 pasaría a discriminar credenciales
+ * válidas. El hash viejo va en el `where`: si entre medio un reseteo cambió la
+ * contraseña, este rehash no la pisa con la anterior.
+ */
+async function rehashearSiHaceFalta(cuenta, password) {
+  if (!necesitaRehash(cuenta.passwordHash) || estaBajoPresion()) return;
+  const liberar = await reservarSlot();
+  let hash;
+  try {
+    hash = await hashearPassword(password);
+  } finally {
+    liberar();
+  }
+  await prisma.cuentaCliente.updateMany({
+    where: { id: cuenta.id, passwordHash: cuenta.passwordHash },
+    data: { passwordHash: hash },
+  });
+}
+
+/**
+ * El slot de bcrypt cubre SOLO la lectura que decide y el `compare`: se
+ * reserva antes de tocar la base (el 503 CAPACIDAD sale primero, ver
+ * `colaBcrypt.js`) y se suelta apenas termina bcrypt. El contador de fallos,
+ * el reset, el dispositivo y el código corren fuera: una base lenta no puede
+ * robarle slots al login del admin, que comparte la cola.
+ */
+export async function login(req, res, next) {
+  let cuentaExitosa = null;
+  const password = req.body?.password;
+  try {
+    const emailBruto = req.body?.email;
+    if (typeof emailBruto !== "string" || emailBruto.length > LARGO_MAX_EMAIL || typeof password !== "string") {
+      throw httpError(400, "Email y contraseña son obligatorios.");
+    }
+    const email = normalizarEmail(emailBruto);
+    if (!email) throw httpError(400, "Email y contraseña son obligatorios.");
+
+    const liberarSlot = await reservarSlot();
+    let cuenta;
+    let ok;
+    try {
+      cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
+      // Una no verificada fuera de su ventana de 24 h es INEXISTENTE aunque la
+      // purga todavía no la haya borrado: ni cuenta el fallo ni puede entrar.
+      if (cuenta && !cuenta.emailVerificado && estaFueraDeVentana(cuenta)) cuenta = null;
+      // Se compara SIEMPRE — no existe, no verificada, bloqueada o de Google
+      // sin contraseña —: ni el cuerpo ni el tiempo delatan cuál de los casos es.
+      ok = await compararPassword(password, cuenta?.passwordHash ?? HASH_SENUELO);
+    } finally {
+      liberarSlot();
+    }
+
+    const bloqueada = Boolean(cuenta?.bloqueadoHasta && cuenta.bloqueadoHasta > new Date());
+    if (!cuenta || !cuenta.emailVerificado || bloqueada || !ok) {
+      if (cuenta) await registrarFallo(cuenta);
+      throw credencialesInvalidas();
+    }
+
+    await resetearFallos(cuenta);
+    cuentaExitosa = cuenta;
+
+    if (await dispositivoConocido(req, cuenta)) {
+      setCookieSesion(res, firmarSesionCliente(cuenta));
+      res.json({ ok: true });
+    } else {
+      // Sin cookie de sesión: la clave sola no alcanza en un navegador nuevo.
+      const { codigo, expiraEn } = await emitirCodigoAcceso(cuenta.id);
+      enviarCodigoAcceso(cuenta, { codigo, expiraEn });
+      res.json({ requiereCodigo: true });
+    }
+  } catch (err) {
+    return next(err);
+  }
+
+  rehashearSiHaceFalta(cuentaExitosa, password).catch((err) => {
+    // Un 503 CAPACIDAD acá es la cola llena: se reintenta en el próximo login.
+    if (err?.codigo === "CAPACIDAD") return;
+    logError({ mensaje: `No se pudo re-hashear la contraseña de la cuenta ${cuentaExitosa.id}`, stack: err.stack, causa: err });
+  });
+}
+
+export { credencialesInvalidas, dispositivoConocido, marcarDispositivoConocido, registrarFallo, resetearFallos };
