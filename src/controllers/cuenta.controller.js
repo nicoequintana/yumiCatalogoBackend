@@ -169,6 +169,43 @@ async function marcarDispositivoConocido(res, cuentaClienteId) {
  * prefetchean todo link de un mail — un GET que consumiera el token lo
  * quemaría antes de que la persona lo vea.
  */
+const MENSAJE_REENVIO = "Si tenés una cuenta pendiente de confirmar, te mandamos un mail nuevo.";
+
+/**
+ * Mismo trato "silencioso" que la rama ya-verificada de `/registro`: ni
+ * cuenta inexistente ni ya verificada mandan nada — acá no aplica "olvidé mi
+ * contraseña", solo el mail de verificación de una cuenta pendiente.
+ */
+async function procesarReenvio(email) {
+  const cuenta = await prisma.cuentaCliente.findUnique({ where: { email } });
+  if (!cuenta || cuenta.emailVerificado) return;
+  await invalidarTokensDe(cuenta.id, "VERIFICACION");
+  await enviarVerificacion(cuenta);
+}
+
+export async function reenviarVerificacion(req, res, next) {
+  try {
+    const emailBruto = req.body?.email;
+
+    // Mismo guard que `/registro`, ANTES de responder: un email con forma
+    // inválida no arriesga la Amenaza 16 (nunca toca la base ni depende de
+    // si esa dirección existe), así que un 400 acá no delata nada.
+    if (typeof emailBruto !== "string" || emailBruto.length > LARGO_MAX_EMAIL || !esEmailValido(emailBruto)) {
+      throw httpError(400, "El email no es válido.");
+    }
+
+    const email = normalizarEmail(emailBruto);
+
+    res.json({ mensaje: MENSAJE_REENVIO });
+
+    procesarReenvio(email).catch((err) => {
+      logError({ mensaje: `No se pudo procesar el reenvío de verificación de ${email}`, stack: err.stack, causa: err });
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function verificar(req, res, next) {
   try {
     const tokenClaro = req.body?.token;

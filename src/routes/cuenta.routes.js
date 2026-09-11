@@ -18,6 +18,7 @@ router.use(exigirOrigen);
 
 router.post("/registro", limitadores.registroIp, limitadores.registroDestino, cuentaController.registro);
 router.post("/verificar", limitadores.verificarIp, cuentaController.verificar);
+router.post("/reenviar-verificacion", limitadores.reenviarVerificacionIp, cuentaController.reenviarVerificacion);
 
 // La Parte 2b agrega las de login, Google, recuperación y perfil DESPUÉS de estas.
 

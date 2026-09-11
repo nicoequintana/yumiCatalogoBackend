@@ -411,3 +411,91 @@ describe("POST /api/cuenta/verificar", () => {
     expect(res.status).toBe(404);
   });
 });
+
+/**
+ * Para la rama de `procesarReenvio` que no llama a ningún mock (cuenta
+ * verificada, o inexistente: `return` inmediato tras el único `await` del
+ * `findUnique`) no hay ninguna señal positiva para esperar con `vi.waitFor`
+ * — a diferencia de `/registro`, acá no hay una purga global al final de la
+ * cadena. Un `setImmediate` alcanza: es un tick del event loop, no un sleep
+ * por tiempo de pared, y la cadena tiene un solo `await` de por medio.
+ */
+const esperarUnTick = () => new Promise((resolve) => setImmediate(resolve));
+
+describe("POST /api/cuenta/reenviar-verificacion", () => {
+  const BODY = { email: "juan@gmail.com" };
+
+  it("responde SIEMPRE 200 con el mismo mensaje, exista o no la cuenta", async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+    const resInexistente = await request(buildApp())
+      .post("/api/cuenta/reenviar-verificacion")
+      .set("Origin", ORIGIN)
+      .send({ email: "nadie@gmail.com" });
+
+    findUniqueMock.mockResolvedValueOnce({ id: 20, email: "juan@gmail.com", emailVerificado: false });
+    const resExistente = await request(buildApp())
+      .post("/api/cuenta/reenviar-verificacion")
+      .set("Origin", ORIGIN)
+      .send(BODY);
+
+    expect(resInexistente.status).toBe(200);
+    expect(resExistente.status).toBe(200);
+    expect(resInexistente.body).toEqual(resExistente.body);
+  });
+
+  it("existente y no verificada: invalida los tokens VERIFICACION previos y emite uno nuevo", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 21, email: "juan@gmail.com", emailVerificado: false });
+
+    await request(buildApp()).post("/api/cuenta/reenviar-verificacion").set("Origin", ORIGIN).send(BODY);
+
+    await vi.waitFor(() => {
+      expect(invalidarTokensDeMock).toHaveBeenCalledWith(21, "VERIFICACION");
+      expect(enviarVerificacionMock).toHaveBeenCalled();
+    });
+  });
+
+  it("ya verificada: no reenvía nada (no es 'olvidé mi contraseña')", async () => {
+    findUniqueMock.mockResolvedValueOnce({ id: 22, email: "juan@gmail.com", emailVerificado: true });
+
+    await request(buildApp()).post("/api/cuenta/reenviar-verificacion").set("Origin", ORIGIN).send(BODY);
+    await esperarUnTick();
+
+    expect(invalidarTokensDeMock).not.toHaveBeenCalled();
+    expect(enviarVerificacionMock).not.toHaveBeenCalled();
+  });
+
+  it("cuenta inexistente: no toca invalidarTokensDe ni enviarVerificacion", async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+
+    await request(buildApp()).post("/api/cuenta/reenviar-verificacion").set("Origin", ORIGIN).send(BODY);
+    await esperarUnTick();
+
+    expect(invalidarTokensDeMock).not.toHaveBeenCalled();
+    expect(enviarVerificacionMock).not.toHaveBeenCalled();
+  });
+
+  it("email inválido: 400 sin tocar la base (mismo criterio de /registro)", async () => {
+    const res = await request(buildApp())
+      .post("/api/cuenta/reenviar-verificacion")
+      .set("Origin", ORIGIN)
+      .send({ email: "no-es-un-email" });
+    expect(res.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("email de más de 254 caracteres: 400 sin tocar la base", async () => {
+    const emailLargo = `a@${"b".repeat(250)}.com`;
+    const res = await request(buildApp())
+      .post("/api/cuenta/reenviar-verificacion")
+      .set("Origin", ORIGIN)
+      .send({ email: emailLargo });
+    expect(res.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("sin Origin: 403 antes de cualquier otra cosa (segunda capa CSRF)", async () => {
+    const res = await request(buildApp()).post("/api/cuenta/reenviar-verificacion").send(BODY);
+    expect(res.status).toBe(403);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+});
