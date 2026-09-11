@@ -1,8 +1,8 @@
-import { randomBytes } from "node:crypto";
-import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
 import { httpError } from "../lib/httpError.js";
+import { logError } from "../lib/logError.js";
+import { HASH_SENUELO, compararPassword, hashearPassword, necesitaRehash } from "../lib/passwords.js";
 
 // Ventana de vida del token. Se bajó de 7 días a 24 horas para acotar la
 // exposición de un token robado que pase inadvertido: la revocación por
@@ -10,24 +10,23 @@ import { httpError } from "../lib/httpError.js";
 // contraseña, pero no cubre un robo silencioso donde la víctima no cambia nada.
 // Contra ese caso, la única defensa es que el token caduque pronto.
 const JWT_EXPIRES_IN = "24h";
-const SALT_ROUNDS = 10;
 
-// Hash señuelo contra el que se compara cuando el email NO existe.
-//
-// NO BORRAR: esta comparación parece inútil (su resultado se descarta) pero es
-// la defensa contra la enumeración de usuarios. Sin ella, un email inexistente
-// devuelve 401 en microsegundos porque nunca se paga el costo de bcrypt,
-// mientras que un email real tarda ~100 ms; esa diferencia es medible desde
-// afuera y le permite a un atacante averiguar qué direcciones son admins antes
-// de empezar a probar contraseñas. Pagando siempre el mismo costo, los dos
-// casos tardan lo mismo.
-//
-// Se genera al cargar el módulo a partir de bytes aleatorios: nadie —ni quien
-// lea este código— conoce la contraseña que le dio origen, así que no es una
-// credencial y no puede validar ningún intento de login. Usa los mismos
-// SALT_ROUNDS que los hashes reales (ver `usuarios.controller.js` y
-// `scripts/create-admin.js`) para que el tiempo de comparación coincida.
-const HASH_SENUELO = bcrypt.hashSync(randomBytes(32).toString("hex"), SALT_ROUNDS);
+/**
+ * Re-hashea la contraseña con el costo vigente después de un login exitoso.
+ *
+ * Es la forma de subir el costo de bcrypt sin migración y sin pedirle la
+ * clave a nadie: cada admin lo hace solo la próxima vez que entra. Corre
+ * DESPUÉS de responder y nunca lanza — un fallo acá no puede convertir un
+ * login válido en un error.
+ */
+function rehashSiHaceFalta({ id, passwordHash }, password) {
+  if (!necesitaRehash(passwordHash)) return;
+  hashearPassword(password)
+    .then((nuevo) => prisma.usuario.update({ where: { id }, data: { passwordHash: nuevo } }))
+    .catch((err) => {
+      logError({ mensaje: `No se pudo re-hashear la contraseña del usuario ${id}`, stack: err.stack, causa: err });
+    });
+}
 
 export async function login(req, res, next) {
   try {
@@ -41,9 +40,11 @@ export async function login(req, res, next) {
 
     const usuario = await prisma.usuario.findUnique({ where: { email } });
 
-    // Se compara SIEMPRE, exista o no el usuario (ver HASH_SENUELO arriba):
-    // salir temprano acá reintroduciría el canal lateral de tiempo.
-    const passwordValida = await bcrypt.compare(password, usuario?.passwordHash ?? HASH_SENUELO);
+    // Se compara SIEMPRE, exista o no el usuario (ver HASH_SENUELO en
+    // lib/passwords.js): salir temprano acá reintroduciría el canal lateral
+    // de tiempo — un email inexistente respondería en microsegundos y uno
+    // existente en ~120 ms, y ese tiempo revela qué cuentas hay.
+    const passwordValida = await compararPassword(password, usuario?.passwordHash ?? HASH_SENUELO);
     if (!usuario || !passwordValida) throw credencialesInvalidas();
 
     // `email` viaja en el payload junto al `sub` para que `requireAuth` pueda
@@ -62,6 +63,8 @@ export async function login(req, res, next) {
       { expiresIn: JWT_EXPIRES_IN },
     );
     res.json({ token });
+
+    rehashSiHaceFalta(usuario, password);
   } catch (err) {
     next(err);
   }

@@ -1,10 +1,8 @@
-import bcrypt from "bcryptjs";
+import { hashearPassword } from "../lib/passwords.js";
 import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
 import { esEmailValido } from "../lib/emailValido.js";
-
-const SALT_ROUNDS = 10;
 
 /**
  * Mínimo de caracteres de la contraseña — la MISMA política que
@@ -63,7 +61,7 @@ export async function crear(req, res, next) {
     const existente = await prisma.usuario.findUnique({ where: { email } });
     if (existente) throw httpError(400, "Ya existe un usuario con ese email.");
 
-    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    const passwordHash = await hashearPassword(password);
     // El default es `true`, igual que el de la columna: un alta hecha desde un
     // cliente que no conoce el campo no puede quedar sin permiso por accidente.
     // Restringir es siempre una decisión explícita.
@@ -124,7 +122,7 @@ export async function actualizar(req, res, next) {
 
     if (password) {
       validarPassword(password);
-      data.passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+      data.passwordHash = await hashearPassword(password);
       // Rotar la contraseña invalida TODOS los JWT emitidos antes del cambio:
       // `requireAuth` compara la versión del token contra esta columna y revoca
       // si difieren (ver `middlewares/auth.middleware.js`). Solo se incrementa

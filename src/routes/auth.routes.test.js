@@ -7,10 +7,27 @@ import { manejadorDeErrores } from "../middlewares/errorHandler.js";
 
 process.env.JWT_SECRET = "test-secret";
 
+// `POST /api/auth/login` está detrás de un limitador de 8 solicitudes/15min
+// con store en memoria por proceso (ver rateLimit.middleware.js), singleton
+// de módulo que no se resetea test a test. Esta suite ya hacía exactamente 8
+// POST reales antes del `describe` de rehash; sumar tres más pisaba el tope y
+// los nuevos tests recibían 429 en vez del status que en realidad prueban.
+// Mismo mock que ordenes.routes.test.js — el comportamiento del limitador
+// tiene su propia cobertura en rateLimit.middleware.test.js.
+vi.mock("../middlewares/rateLimit.middleware.js", () => ({
+  crearLimitadorDeVelocidad: () => (_req, _res, next) => next(),
+}));
+
 const findUniqueMock = vi.fn();
+const updateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
-  prisma: { usuario: { findUnique: (...args) => findUniqueMock(...args) } },
+  prisma: {
+    usuario: {
+      findUnique: (...args) => findUniqueMock(...args),
+      update: (...args) => updateMock(...args),
+    },
+  },
 }));
 
 const { default: authRouter } = await import("./auth.routes.js");
@@ -25,6 +42,7 @@ function buildApp() {
 
 beforeEach(() => {
   findUniqueMock.mockReset();
+  updateMock.mockReset();
 });
 
 describe("POST /api/auth/login", () => {
@@ -120,5 +138,51 @@ describe("POST /api/auth/login", () => {
   it("responde 400 si falta email o password", async () => {
     const res = await request(buildApp()).post("/api/auth/login").send({ email: "admin@test.com" });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/auth/login — rehash al entrar", () => {
+  it("si el hash guardado es de costo 10, lo regenera con el costo vigente en un login exitoso", async () => {
+    const hashViejo = bcrypt.hashSync("secreta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@yima.test", passwordHash: hashViejo, tokenVersion: 0 });
+    updateMock.mockResolvedValue({});
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@yima.test", password: "secreta" });
+
+    expect(res.status).toBe(200);
+    // El rehash es fire-and-forget: se espera un tick para que corra.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const { where, data } = updateMock.mock.calls[0][0];
+    expect(where).toEqual({ id: 1 });
+    expect(bcrypt.getRounds(data.passwordHash)).toBe(11);
+  });
+
+  it("si el hash ya tiene el costo vigente, no escribe nada", async () => {
+    const hashNuevo = bcrypt.hashSync("secreta", 11);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@yima.test", passwordHash: hashNuevo, tokenVersion: 0 });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@yima.test", password: "secreta" });
+
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("con la clave incorrecta no re-hashea aunque el hash sea viejo", async () => {
+    const hashViejo = bcrypt.hashSync("secreta", 10);
+    findUniqueMock.mockResolvedValue({ id: 1, email: "admin@yima.test", passwordHash: hashViejo, tokenVersion: 0 });
+
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@yima.test", password: "otra" });
+
+    expect(res.status).toBe(401);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
