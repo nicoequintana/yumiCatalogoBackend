@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { httpError } from "../lib/httpError.js";
 import { logError } from "../lib/logError.js";
 import { HASH_SENUELO, compararPassword, hashearPassword, necesitaRehash } from "../lib/passwords.js";
+import { estaBajoPresion, reservarSlot } from "../lib/colaBcrypt.js";
 
 // Ventana de vida del token. Se bajó de 7 días a 24 horas para acotar la
 // exposición de un token robado que pase inadvertido: la revocación por
@@ -29,12 +30,19 @@ function rehashSiHaceFalta({ id, passwordHash }, password) {
 }
 
 export async function login(req, res, next) {
+  let liberarSlot = null;
   try {
     const email = req.body?.email?.trim();
     const password = req.body?.password;
+
     if (!email || !password) {
       throw httpError(400, "Email y contraseña son obligatorios.");
     }
+
+    // ANTES de la base: si se reservara después del findUnique, con la cola
+    // llena "cuenta existente" daría 503 y "inexistente" 401 rápido — un
+    // oráculo por código de estado que anula el señuelo del login.
+    liberarSlot = await reservarSlot();
 
     const credencialesInvalidas = () => httpError(401, "Email o contraseña incorrectos.");
 
@@ -62,10 +70,16 @@ export async function login(req, res, next) {
       process.env.JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN },
     );
+
     res.json({ token });
 
-    rehashSiHaceFalta(usuario, password);
+    // Bajo presión no se re-hashea: sería una segunda operación de bcrypt
+    // solo cuando la clave es correcta, y el 503 pasaría a discriminar
+    // credenciales válidas.
+    if (!estaBajoPresion()) rehashSiHaceFalta(usuario, password);
   } catch (err) {
     next(err);
+  } finally {
+    if (liberarSlot) liberarSlot();
   }
 }

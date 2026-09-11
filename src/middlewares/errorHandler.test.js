@@ -273,6 +273,24 @@ describe("manejadorDeErrores — ruido en consola", () => {
   });
 });
 
+describe("manejadorDeErrores — codigo y Retry-After", () => {
+  it("propaga `codigo` y `Retry-After` cuando el error los trae", async () => {
+    const app = express();
+    app.get("/x", (_req, _res, next) => {
+      const err = new Error("lleno");
+      err.status = 503;
+      err.codigo = "CAPACIDAD";
+      err.retryAfter = 2;
+      next(err);
+    });
+    app.use(manejadorDeErrores);
+    const res = await request(app).get("/x");
+    expect(res.status).toBe(503);
+    expect(res.headers["retry-after"]).toBe("2");
+    expect(res.body).toEqual({ error: "lleno", codigo: "CAPACIDAD" });
+  });
+});
+
 describe("manejadorDeErrores — propagación de la causa", () => {
   it("manda err.cause a logError para que llegue al ErrorLog", async () => {
     // Este es el caso real de `cloudinary.service.js`: el SDK rechaza con un

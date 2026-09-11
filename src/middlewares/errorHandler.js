@@ -113,5 +113,6 @@ export function manejadorDeErrores(err, req, res, _next) {
     status,
   });
 
-  res.status(status).json({ error: mensaje });
+  if (err?.retryAfter) res.set("Retry-After", String(err.retryAfter));
+  res.status(status).json({ error: mensaje, ...(err?.codigo && { codigo: err.codigo }) });
 }

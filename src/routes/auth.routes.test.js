@@ -30,6 +30,13 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
+const reservarSlotMock = vi.fn();
+const estaBajoPresionMock = vi.fn(() => false);
+vi.mock("../lib/colaBcrypt.js", () => ({
+  reservarSlot: (...args) => reservarSlotMock(...args),
+  estaBajoPresion: () => estaBajoPresionMock(),
+}));
+
 const { default: authRouter } = await import("./auth.routes.js");
 
 function buildApp() {
@@ -43,6 +50,9 @@ function buildApp() {
 beforeEach(() => {
   findUniqueMock.mockReset();
   updateMock.mockReset();
+  reservarSlotMock.mockReset();
+  reservarSlotMock.mockResolvedValue(() => {});
+  estaBajoPresionMock.mockReturnValue(false);
 });
 
 describe("POST /api/auth/login", () => {
@@ -182,6 +192,49 @@ describe("POST /api/auth/login — rehash al entrar", () => {
       .send({ email: "admin@yima.test", password: "otra" });
 
     expect(res.status).toBe(401);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("reserva un slot de la cola ANTES de consultar la base", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    await request(buildApp()).post("/api/auth/login").send({ email: "x@y.z", password: "p" });
+    expect(reservarSlotMock).toHaveBeenCalledTimes(1);
+    expect(reservarSlotMock.mock.invocationCallOrder[0]).toBeLessThan(findUniqueMock.mock.invocationCallOrder[0]);
+  });
+
+  it("con la cola llena responde 503 CAPACIDAD sin tocar la base", async () => {
+    const lleno = new Error("lleno");
+    lleno.status = 503;
+    lleno.codigo = "CAPACIDAD";
+    lleno.retryAfter = 2;
+    reservarSlotMock.mockRejectedValue(lleno);
+    const res = await request(buildApp()).post("/api/auth/login").send({ email: "x@y.z", password: "p" });
+    expect(res.status).toBe(503);
+    expect(res.body.codigo).toBe("CAPACIDAD");
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("libera el slot aunque el login falle", async () => {
+    const liberar = vi.fn();
+    reservarSlotMock.mockResolvedValue(liberar);
+    findUniqueMock.mockResolvedValue(null);
+    await request(buildApp()).post("/api/auth/login").send({ email: "x@y.z", password: "p" });
+    expect(liberar).toHaveBeenCalledTimes(1);
+  });
+
+  it("bajo presion NO re-hashea: una clave correcta no puede costar dos operaciones y una incorrecta una", async () => {
+    estaBajoPresionMock.mockReturnValue(true);
+    findUniqueMock.mockResolvedValue({
+      id: 1,
+      email: "admin@yima.test",
+      passwordHash: bcrypt.hashSync("secreta", 10),
+      tokenVersion: 0,
+    });
+    const res = await request(buildApp())
+      .post("/api/auth/login")
+      .send({ email: "admin@yima.test", password: "secreta" });
+    expect(res.status).toBe(200);
     await new Promise((r) => setTimeout(r, 300));
     expect(updateMock).not.toHaveBeenCalled();
   });
