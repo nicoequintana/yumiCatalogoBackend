@@ -21,7 +21,7 @@ import {
   DURACION_BLOQUEO_MS,
   normalizarEmail,
 } from "../lib/cuentasCliente.js";
-import { consumirToken, emitirCodigoAcceso, hashDeToken } from "../lib/tokensCuenta.js";
+import { consumirCodigoAcceso, consumirToken, emitirCodigoAcceso, hashDeToken } from "../lib/tokensCuenta.js";
 import { firmarSesionCliente } from "../lib/jwtCliente.js";
 import { leerCookie, setCookieDispositivo, setCookieSesion } from "../lib/cookiesCliente.js";
 import { randomBytes } from "node:crypto";
@@ -432,3 +432,81 @@ export async function login(req, res, next) {
 }
 
 export { credencialesInvalidas, dispositivoConocido, marcarDispositivoConocido, registrarFallo, resetearFallos };
+
+/*
+ * Código de acceso (spec "Código de acceso", decisión 14): el segundo paso
+ * de `login` cuando el dispositivo no es conocido, y su reenvío.
+ */
+
+function codigoInvalido() {
+  return httpError(401, "Código incorrecto o vencido.");
+}
+
+/**
+ * Una cuenta inexistente, no verificada o con código incorrecto/agotado
+ * responden EXACTO lo mismo (401, mismo mensaje). El guard de
+ * `emailVerificado` es cinturón y tirantes: ni `login` ni `reenviarCodigo`
+ * emiten un CODIGO_ACCESO para una cuenta no verificada, así que
+ * `consumirCodigoAcceso` ya fallaría sola — pero no depender de esa
+ * garantía implícita es el mismo criterio que la ventana de 24 h en
+ * `login`.
+ */
+export async function loginConCodigo(req, res, next) {
+  try {
+    const emailBruto = req.body?.email;
+    const codigo = req.body?.codigo;
+
+    // `typeof === "string"` y el tope de 254 ANTES de normalizar o tocar la
+    // base: mismo guard que `login` y `registro` (índice UNIQUE de
+    // `CuentaCliente.email`, ruling de Parte 1).
+    if (typeof emailBruto !== "string" || emailBruto.length > LARGO_MAX_EMAIL) throw codigoInvalido();
+    const email = normalizarEmail(emailBruto);
+    const cuenta = email ? await prisma.cuentaCliente.findUnique({ where: { email } }) : null;
+    if (!cuenta || !cuenta.emailVerificado) throw codigoInvalido();
+
+    const { ok } = await consumirCodigoAcceso({ cuentaClienteId: cuenta.id, codigo });
+    if (!ok) throw codigoInvalido();
+
+    setCookieSesion(res, firmarSesionCliente(cuenta));
+    await marcarDispositivoConocido(res, cuenta.id);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const MENSAJE_REENVIO_CODIGO = "Si corresponde, te mandamos un código nuevo.";
+
+/**
+ * Emite un código nuevo (invalida el anterior) y lo manda. Nunca lanza: la
+ * respuesta genérica ya salió antes de llamarla.
+ */
+async function procesarReenvioCodigo(cuenta) {
+  const { codigo, expiraEn } = await emitirCodigoAcceso(cuenta.id);
+  await enviarCodigoAcceso(cuenta, { codigo, expiraEn });
+}
+
+/**
+ * SIEMPRE 200 (Amenaza 16, mismo criterio que `/reenviar-verificacion`): el
+ * trabajo de base y el envío corren DESPUÉS de responder, para que el
+ * tiempo de respuesta no delate si el email pertenece a una cuenta
+ * existente y verificada.
+ */
+export async function reenviarCodigo(req, res, next) {
+  try {
+    const emailBruto = req.body?.email;
+    const emailValido = typeof emailBruto === "string" && emailBruto.length <= LARGO_MAX_EMAIL;
+    const email = emailValido ? normalizarEmail(emailBruto) : "";
+    const cuenta = email ? await prisma.cuentaCliente.findUnique({ where: { email } }) : null;
+
+    res.json({ mensaje: MENSAJE_REENVIO_CODIGO });
+
+    if (cuenta && cuenta.emailVerificado) {
+      procesarReenvioCodigo(cuenta).catch((err) => {
+        logError({ mensaje: `No se pudo procesar el reenvío de código de la cuenta ${cuenta.id}`, stack: err.stack, causa: err });
+      });
+    }
+  } catch (err) {
+    next(err);
+  }
+}
