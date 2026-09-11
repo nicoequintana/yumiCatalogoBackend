@@ -11,12 +11,20 @@ import { rateLimit } from "express-rate-limit";
 // ser compartido entre procesos y el límite se resetearía por instancia. No
 // se resuelve acá (requeriría un store externo tipo Redis) por ser
 // over-engineering para el deploy actual de un solo contenedor.
-export function crearLimitadorDeVelocidad({ windowMs, max, message = "Demasiadas solicitudes, probá de nuevo más tarde." }) {
+export function crearLimitadorDeVelocidad({
+  windowMs,
+  max,
+  message = "Demasiadas solicitudes, probá de nuevo más tarde.",
+  keyGenerator,
+  skip,
+}) {
   return rateLimit({
     windowMs,
     max,
     standardHeaders: true,
     legacyHeaders: false,
+    ...(keyGenerator && { keyGenerator }),
+    ...(skip && { skip }),
     handler: (_req, res) => {
       res.status(429).json({ error: message });
     },
