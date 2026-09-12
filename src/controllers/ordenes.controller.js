@@ -17,6 +17,7 @@ import { httpError } from "../lib/httpError.js";
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
+import { exigirTextoAcotado } from "../lib/cuentaClienteReglas.js";
 import {
   DETALLE_ORDEN_INCLUDE,
   LISTADO_ORDEN_INCLUDE,
@@ -207,32 +208,99 @@ async function upsertClienteConReintento(tx, { dni, nombre, telefono, email }) {
   }
 }
 
+/** Lo único que el checkout necesita del perfil, y lo único que puede escribirle. */
+const SELECT_PERFIL_CHECKOUT = { nombre: true, telefono: true, dni: true };
+
 /**
- * Resuelve el contacto de un checkout CON sesión: los cuatro campos salen de
- * la cuenta, NINGUNO del body.
+ * Lista blanca de lo que el body puede escribir en `CuentaCliente`: SOLO
+ * nombre/telefono/dni (spec, `POST /ordenes` con sesión: "opcional
+ * `{ nombre, telefono, dni }` (se escriben en la cuenta)").
+ *
+ * Ni `email` —que sale siempre de la sesión verificada— ni `emailVerificado`,
+ * `passwordHash`, `tokenVersion` u `origenRegistro` (amenaza 8, mass
+ * assignment). Las reglas de cada campo son las MISMAS que las de
+ * `PUT /cuenta` (`cuentaPerfil.controller.js`'s `actualizarPerfil`) y salen de
+ * los mismos módulos —`exigirTextoAcotado`, `normalizarDni`/`esDniValido`—
+ * para que no puedan divergir: un checkout más permisivo que el perfil
+ * escribiría en la cuenta lo que el perfil rechaza.
+ *
+ * Devuelve `{}` cuando el body no trae ninguno de los tres, que es la señal de
+ * que no hay nada que escribir.
+ */
+function datosDePerfilDelBody(body) {
+  const data = {};
+
+  if (body?.nombre !== undefined) {
+    data.nombre = exigirTextoAcotado(body.nombre, {
+      etiqueta: "El nombre",
+      siVacio: "El nombre no puede estar vacío.",
+    });
+  }
+  if (body?.telefono !== undefined) {
+    data.telefono = exigirTextoAcotado(body.telefono, {
+      etiqueta: "El teléfono",
+      siVacio: "El teléfono no puede estar vacío.",
+    });
+  }
+  if (body?.dni !== undefined) {
+    const dni = normalizarDni(body.dni);
+    if (!esDniValido(dni)) throw httpError(400, "El DNI debe tener 7 u 8 dígitos.");
+    data.dni = dni;
+  }
+
+  return data;
+}
+
+/**
+ * Resuelve el contacto de un checkout CON sesión, en dos pasos:
+ *
+ *   1. Si el body trae `nombre`/`telefono`/`dni`, se ESCRIBEN en la cuenta
+ *      (lista blanca, ver `datosDePerfilDelBody`).
+ *   2. El contacto de la orden sale de la cuenta —la fila ya actualizada si
+ *      hubo escritura, una lectura si no—, y el `email` SIEMPRE de la sesión.
  *
  * `req.cuentaCliente` solo lleva `{ id, email }` (ver
- * `authCliente.middleware.js`), así que el perfil se relee acá — fuera de la
+ * `authCliente.middleware.js`), de ahí la consulta. Va FUERA de la
  * transacción, igual que `validarYSnapshotearProductos`.
  *
- * **Por qué el body no puede aportar nada** (amenazas 5 y 7 de la spec): el
- * `Cliente` se busca y se pisa POR DNI, así que un comprador logueado que
- * mande el DNI de otra persona le reescribiría nombre y teléfono a esa fila,
- * y el comprobante saldría con datos que él eligió. Con el contacto resuelto
- * desde la cuenta, el peor caso es que alguien ensucie SU propio `Cliente`.
- * El guard del frontend (`RequireAuthCliente`) ya exige nombre + teléfono +
- * DNI antes de dejar llegar al checkout: los campos del body son redundantes
- * en el camino feliz, y peligrosos en el otro.
+ * **Por qué el body actualiza el perfil en vez de alimentar la orden**
+ * (amenazas 5 y 7): el `Cliente` se busca y se pisa POR DNI, así que si el
+ * contacto de la orden saliera del body, un comprador logueado que mande el
+ * DNI de otra persona le reescribiría nombre y teléfono a ESA fila y elegiría
+ * a qué casilla sale el comprobante. Escribiendo primero en la cuenta, lo
+ * único que alguien puede tocar es SU PROPIA cuenta —la sesión decide sobre
+ * qué fila se escribe, no el body—, y recién después esa cuenta define el
+ * contacto. De paso resuelve el caso real que motivó que el campo sea
+ * opcional: una cuenta nacida de Google no tiene DNI, y sin este paso jamás
+ * podría comprar aunque la persona lo tipee.
  *
- * Perfil incompleto → 400 que manda a completarlo. No se completa con el body
- * ni se deja pasar: `Cliente.nombre` es NOT NULL y el `$transaction`
- * explotaría con un 500 en vez de decir qué falta.
+ * Perfil todavía incompleto después del paso 1 → 400 que manda a completarlo,
+ * porque `Cliente.nombre` es NOT NULL y el `$transaction` explotaría con un
+ * 500 que no dice qué falta.
  */
-async function resolverContactoDeLaCuenta(cuentaCliente) {
-  const perfil = await prisma.cuentaCliente.findUnique({
-    where: { id: cuentaCliente.id },
-    select: { nombre: true, telefono: true, dni: true },
-  });
+async function resolverContactoDeLaCuenta(cuentaCliente, body) {
+  const cambios = datosDePerfilDelBody(body);
+
+  let perfil;
+  if (Object.keys(cambios).length > 0) {
+    try {
+      perfil = await prisma.cuentaCliente.update({
+        where: { id: cuentaCliente.id },
+        data: cambios,
+        select: SELECT_PERFIL_CHECKOUT,
+      });
+    } catch (err) {
+      // P2025 = la cuenta se borró entre el middleware y esta escritura.
+      // Mismo criterio que `actualizarPerfil`: 404, no el 500 opaco de Prisma.
+      if (err?.code === "P2025") throw httpError(404, "Cuenta no encontrada.");
+      throw err;
+    }
+  } else {
+    perfil = await prisma.cuentaCliente.findUnique({
+      where: { id: cuentaCliente.id },
+      select: SELECT_PERFIL_CHECKOUT,
+    });
+  }
 
   const contacto = {
     dni: perfil?.dni ?? null,
@@ -260,8 +328,9 @@ async function resolverContactoDeLaCuenta(cuentaCliente) {
  * rate-limiting se aplica a nivel de ruta, no acá.
  *
  * CON SESIÓN (decisión 8 de la spec):
- *   - Los cuatro datos de contacto salen de la CUENTA, ninguno del body — ver
- *     `resolverContactoDeLaCuenta`.
+ *   - `nombre`/`telefono`/`dni` del body, si vienen, se escriben en la CUENTA;
+ *     el contacto de la orden sale después de esa cuenta y el `email` siempre
+ *     de la sesión — ver `resolverContactoDeLaCuenta`.
  *   - La orden se crea con `cuentaClienteId`: es el campo por el que "Mis
  *     pedidos" filtra, y su NULL en las órdenes de invitado es lo que deja el
  *     historial anterior a la cuenta fuera de toda vista logueada.
@@ -287,7 +356,7 @@ export async function crear(req, res, next) {
     const { notas, items } = req.body;
 
     const { dni, nombre, telefono, email } = cuentaCliente
-      ? await resolverContactoDeLaCuenta(cuentaCliente)
+      ? await resolverContactoDeLaCuenta(cuentaCliente, req.body)
       : req.body;
 
     validarCamposBase({ dni, nombre, telefono, email, items });

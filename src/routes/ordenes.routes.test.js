@@ -49,6 +49,7 @@ vi.mock("../services/notificacionesOrden.service.js", () => ({
 }));
 
 const cuentaClienteFindUniqueMock = vi.fn();
+const cuentaClienteUpdateMock = vi.fn();
 const clienteFindUniqueMock = vi.fn();
 const clienteCreateMock = vi.fn();
 const clienteUpdateMock = vi.fn();
@@ -73,7 +74,10 @@ vi.mock("../lib/prisma.js", () => ({
     // El perfil de la cuenta se lee FUERA de la transacción —igual que
     // `validarYSnapshotearProductos`—, así que el mock vive en el `prisma`
     // de arriba y no en el cliente que recibe el `$transaction`.
-    cuentaCliente: { findUnique: (...args) => cuentaClienteFindUniqueMock(...args) },
+    cuentaCliente: {
+      findUnique: (...args) => cuentaClienteFindUniqueMock(...args),
+      update: (...args) => cuentaClienteUpdateMock(...args),
+    },
     cliente: {
       findUnique: (...args) => clienteFindUniqueMock(...args),
       create: (...args) => clienteCreateMock(...args),
@@ -168,6 +172,7 @@ beforeEach(() => {
   auditCreateMock.mockReset();
   auditCreateMock.mockResolvedValue({ id: 1 });
   cuentaClienteFindUniqueMock.mockReset();
+  cuentaClienteUpdateMock.mockReset();
   clienteFindUniqueMock.mockReset();
   clienteCreateMock.mockReset();
   clienteUpdateMock.mockReset();
@@ -290,9 +295,11 @@ describe("POST /api/ordenes — corte por flag (decisión 7)", () => {
     clienteCreateMock.mockResolvedValue(CLIENTE);
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
     ordenCreateMock.mockResolvedValue(ORDEN);
-    // Perfil DISTINTO del body de invitado en los cuatro campos: así un 201
-    // con sesión no puede pasar por casualidad mirando solo el status.
+    // Perfil DISTINTO del body de invitado en los tres campos: así un 201 con
+    // sesión no puede pasar por casualidad mirando solo el status. Las dos
+    // puertas del perfil (lectura y actualización) devuelven lo mismo.
     cuentaClienteFindUniqueMock.mockResolvedValue(PERFIL_CUENTA);
+    cuentaClienteUpdateMock.mockResolvedValue(PERFIL_CUENTA);
   }
 
   it("flag false, sin sesión: 201 como el checkout de invitado de siempre", async () => {
@@ -318,14 +325,15 @@ describe("POST /api/ordenes — corte por flag (decisión 7)", () => {
 
   it("flag false, CON sesión: 201, pero el Cliente sale de la CUENTA, no del body", async () => {
     prepararAltaExitosa();
+    // Sin contacto en el body: el checkout lo resuelve entero desde el perfil.
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_INVITADO);
+      .send({ items: BODY_INVITADO.items });
 
     expect(res.status).toBe(201);
-    // Los cuatro campos del body quedaron descartados: este test deja de ser
-    // un duplicado del de invitado justo acá.
+    // Ninguno de los cuatro valores del body de invitado llegó a la base: este
+    // test deja de ser un duplicado del de invitado justo acá.
     expect(clienteCreateMock).toHaveBeenCalledWith({
       data: {
         dni: PERFIL_CUENTA.dni,
@@ -373,21 +381,27 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
   const CUENTA = { id: 9, email: "cuenta@gmail.com" };
   const CUENTA_HEADER = JSON.stringify(CUENTA);
 
-  // El body que manda un atacante logueado: los cuatro datos de contacto son
-  // de OTRA persona. Ninguno tiene que llegar a la base.
-  const BODY_HOSTIL = {
+  // Body con sesión: los tres campos de perfil son legítimos (se escriben en
+  // la PROPIA cuenta), pero el `email` y todo lo demás tiene que rebotar
+  // contra la lista blanca.
+  const BODY_CON_PERFIL = {
     dni: "12345678",
     nombre: "Juan Perez",
     telefono: "1122334455",
     email: "el-email-de-otro@evil.com",
+    emailVerificado: true,
+    tokenVersion: 99,
     items: [{ productId: 1, cantidad: 1 }],
   };
 
+  /** Lo que queda en la cuenta después de escribirle los tres campos del body. */
+  const PERFIL_ESCRITO = { nombre: "Juan Perez", telefono: "1122334455", dni: "12345678" };
+
   const CLIENTE_DE_LA_CUENTA = {
     id: 11,
-    dni: PERFIL_CUENTA.dni,
-    nombre: PERFIL_CUENTA.nombre,
-    telefono: PERFIL_CUENTA.telefono,
+    dni: PERFIL_ESCRITO.dni,
+    nombre: PERFIL_ESCRITO.nombre,
+    telefono: PERFIL_ESCRITO.telefono,
     email: CUENTA.email,
   };
 
@@ -409,44 +423,102 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     clienteCreateMock.mockResolvedValue(CLIENTE_DE_LA_CUENTA);
     ordenCreateMock.mockResolvedValue(ORDEN_CON_CUENTA);
     cuentaClienteFindUniqueMock.mockResolvedValue(PERFIL_CUENTA);
+    cuentaClienteUpdateMock.mockResolvedValue(PERFIL_ESCRITO);
   });
 
   it("el email SIEMPRE sale de la cuenta, nunca del body", async () => {
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
 
     expect(res.status).toBe(201);
     expect(clienteCreateMock).toHaveBeenCalledWith({
       data: expect.objectContaining({ email: CUENTA.email }),
     });
+    // Y tampoco se coló como escritura del perfil.
+    expect(cuentaClienteUpdateMock.mock.calls[0][0].data).not.toHaveProperty("email");
   });
 
-  it("nombre/telefono/dni salen de la CUENTA aunque el body mande otros (amenazas 5 y 7)", async () => {
+  it("nombre/telefono/dni del body SE ESCRIBEN en la cuenta, y nada más (lista blanca)", async () => {
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
+
+    expect(res.status).toBe(201);
+    expect(cuentaClienteUpdateMock).toHaveBeenCalledWith({
+      where: { id: CUENTA.id },
+      data: { nombre: "Juan Perez", telefono: "1122334455", dni: "12345678" },
+      select: { nombre: true, telefono: true, dni: true },
+    });
+    // `emailVerificado` y `tokenVersion` viajaban en el body (amenaza 8).
+    const escrito = cuentaClienteUpdateMock.mock.calls[0][0].data;
+    expect(escrito).not.toHaveProperty("emailVerificado");
+    expect(escrito).not.toHaveProperty("tokenVersion");
+  });
+
+  it("el contacto de la orden sale de la cuenta YA ACTUALIZADA", async () => {
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send(BODY_CON_PERFIL);
 
     expect(res.status).toBe(201);
     expect(clienteCreateMock).toHaveBeenCalledWith({
       data: {
-        dni: PERFIL_CUENTA.dni,
-        nombre: PERFIL_CUENTA.nombre,
-        telefono: PERFIL_CUENTA.telefono,
+        dni: PERFIL_ESCRITO.dni,
+        nombre: PERFIL_ESCRITO.nombre,
+        telefono: PERFIL_ESCRITO.telefono,
         email: CUENTA.email,
       },
     });
   });
 
-  it("sin contacto en el body, lo resuelve igual desde el perfil", async () => {
+  it("el DNI del body se normaliza antes de escribirse en la cuenta", async () => {
+    await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send({ dni: "12.345.678", items: [{ productId: 1, cantidad: 1 }] });
+
+    expect(cuentaClienteUpdateMock).toHaveBeenCalledWith({
+      where: { id: CUENTA.id },
+      data: { dni: "12345678" },
+      select: { nombre: true, telefono: true, dni: true },
+    });
+  });
+
+  it("un DNI inválido en el body es 400 y no escribe NADA (ni perfil ni orden)", async () => {
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send({ dni: "123", items: [{ productId: 1, cantidad: 1 }] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/7 u 8 dígitos/i);
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
+    expect(ordenCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("un nombre vacío en el body es 400, igual que en PUT /cuenta", async () => {
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send({ nombre: "   ", items: [{ productId: 1, cantidad: 1 }] });
+
+    expect(res.status).toBe(400);
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
+    expect(ordenCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("sin contacto en el body, lee el perfil y NO lo escribe", async () => {
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
       .send({ items: [{ productId: 1, cantidad: 1 }] });
 
     expect(res.status).toBe(201);
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
     expect(cuentaClienteFindUniqueMock).toHaveBeenCalledWith({
       where: { id: CUENTA.id },
       select: { nombre: true, telefono: true, dni: true },
@@ -461,13 +533,13 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     });
   });
 
-  it("si el perfil está incompleto, 400 que manda a completarlo — y no escribe nada", async () => {
+  it("si el perfil está incompleto y el body no aporta nada, 400 que manda a completarlo", async () => {
     cuentaClienteFindUniqueMock.mockResolvedValue({ nombre: null, telefono: null, dni: null });
 
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send({ items: [{ productId: 1, cantidad: 1 }] });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/perfil/i);
@@ -475,15 +547,38 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     expect(ordenCreateMock).not.toHaveBeenCalled();
   });
 
-  it("el body NO puede completar un perfil incompleto: sigue siendo 400", async () => {
+  // El agujero funcional de la primera versión: una cuenta nacida de Google no
+  // tiene DNI, y el checkout ignoraba el que la persona tipeaba — no podía
+  // comprar NUNCA. Ahora ese DNI se escribe en la cuenta y la compra sale.
+  it("una cuenta SIN dni compra igual si el body trae uno válido", async () => {
+    cuentaClienteUpdateMock.mockResolvedValue({ ...PERFIL_CUENTA, dni: "87654321" });
+
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send({ dni: "87654321", items: [{ productId: 1, cantidad: 1 }] });
+
+    expect(res.status).toBe(201);
+    expect(cuentaClienteUpdateMock).toHaveBeenCalledWith({
+      where: { id: CUENTA.id },
+      data: { dni: "87654321" },
+      select: { nombre: true, telefono: true, dni: true },
+    });
+    expect(clienteCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({ dni: "87654321", email: CUENTA.email }),
+    });
+  });
+
+  it("una cuenta SIN dni y sin dni en el body es 400, no un 500 del $transaction", async () => {
     cuentaClienteFindUniqueMock.mockResolvedValue({ ...PERFIL_CUENTA, dni: null });
 
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send({ items: [{ productId: 1, cantidad: 1 }] });
 
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/perfil/i);
     expect(ordenCreateMock).not.toHaveBeenCalled();
   });
 
@@ -491,7 +586,7 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
 
     expect(res.status).toBe(201);
     expect(clienteCreateMock).toHaveBeenCalledTimes(1);
@@ -502,7 +597,7 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
 
     expect(ordenCreateMock.mock.calls[0][0].data.cuentaClienteId).toBe(CUENTA.id);
   });
@@ -521,14 +616,17 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
       });
 
     expect(ordenCreateMock.mock.calls[0][0].data.cuentaClienteId).toBeNull();
+    // Sin sesión no hay perfil que leer NI que escribir: el checkout de
+    // invitado no toca `CuentaCliente` por ningún lado.
     expect(cuentaClienteFindUniqueMock).not.toHaveBeenCalled();
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
   });
 
   it("la respuesta con sesión pasa por mapOrdenCuenta: sin cliente ni ids de identidad", async () => {
     const res = await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
 
     expect(res.status).toBe(201);
     expect(res.body).not.toHaveProperty("cliente");
@@ -566,7 +664,7 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     await request(buildApp())
       .post("/api/ordenes")
       .set("x-test-cuenta", CUENTA_HEADER)
-      .send(BODY_HOSTIL);
+      .send(BODY_CON_PERFIL);
 
     const fila = notificarOrdenCreadaMock.mock.calls[0][0];
     expect(fila.cuentaCliente?.email ?? fila.cliente?.email).toBe(CUENTA.email);
