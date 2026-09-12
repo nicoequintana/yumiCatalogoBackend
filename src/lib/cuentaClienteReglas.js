@@ -127,6 +127,26 @@ export async function marcarDispositivoConocido(res, cuentaClienteId) {
 }
 
 /**
+ * Hermano de `exigirTextoAcotado` para campos de texto REALMENTE opcionales,
+ * de los que además hace falta poder BORRAR el valor (el apodo del perfil):
+ * `exigirTextoAcotado` tira 400 ante un valor vacío, así que sirve para
+ * campos obligatorios pero no para uno que la persona tiene que poder dejar
+ * en blanco sin que eso sea un error.
+ *
+ * Vacío, solo espacios, `null` o `undefined` degradan a `null` — el valor que
+ * borra la columna — en vez de lanzar. Mismo tope (`LARGO_MAX_TEXTO`) y mismo
+ * formato de mensaje que `exigirTextoAcotado` para lo que sí llega con texto.
+ */
+export function textoOpcionalAcotado(valor, { etiqueta }) {
+  const texto = typeof valor === "string" ? valor.trim() : "";
+  if (!texto) return null;
+  if (texto.length > LARGO_MAX_TEXTO) {
+    throw httpError(400, `${etiqueta} no puede superar los ${LARGO_MAX_TEXTO} caracteres.`);
+  }
+  return texto;
+}
+
+/**
  * Antes de mover una cuenta a `email`, borra la fila que ya lo tiene SOLO si
  * es un registro abandonado: nunca verificada (`verificadaEn` NULL), fuera de
  * su ventana de 24 h y sin pedidos (FK `NoAction` de `Orden`). Esa fila ya es
