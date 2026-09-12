@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { LISTADO_ORDEN_INCLUDE, mapOrdenListado } from "./ordenes.mapper.js";
 
 const ordenFindManyMock = vi.fn();
 
@@ -37,7 +38,9 @@ const ORDEN_1 = {
   id: 1,
   clienteId: 10,
   estado: "ENTREGADA",
-  items: [{ id: 1, nombreProducto: "Producto A", precioUnitario: "100.00", cantidad: 1 }],
+  cliente: { nombre: "Juan", dni: "12345678", telefono: "1", email: "a@a.com" },
+  cuentaCliente: null,
+  items: [{ nombreProducto: "Producto A", precioUnitario: "100.00", costoUnitario: "40.00", cantidad: 1 }],
   createdAt: new Date("2026-01-02"),
 };
 
@@ -45,7 +48,9 @@ const ORDEN_2 = {
   id: 2,
   clienteId: 10,
   estado: "PENDIENTE",
-  items: [{ id: 2, nombreProducto: "Producto B", precioUnitario: "50.00", cantidad: 3 }],
+  cliente: { nombre: "Juan", dni: "12345678", telefono: "1", email: "a@a.com" },
+  cuentaCliente: { id: 5, nombre: "Nombre De Cuenta", telefono: "2", email: "b@b.com" },
+  items: [{ nombreProducto: "Producto B", precioUnitario: "50.00", costoUnitario: "20.00", cantidad: 3 }],
   createdAt: new Date("2026-01-05"),
 };
 
@@ -54,7 +59,7 @@ beforeEach(() => {
 });
 
 describe("obtenerHistorialCliente()", () => {
-  it("devuelve todas las órdenes del cliente ordenadas por createdAt desc, con items", async () => {
+  it("devuelve las órdenes del cliente mapeadas con mapOrdenListado (createdAt desc)", async () => {
     ordenFindManyMock.mockResolvedValue([ORDEN_2, ORDEN_1]);
 
     const { req, res, next } = buildReqRes({ params: { dni: "12345678" } });
@@ -65,11 +70,42 @@ describe("obtenerHistorialCliente()", () => {
       expect.objectContaining({
         where: { cliente: { dni: "12345678" } },
         orderBy: { createdAt: "desc" },
-        include: { items: true },
+        include: LISTADO_ORDEN_INCLUDE,
       }),
     );
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual([ORDEN_2, ORDEN_1]);
+    expect(res.body).toEqual([ORDEN_2, ORDEN_1].map(mapOrdenListado));
+  });
+
+  it("NO emite costoUnitario línea por línea (la fila cruda de Prisma lo traía)", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_1]);
+
+    const { req, res } = buildReqRes({ params: { dni: "12345678" } });
+    await obtenerHistorialCliente(req, res, vi.fn());
+
+    expect(JSON.stringify(res.body)).not.toContain("costoUnitario");
+  });
+
+  it("emite estadoEtiqueta, total y resumen (forma de listado, no la fila cruda)", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_2]);
+
+    const { req, res } = buildReqRes({ params: { dni: "12345678" } });
+    await obtenerHistorialCliente(req, res, vi.fn());
+
+    expect(res.body[0].estadoEtiqueta).toBe("Pendiente");
+    expect(res.body[0].total).toBe("150");
+    expect(res.body[0].cantidadItems).toBe(1);
+    expect(res.body[0].resumen).toEqual([{ nombreProducto: "Producto B", cantidad: 3 }]);
+    expect(res.body[0].items).toBeUndefined();
+  });
+
+  it("el nombre del cliente resuelve desde cuentaCliente cuando la orden tiene una", async () => {
+    ordenFindManyMock.mockResolvedValue([ORDEN_2]);
+
+    const { req, res } = buildReqRes({ params: { dni: "12345678" } });
+    await obtenerHistorialCliente(req, res, vi.fn());
+
+    expect(res.body[0].cliente.nombre).toBe("Nombre De Cuenta");
   });
 
   it("normaliza el DNI de la URL antes de consultar ('12.345.678' -> '12345678')", async () => {

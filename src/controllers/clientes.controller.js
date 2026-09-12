@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { normalizarDni } from "../lib/dni.js";
+import { LISTADO_ORDEN_INCLUDE, mapOrdenListado } from "./ordenes.mapper.js";
 
 /**
  * Tope de órdenes del historial de un cliente. La pantalla del admin lo usa
@@ -18,6 +19,14 @@ export const MAX_ORDENES_HISTORIAL = 100;
  * el mismo `normalizarDni` que usa `ordenes.controller.js`'s `crear()` antes
  * de filtrar.
  *
+ * Pasa por `mapOrdenListado` con `LISTADO_ORDEN_INCLUDE` (decisión 12 de la
+ * spec, tarea E): antes emitía la fila CRUDA de Prisma, con `costoUnitario`
+ * línea por línea filtrado a cualquiera con auth de admin que abriera esta
+ * pantalla — la misma fuga que `mapOrden` existe para tapar en
+ * `POST /ordenes`, acá sin cerrar. De paso, el `cliente` de cada fila queda
+ * resuelto desde `cuentaCliente ?? cliente`, igual que en el listado
+ * principal de órdenes.
+ *
  * Si no existe ningún cliente con ese DNI, devuelve un array vacío (200),
  * NO un 404: un admin buscando un DNI sin historial no es un caso de error,
  * es un resultado válido de "no hay nada". El filtro por relación
@@ -32,10 +41,10 @@ export async function obtenerHistorialCliente(req, res, next) {
       where: { cliente: { dni } },
       orderBy: { createdAt: "desc" },
       take: MAX_ORDENES_HISTORIAL,
-      include: { items: true },
+      include: LISTADO_ORDEN_INCLUDE,
     });
 
-    res.json(ordenes);
+    res.json(ordenes.map(mapOrdenListado));
   } catch (err) {
     next(err);
   }
