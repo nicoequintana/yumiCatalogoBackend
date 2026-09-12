@@ -329,6 +329,59 @@ describe("GET /api/admin/operacion — lista de estados", () => {
   });
 });
 
+describe("GET /api/admin/operacion — contacto de estancadas con cuenta", () => {
+  // Decisión 12 de la spec: el contacto de una orden con cuenta se resuelve
+  // desde `CuentaCliente`, nunca desde `Cliente` a secas (alguien puede haber
+  // pisado el DNI compartido con el nombre de otra persona).
+  it("clienteNombre de una estancada sale de cuentaCliente cuando la orden tiene cuenta", async () => {
+    ordenFindManyMock.mockImplementation(async (args) => {
+      if (args?.where?.estado?.in && args?.where?.updatedAt) {
+        return [
+          {
+            id: 1,
+            estado: "PENDIENTE",
+            updatedAt: haceDias(5),
+            cliente: { nombre: "Nombre Viejo" },
+            cuentaCliente: { nombre: "Nombre De Cuenta" },
+            items: [{ precioUnitario: "1000", cantidad: 1 }],
+          },
+        ];
+      }
+      return [];
+    });
+    ordenCountMock.mockResolvedValue(1);
+
+    const res = await pedirOperacion();
+
+    expect(res.status).toBe(200);
+    expect(res.body.ordenesEstancadas.lista[0].clienteNombre).toBe("Nombre De Cuenta");
+  });
+
+  it("sin cuentaCliente, cae al nombre de Cliente como siempre", async () => {
+    ordenFindManyMock.mockImplementation(async (args) => {
+      if (args?.where?.estado?.in && args?.where?.updatedAt) {
+        return [
+          {
+            id: 1,
+            estado: "PENDIENTE",
+            updatedAt: haceDias(5),
+            cliente: { nombre: "Nombre De Cliente" },
+            cuentaCliente: null,
+            items: [{ precioUnitario: "1000", cantidad: 1 }],
+          },
+        ];
+      }
+      return [];
+    });
+    ordenCountMock.mockResolvedValue(1);
+
+    const res = await pedirOperacion();
+
+    expect(res.status).toBe(200);
+    expect(res.body.ordenesEstancadas.lista[0].clienteNombre).toBe("Nombre De Cliente");
+  });
+});
+
 describe("GET /api/admin/operacion — etiqueta en las estancadas", () => {
   it("cada orden estancada trae estadoEtiqueta, igual que mapOrden", async () => {
     ordenFindManyMock.mockResolvedValue([

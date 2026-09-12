@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { totalDeItems } from "../lib/dinero.js";
 import { aClaveDia, parsearPeriodo } from "./admin.controller.js";
+import { contactoDeOrden } from "./ordenes.mapper.js";
 // Fuente única de los estados de `Orden` (ver lib/estadosOrden.js). Acá el
 // tablero de estancamiento se limita a los no terminales, y `ESTADOS_ORDEN`
 // fija las claves de la respuesta.
@@ -114,6 +115,10 @@ export async function resumenOperacion(req, res, next) {
           estado: true,
           updatedAt: true,
           cliente: { select: { nombre: true } },
+          // Decisión 12: si la orden tiene cuenta, el contacto se resuelve
+          // desde ahí — reusa `contactoDeOrden` (mismo criterio que
+          // `notificacionesOrden.service.js`), nunca desde `Cliente` a secas.
+          cuentaCliente: { select: { nombre: true } },
           items: { select: { precioUnitario: true, cantidad: true } },
         },
       }),
@@ -173,7 +178,7 @@ export async function resumenOperacion(req, res, next) {
         // el badge del frontend no necesite su propio diccionario.
         estadoEtiqueta: etiquetaDeEstado(orden.estado),
         diasSinCambios: diasDesde(orden.updatedAt, ahora),
-        clienteNombre: orden.cliente?.nombre ?? "Sin cliente",
+        clienteNombre: contactoDeOrden(orden).nombre ?? "Sin cliente",
         total: totalDeItems(orden.items).toFixed(0),
       }))
       .sort((a, b) => b.diasSinCambios - a.diasSinCambios);
