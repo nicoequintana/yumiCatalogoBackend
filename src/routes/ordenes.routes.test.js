@@ -67,6 +67,8 @@ const ordenGroupByMock = vi.fn();
 const eventoTraficoCreateMock = vi.fn();
 const promocionItemFindManyMock = vi.fn();
 const auditCreateMock = vi.fn();
+const claveIdempotenciaFindUniqueMock = vi.fn();
+const claveIdempotenciaCreateMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -104,6 +106,14 @@ vi.mock("../lib/prisma.js", () => ({
     promocionItem: {
       findMany: (...args) => promocionItemFindManyMock(...args),
     },
+    // El lookup previo de la clave va FUERA de la transacción (es la vuelta
+    // barata del replay: sin él, un reenvío revalidaría productos y
+    // reescribiría el perfil antes de darse cuenta). La ESCRITURA, en cambio,
+    // solo existe dentro del `$transaction` de abajo: es la que tiene que
+    // commitear junto con la orden o no commitear nada.
+    claveIdempotencia: {
+      findUnique: (...args) => claveIdempotenciaFindUniqueMock(...args),
+    },
     $transaction: async (cb) =>
       cb({
         cliente: {
@@ -121,6 +131,9 @@ vi.mock("../lib/prisma.js", () => ({
           findUnique: (...args) => ordenFindUniqueMock(...args),
           update: (...args) => ordenUpdateMock(...args),
           updateMany: (...args) => ordenUpdateManyMock(...args),
+        },
+        claveIdempotencia: {
+          create: (...args) => claveIdempotenciaCreateMock(...args),
         },
       }),
   },
@@ -202,6 +215,11 @@ beforeEach(() => {
   notificarOrdenCreadaMock.mockResolvedValue(undefined);
   notificarCambioEstadoMock.mockReset();
   notificarCambioEstadoMock.mockResolvedValue({ intentada: true, enviada: true });
+  claveIdempotenciaFindUniqueMock.mockReset();
+  // Por defecto la clave NO existe todavía: es el primer envío.
+  claveIdempotenciaFindUniqueMock.mockResolvedValue(null);
+  claveIdempotenciaCreateMock.mockReset();
+  claveIdempotenciaCreateMock.mockResolvedValue({});
 });
 
 describe("POST /api/ordenes", () => {
@@ -668,6 +686,303 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
 
     const fila = notificarOrdenCreadaMock.mock.calls[0][0];
     expect(fila.cuentaCliente?.email ?? fila.cliente?.email).toBe(CUENTA.email);
+  });
+});
+
+/**
+ * Idempotencia del checkout con sesión (decisión 9, amenaza 13).
+ *
+ * Lo que estos tests defienden es UNA cosa: **quien arbitra la carrera es el
+ * `@@unique([cuentaClienteId, clave])`, no una lectura.** El lookup previo
+ * existe solo como atajo del reenvío tranquilo; el caso que importa —dos
+ * requests simultáneos que leen "no existe" al mismo tiempo— lo decide el
+ * `P2002` del `create` dentro de la transacción, y el perdedor devuelve LA
+ * MISMA orden del ganador, nunca una segunda ni un error.
+ */
+describe("POST /api/ordenes — idempotencia (decisión 9, amenaza 13)", () => {
+  const CUENTA = { id: 9, email: "cuenta@gmail.com" };
+  const CUENTA_HEADER = JSON.stringify(CUENTA);
+  const CLAVE = "clave-del-cliente-abc123";
+
+  const BODY = {
+    dni: "12345678",
+    nombre: "Juan Perez",
+    telefono: "1122334455",
+    claveIdempotencia: CLAVE,
+    items: [{ productId: 1, cantidad: 1 }],
+  };
+
+  /** La orden que ya existía: la que el ganador de la carrera creó. */
+  const ORDEN_EXISTENTE = {
+    id: 300,
+    estado: "PENDIENTE",
+    items: [{ nombreProducto: "Producto A", precioUnitario: "100", cantidad: 1 }],
+  };
+
+  /** La que crea ESTE request cuando la clave es nueva. */
+  const ORDEN_NUEVA = {
+    id: 300,
+    clienteId: 11,
+    cuentaClienteId: 9,
+    estado: "PENDIENTE",
+    cliente: CLIENTE,
+    items: [{ nombreProducto: "Producto A", precioUnitario: "100", cantidad: 1 }],
+  };
+
+  /** El error que tira Prisma cuando el `@@unique` de la clave rechaza el insert. */
+  function colisionDeClave() {
+    return Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { target: ["cuentaClienteId", "clave"] },
+    });
+  }
+
+  function pedir(body = BODY, { conSesion = true } = {}) {
+    const req = request(buildApp()).post("/api/ordenes");
+    if (conSesion) req.set("x-test-cuenta", CUENTA_HEADER);
+    return req.send(body);
+  }
+
+  beforeEach(() => {
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    ordenCreateMock.mockResolvedValue(ORDEN_NUEVA);
+    cuentaClienteUpdateMock.mockResolvedValue({
+      nombre: "Juan Perez",
+      telefono: "1122334455",
+      dni: "12345678",
+    });
+    cuentaClienteFindUniqueMock.mockResolvedValue(PERFIL_CUENTA);
+  });
+
+  it("primera vez: crea la orden Y la clave en la MISMA transacción, y responde 201", async () => {
+    const res = await pedir();
+
+    expect(res.status).toBe(201);
+    expect(claveIdempotenciaCreateMock).toHaveBeenCalledWith({
+      data: { cuentaClienteId: 9, clave: CLAVE, ordenId: 300 },
+    });
+  });
+
+  it("el lookup previo es por el par (cuenta, clave), nunca por la clave sola", async () => {
+    // Amenaza 13: una clave elegida por el cliente ("1") no puede alcanzar la
+    // orden de otra cuenta. El scope lo da el `@@unique` compuesto, así que el
+    // `where` tiene que llevar las DOS mitades.
+    await pedir({ ...BODY, claveIdempotencia: "1" });
+
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { cuentaClienteId_clave: { cuentaClienteId: 9, clave: "1" } },
+      }),
+    );
+  });
+
+  it("la MISMA clave literal de OTRA cuenta crea su propia orden, no devuelve la ajena", async () => {
+    // El lookup de la cuenta 77 no encuentra nada (su par es otro), así que
+    // esta compra sigue de largo y crea LO SUYO, atando la clave a SU cuenta.
+    const res = await pedir(
+      { ...BODY, claveIdempotencia: "1" },
+      { conSesion: true },
+    ).set("x-test-cuenta", JSON.stringify({ id: 77, email: "otra@gmail.com" }));
+
+    expect(res.status).toBe(201);
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { cuentaClienteId_clave: { cuentaClienteId: 77, clave: "1" } },
+      }),
+    );
+    expect(claveIdempotenciaCreateMock).toHaveBeenCalledWith({
+      data: { cuentaClienteId: 77, clave: "1", ordenId: 300 },
+    });
+  });
+
+  it("clave repetida: 200 con la orden existente, sin crear una segunda", async () => {
+    claveIdempotenciaFindUniqueMock.mockResolvedValue({ orden: ORDEN_EXISTENTE });
+
+    const res = await pedir();
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(300);
+    expect(ordenCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("un reenvío no reescribe el perfil ni vuelve a tocar productos", async () => {
+    // El corte va ANTES de la escritura del perfil: reenviar el mismo checkout
+    // no puede volver a pisar la cuenta ni revalidar el catálogo.
+    claveIdempotenciaFindUniqueMock.mockResolvedValue({ orden: ORDEN_EXISTENTE });
+
+    await pedir();
+
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
+    expect(productFindManyMock).not.toHaveBeenCalled();
+    expect(notificarOrdenCreadaMock).not.toHaveBeenCalled();
+  });
+
+  it("la respuesta del reenvío pasa por mapOrdenCuenta (sin cliente ni ids)", async () => {
+    claveIdempotenciaFindUniqueMock.mockResolvedValue({
+      orden: { ...ORDEN_EXISTENTE, cliente: CLIENTE, clienteId: 10, cuentaClienteId: 9 },
+    });
+
+    const res = await pedir();
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("cliente");
+    expect(res.body).not.toHaveProperty("clienteId");
+    expect(res.body).not.toHaveProperty("cuentaClienteId");
+    expect(res.body.estadoEtiqueta).toBe("Pendiente");
+  });
+
+  // EL test de la carrera: sin la guarda, esto termina en dos órdenes o en un
+  // 500. Las dos requests leyeron "no existe" (el `mockResolvedValue(null)` del
+  // `beforeEach`), así que el árbitro es el unique del insert.
+  it("carrera: el P2002 de la clave releé y devuelve la orden del GANADOR, con 200", async () => {
+    claveIdempotenciaCreateMock.mockRejectedValueOnce(colisionDeClave());
+    claveIdempotenciaFindUniqueMock
+      .mockResolvedValueOnce(null) // el lookup previo: todavía no había nada
+      .mockResolvedValueOnce({ orden: ORDEN_EXISTENTE }); // el reintento post-P2002
+
+    const res = await pedir();
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(300);
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(2);
+    // El perdedor NO deja una segunda orden: su `create` viajó dentro de la
+    // transacción que el P2002 revierte entera.
+    expect(claveIdempotenciaCreateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("el perdedor de la carrera no notifica ni emite el evento de orden creada", async () => {
+    // Su transacción se revirtió: no hay orden nueva que avisar. Un comprobante
+    // por cada reintento sería un mail por click de más.
+    claveIdempotenciaCreateMock.mockRejectedValueOnce(colisionDeClave());
+    claveIdempotenciaFindUniqueMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ orden: ORDEN_EXISTENTE });
+
+    await pedir();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(notificarOrdenCreadaMock).not.toHaveBeenCalled();
+    expect(eventoTraficoCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("un P2002 que NO es de la clave no se disfraza de reenvío", async () => {
+    // El de `Cliente.dni`, por ejemplo, que `upsertClienteConReintento` relanza
+    // tras agotar sus intentos. Tragarlo como idempotencia devolvería un 200
+    // con la orden de otro envío, o un 200 sin orden ninguna. Acá tiene que
+    // salir por donde salía antes: el 400 que arma el error handler real para
+    // cualquier violación de unique.
+    ordenCreateMock.mockRejectedValue(
+      Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+        meta: { target: ["dni"] },
+      }),
+    );
+
+    const res = await pedir();
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Ya existe un registro/i);
+    // El reintento del lookup es EXCLUSIVO de la colisión de la clave: acá no
+    // se vuelve a consultar la tabla.
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("el OTRO unique de la tabla (ordenId) tampoco se lee como reenvío", async () => {
+    // `ClaveIdempotencia` tiene dos uniques, y algunos conectores reportan el
+    // NOMBRE del índice en vez de las columnas: `ClaveIdempotencia_ordenId_key`
+    // contiene "clave" por el nombre del modelo. Leerlo como idempotencia
+    // contestaría 200 con la orden de otro envío.
+    claveIdempotenciaCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error("Unique constraint failed"), {
+        code: "P2002",
+        meta: { target: "ClaveIdempotencia_ordenId_key" },
+      }),
+    );
+
+    const res = await pedir();
+
+    expect(res.status).toBe(400);
+    // No hubo reintento del lookup: esto no es la carrera de la clave.
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("si tras el P2002 la clave no aparece, falla en vez de inventar una respuesta", async () => {
+    // No debería pasar (el unique acaba de rechazar por esa fila), pero si
+    // pasa, un 201 sin orden o un 200 vacío sería peor que propagar el error.
+    claveIdempotenciaCreateMock.mockRejectedValueOnce(colisionDeClave());
+    claveIdempotenciaFindUniqueMock.mockResolvedValue(null);
+
+    const res = await pedir();
+
+    expect(res.status).toBe(400);
+    expect(res.body).not.toHaveProperty("id");
+    // Sí lo reintentó: el lookup previo y el de después del P2002.
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sin claveIdempotencia en el body, la tabla no se consulta ni se escribe", async () => {
+    const { claveIdempotencia: _clave, ...sinClave } = BODY;
+
+    const res = await pedir(sinClave);
+
+    expect(res.status).toBe(201);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
+    expect(claveIdempotenciaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("una clave de más de 64 caracteres es 400, y no toca la base", async () => {
+    // El tope es el de la columna (`VarChar(64)`): sin este corte, la clave
+    // llegaría al insert y volvería como un 500 del driver.
+    const res = await pedir({ ...BODY, claveIdempotencia: "x".repeat(65) });
+
+    expect(res.status).toBe(400);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
+    // Antes de CUALQUIER escritura: el perfil tampoco se tocó.
+    expect(cuentaClienteUpdateMock).not.toHaveBeenCalled();
+    expect(productFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("una clave que no es un string es 400 (un objeto en el body no puede ser un where)", async () => {
+    const res = await pedir({ ...BODY, claveIdempotencia: { gt: "" } });
+
+    expect(res.status).toBe(400);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("una clave vacía es 400: no es una clave", async () => {
+    const res = await pedir({ ...BODY, claveIdempotencia: "   " });
+
+    expect(res.status).toBe(400);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("SIN sesión la clave se IGNORA: la tabla está indexada por cuenta", async () => {
+    ordenCreateMock.mockResolvedValue(ORDEN);
+
+    const res = await pedir(
+      { ...BODY, email: "juan@gmail.com" },
+      { conSesion: false },
+    );
+
+    expect(res.status).toBe(201);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
+    expect(claveIdempotenciaCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("SIN sesión una clave inválida tampoco rompe el checkout de invitado", async () => {
+    // El invitado no cambia (amenaza 6): un campo que para él no significa
+    // nada no puede empezar a rechazarle la compra.
+    ordenCreateMock.mockResolvedValue(ORDEN);
+
+    const res = await pedir(
+      { ...BODY, email: "juan@gmail.com", claveIdempotencia: "x".repeat(500) },
+      { conSesion: false },
+    );
+
+    expect(res.status).toBe(201);
+    expect(claveIdempotenciaFindUniqueMock).not.toHaveBeenCalled();
   });
 });
 

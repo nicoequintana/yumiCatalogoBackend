@@ -19,6 +19,7 @@ import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { exigirTextoAcotado } from "../lib/cuentaClienteReglas.js";
 import {
+  DETALLE_ORDEN_CUENTA_INCLUDE,
   DETALLE_ORDEN_INCLUDE,
   LISTADO_ORDEN_INCLUDE,
   mapOrden,
@@ -322,6 +323,89 @@ async function resolverContactoDeLaCuenta(cuentaCliente, body) {
 }
 
 /**
+ * Tope de `ClaveIdempotencia.clave`, que es un `VarChar(64)`. Se valida acá
+ * porque el driver no rechaza: trunca o revienta con un 500 opaco según el
+ * caso, y ninguna de las dos cosas le dice al cliente qué mandó mal.
+ */
+export const LARGO_MAX_CLAVE_IDEMPOTENCIA = 64;
+
+/**
+ * Valida la `claveIdempotencia` del body ANTES de tocar la base: tipo, vacío y
+ * largo. Devuelve `null` cuando no vino (que es el caso normal: la clave es
+ * opcional) y la clave ya recortada cuando sirve.
+ *
+ * El chequeo de tipo no es ceremonia: esta clave termina dentro de un `where`
+ * de Prisma, y un objeto en el body (`{ "gt": "" }`) es la forma clásica de
+ * convertir un campo de texto en un filtro. Va antes de cualquier consulta
+ * y de cualquier escritura, incluida la del perfil.
+ */
+function exigirClaveIdempotencia(valor) {
+  if (valor === undefined || valor === null) return null;
+
+  if (typeof valor !== "string") {
+    throw httpError(400, "La clave de idempotencia debe ser un texto.");
+  }
+
+  const clave = valor.trim();
+  if (clave === "") {
+    throw httpError(400, "La clave de idempotencia no puede estar vacía.");
+  }
+  if (clave.length > LARGO_MAX_CLAVE_IDEMPOTENCIA) {
+    throw httpError(
+      400,
+      `La clave de idempotencia no puede superar los ${LARGO_MAX_CLAVE_IDEMPOTENCIA} caracteres.`,
+    );
+  }
+
+  return clave;
+}
+
+/**
+ * ¿Este error es el `@@unique([cuentaClienteId, clave])` rechazando el insert
+ * de la clave, o es otra colisión?
+ *
+ * La distinción decide entre devolver la orden del ganador de la carrera y
+ * relanzar: tragar cualquier `P2002` como "reenvío" convertiría la colisión de
+ * `Cliente.dni` —la que `upsertClienteConReintento` relanza tras agotar sus
+ * intentos— en un 200 con la orden de otro envío, o en un 200 sin ninguna.
+ *
+ * `meta.target` llega como array de columnas en unos conectores y como nombre
+ * del índice en otros, así que se normaliza a texto antes de preguntar.
+ *
+ * ⚠️ El descarte de `ordenId` es por esa segunda forma: esta tabla tiene DOS
+ * uniques (`[cuentaClienteId, clave]` y `ordenId`), y el nombre del índice del
+ * segundo —`ClaveIdempotencia_ordenId_key`— también contiene "clave", por el
+ * nombre del modelo. Sin el descarte, una colisión de `ordenId` se leería como
+ * un reenvío y contestaría 200 con la orden de otro envío.
+ */
+function esColisionDeClaveIdempotencia(err) {
+  if (err?.code !== "P2002") return false;
+  const target = err.meta?.target;
+  const texto = (Array.isArray(target) ? target.join(",") : String(target ?? "")).toLowerCase();
+  return texto.includes("clave") && !texto.includes("ordenid");
+}
+
+/**
+ * La orden que ESTA cuenta ya creó con ESTA clave, o `null`.
+ *
+ * El `where` lleva las DOS mitades del `@@unique` (amenaza 13, replay
+ * cruzado): la clave la elige el cliente, así que una tan adivinable como "1"
+ * buscada sin el `cuentaClienteId` le entregaría a cualquiera la orden de otra
+ * persona. El scope por cuenta no es una condición extra, es la clave entera.
+ *
+ * Trae la orden con el include del COMPRADOR (sin `cliente` ni
+ * `cuentaCliente`), el mismo que usa el 201: la respuesta del reenvío tiene
+ * que ser la misma forma que la del envío original.
+ */
+async function buscarOrdenDeLaClave(cuentaClienteId, clave) {
+  const fila = await prisma.claveIdempotencia.findUnique({
+    where: { cuentaClienteId_clave: { cuentaClienteId, clave } },
+    include: { orden: { include: DETALLE_ORDEN_CUENTA_INCLUDE } },
+  });
+  return fila?.orden ?? null;
+}
+
+/**
  * POST /api/ordenes — checkout con o sin sesión de cliente. PÚBLICO en el
  * sentido de que no exige auth de ADMIN; ver `ordenes.routes.js` para el
  * `authClienteOpcional` y el corte por `checkoutRequiereCuenta()`. El
@@ -341,7 +425,27 @@ async function resolverContactoDeLaCuenta(cuentaCliente, body) {
  * ningún caso — sigue siendo el único escritor de `Cliente`; lo que cambia es
  * QUIÉN llena sus cuatro campos.
  *
+ * IDEMPOTENCIA (decisión 9, amenaza 13), solo CON sesión:
+ *   - `claveIdempotencia` la elige el cliente y vive en
+ *     `ClaveIdempotencia`, con `@@unique([cuentaClienteId, clave])`.
+ *   - **Quien arbitra la carrera es ese unique, nunca una lectura.** El lookup
+ *     previo existe como atajo del reenvío tranquilo (evita revalidar el
+ *     catálogo y repisar el perfil), pero dos requests simultáneos leen los
+ *     dos "no existe": el que decide es el `P2002` del `create` DENTRO de la
+ *     transacción. Misma regla que `stockDescontado` — la condición vive en la
+ *     escritura, no en un `if` sobre una lectura.
+ *   - El perdedor no deja media orden: su `create` de orden viaja en la misma
+ *     transacción que el de la clave, así que el `P2002` revierte las dos. Y
+ *     devuelve **la orden del ganador con 200**, no un error ni una segunda
+ *     orden; tampoco notifica ni emite el evento, que ya los disparó el
+ *     ganador.
+ *   - SIN sesión la clave se IGNORA por completo, sin validarla siquiera: la
+ *     tabla está indexada por cuenta, así que no hay nada a qué atarla, y
+ *     empezar a rechazar un body que el invitado ya mandaba cambiaría el
+ *     checkout de invitado, que no cambia.
+ *
  * Orden de validación (todo ANTES de cualquier escritura en DB):
+ *   0. Forma de la `claveIdempotencia`, y el corte por reenvío si ya existe.
  *   1. Resolución del contacto, si hay sesión (única consulta nueva).
  *   2. Campos requeridos presentes (dni/nombre/telefono/email/items no vacío).
  *   3. DNI normalizado y válido (7-8 dígitos).
@@ -354,6 +458,24 @@ export async function crear(req, res, next) {
   try {
     const cuentaCliente = req.cuentaCliente ?? null;
     const { notas, items } = req.body;
+
+    // Lo PRIMERO, antes de cualquier consulta y de cualquier escritura —
+    // incluida la del perfil, que ocurre dentro de `resolverContactoDeLaCuenta`.
+    // Sin sesión ni se mira: ver el bloque IDEMPOTENCIA del docstring.
+    const claveIdempotencia = cuentaCliente
+      ? exigirClaveIdempotencia(req.body?.claveIdempotencia)
+      : null;
+
+    if (claveIdempotencia) {
+      // El atajo del reenvío tranquilo (el dedo que hace doble click, el
+      // reintento del cliente tras un timeout): devuelve la orden que esta
+      // cuenta ya creó con esta clave, sin repisar el perfil, sin revalidar el
+      // catálogo y sin mandar un segundo comprobante. NO es la guarda de la
+      // carrera —esa es el unique de más abajo—, así que dos requests
+      // simultáneos pasan de largo por acá los dos, como corresponde.
+      const yaCreada = await buscarOrdenDeLaClave(cuentaCliente.id, claveIdempotencia);
+      if (yaCreada) return res.status(200).json(mapOrdenCuenta(yaCreada));
+    }
 
     const { dni, nombre, telefono, email } = cuentaCliente
       ? await resolverContactoDeLaCuenta(cuentaCliente, req.body)
@@ -370,32 +492,66 @@ export async function crear(req, res, next) {
 
     const itemsConSnapshot = await validarYSnapshotearProductos(items);
 
-    const orden = await prisma.$transaction(async (tx) => {
-      const cliente = await upsertClienteConReintento(tx, {
-        dni: dniNormalizado,
-        nombre: nombre.trim(),
-        telefono: telefono.trim(),
-        email: email?.trim() || null,
-      });
+    let orden;
+    try {
+      orden = await prisma.$transaction(async (tx) => {
+        const cliente = await upsertClienteConReintento(tx, {
+          dni: dniNormalizado,
+          nombre: nombre.trim(),
+          telefono: telefono.trim(),
+          email: email?.trim() || null,
+        });
 
-      return tx.orden.create({
-        data: {
-          clienteId: cliente.id,
-          // NULL explícito sin sesión: es la nulidad de la que depende que
-          // "Mis pedidos" no muestre el historial de invitado de nadie.
-          cuentaClienteId: cuentaCliente?.id ?? null,
-          notas: notas?.trim() || null,
-          items: { create: itemsConSnapshot },
-        },
-        // El MISMO include con y sin sesión, a propósito: `notificarOrdenCreada`
-        // resuelve el destinatario desde `orden.cliente` (fila cruda), así que
-        // recortarlo acá dejaría al comprador logueado sin comprobante — con
-        // 201 y sin ningún error. Se podrá angostar cuando la Task 8 mueva ese
-        // servicio a `contactoDeOrden`. No filtra nada: la respuesta con sesión
-        // pasa por `mapOrdenCuenta`, que descarta `cliente` y los dos ids.
-        include: { cliente: true, items: true },
+        const creada = await tx.orden.create({
+          data: {
+            clienteId: cliente.id,
+            // NULL explícito sin sesión: es la nulidad de la que depende que
+            // "Mis pedidos" no muestre el historial de invitado de nadie.
+            cuentaClienteId: cuentaCliente?.id ?? null,
+            notas: notas?.trim() || null,
+            items: { create: itemsConSnapshot },
+          },
+          // El MISMO include con y sin sesión, a propósito: `notificarOrdenCreada`
+          // resuelve el destinatario desde `orden.cliente` (fila cruda), así que
+          // recortarlo acá dejaría al comprador logueado sin comprobante — con
+          // 201 y sin ningún error. Se podrá angostar cuando la Task 8 mueva ese
+          // servicio a `contactoDeOrden`. No filtra nada: la respuesta con sesión
+          // pasa por `mapOrdenCuenta`, que descarta `cliente` y los dos ids.
+          include: { cliente: true, items: true },
+        });
+
+        // DENTRO de la misma transacción, y ese "dentro" es toda la garantía:
+        // el unique de la clave y la orden commitean juntos o no commitea
+        // ninguno. Si esta escritura choca, la orden de ESTE request no llega a
+        // existir — por eso el perdedor de la carrera no deja una segunda.
+        if (claveIdempotencia) {
+          await tx.claveIdempotencia.create({
+            data: {
+              cuentaClienteId: cuentaCliente.id,
+              clave: claveIdempotencia,
+              ordenId: creada.id,
+            },
+          });
+        }
+
+        return creada;
       });
-    });
+    } catch (err) {
+      // La carrera, arbitrada por el unique y no por una lectura: el perdedor
+      // llega acá con su transacción ENTERA revertida y contesta con la orden
+      // que commiteó el ganador.
+      if (!claveIdempotencia || !esColisionDeClaveIdempotencia(err)) throw err;
+
+      const ganadora = await buscarOrdenDeLaClave(cuentaCliente.id, claveIdempotencia);
+      // Sin fila no hay nada que devolver: el unique rechazó por una clave que
+      // ahora no aparece. Es un estado que no debería existir, y un 201 sin
+      // orden o un 200 vacío lo esconderían.
+      if (!ganadora) throw err;
+
+      // Sin `logEvento` ni `notificarOrdenCreada`: los disparó el ganador. Esta
+      // request no creó nada, solo está contando lo que ya pasó.
+      return res.status(200).json(mapOrdenCuenta(ganadora));
+    }
 
     // Fire-and-forget: no se espera (ni se deja que una falla acá tumbe la
     // respuesta ya exitosa). Va sin `productId` a propósito: una orden puede
