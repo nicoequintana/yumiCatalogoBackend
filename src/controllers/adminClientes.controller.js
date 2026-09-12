@@ -103,6 +103,7 @@ export async function resumenClientes(req, res, next) {
         id: true,
         createdAt: true,
         cliente: { select: { id: true, dni: true, nombre: true } },
+        cuentaCliente: { select: { nombre: true } },
         items: { select: { precioUnitario: true, cantidad: true } },
       },
     });
@@ -122,7 +123,13 @@ export async function resumenClientes(req, res, next) {
       // cliente no debe tumbar el dashboard entero.
       if (!orden.cliente) continue;
 
-      const { dni, nombre } = orden.cliente;
+      const { dni } = orden.cliente;
+      // Decisión 12 de la spec: ninguna pantalla muestra el contacto de
+      // `Cliente` — se resuelve desde la cuenta de la orden más reciente de
+      // ese DNI. `ordenes` ya viene ordenado `createdAt desc`, así que la
+      // PRIMERA vez que se ve un DNI es exactamente su orden más reciente: no
+      // hace falta una consulta aparte por cliente.
+      const nombre = orden.cuentaCliente?.nombre ?? orden.cliente.nombre;
       const total = totalDeItems(orden.items);
 
       const acumulado = porCliente.get(dni);

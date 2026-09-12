@@ -40,7 +40,7 @@ const authHeader = `Bearer ${token}`;
  * `precioUnitario` llega como `Decimal`, que es el caso que el controller
  * tiene que manejar sin perder precisión.
  */
-function orden({ id, estado, createdAt, cliente, items = [] }) {
+function orden({ id, estado, createdAt, cliente, cuentaCliente = null, items = [] }) {
   return {
     id,
     estado,
@@ -51,6 +51,7 @@ function orden({ id, estado, createdAt, cliente, items = [] }) {
       dni: cliente.dni,
       nombre: cliente.nombre,
     },
+    cuentaCliente,
     items: items.map((item, indice) => ({
       id: id * 100 + indice,
       ordenId: id,
@@ -575,6 +576,44 @@ describe("GET /api/admin/clientes-resumen", () => {
     // La fila extra solo sirve para detectar el corte: no entra en el cálculo.
     expect(res.body.historico.ordenesAnalizadas).toBe(MAX_ORDENES_HISTORICO);
     expect(res.body.ingresosPeriodo).toBe((100 * MAX_ORDENES_HISTORICO).toFixed(0));
+  });
+
+  it("decisión 12: el nombre del ranking sale de la cuenta de la orden más reciente, no de Cliente", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 2,
+        estado: "EN_PREPARACION",
+        createdAt: "2026-09-05T12:00:00Z",
+        cliente: { id: ANA.id, dni: ANA.dni, nombre: "Nombre Viejo De Cliente" },
+        cuentaCliente: { nombre: "Nombre De La Cuenta" },
+        items: [{ precioUnitario: "1000", cantidad: 1 }],
+      }),
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/clientes-resumen?desde=2026-09-01&hasta=2026-09-10")
+      .set("Authorization", authHeader);
+
+    expect(res.body.rankingClientes[0].nombre).toBe("Nombre De La Cuenta");
+  });
+
+  it("sin cuenta en la orden más reciente del cliente, cae al nombre de Cliente", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      orden({
+        id: 2,
+        estado: "EN_PREPARACION",
+        createdAt: "2026-09-05T12:00:00Z",
+        cliente: { id: ANA.id, dni: ANA.dni, nombre: "Nombre De Cliente" },
+        cuentaCliente: null,
+        items: [{ precioUnitario: "1000", cantidad: 1 }],
+      }),
+    ]);
+
+    const res = await request(buildApp())
+      .get("/api/admin/clientes-resumen?desde=2026-09-01&hasta=2026-09-10")
+      .set("Authorization", authHeader);
+
+    expect(res.body.rankingClientes[0].nombre).toBe("Nombre De Cliente");
   });
 
   it("cae al período por defecto si las fechas son inválidas, sin tirar 500", async () => {
