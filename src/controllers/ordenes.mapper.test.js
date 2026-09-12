@@ -429,3 +429,49 @@ describe("includes de la superficie del comprador — nunca joinean cliente/cuen
     expect(LISTADO_ORDEN_CUENTA_INCLUDE).not.toHaveProperty("cuentaCliente");
   });
 });
+
+/**
+ * Guard adversarial con datos ajenos: verifica que valores de contacto
+ * de diferentes personas NO sobreviven en la salida serializada.
+ */
+
+describe("mapOrdenCuenta — Amenaza 6/7: nunca expone el contacto de nadie", () => {
+  const ORDEN_CON_DATOS_AJENOS = {
+    id: 55,
+    estado: "PENDIENTE",
+    clienteId: 3,
+    cuentaClienteId: 9,
+    cliente: { id: 3, dni: "11222333", nombre: "Persona Ajena", telefono: "999", email: "ajeno@x.com" },
+    cuentaCliente: { id: 9, nombre: "Otra Persona", telefono: "888", email: "otra@x.com" },
+    items: [{ nombreProducto: "Termo", precioUnitario: "20000", costoUnitario: "8000", cantidad: 1 }],
+  };
+
+  it("el objeto resultante no tiene las claves cliente/cuentaCliente/clienteId/cuentaClienteId", () => {
+    const mapeada = mapOrdenCuenta(ORDEN_CON_DATOS_AJENOS);
+    expect(mapeada).not.toHaveProperty("cliente");
+    expect(mapeada).not.toHaveProperty("cuentaCliente");
+    expect(mapeada).not.toHaveProperty("clienteId");
+    expect(mapeada).not.toHaveProperty("cuentaClienteId");
+  });
+
+  it("ningún string de contacto sobrevive en el JSON serializado", () => {
+    const mapeada = mapOrdenCuenta(ORDEN_CON_DATOS_AJENOS);
+    const serializado = JSON.stringify(mapeada);
+    for (const dato of ["Persona Ajena", "Otra Persona", "999", "888", "ajeno@x.com", "otra@x.com", "11222333"]) {
+      expect(serializado).not.toContain(dato);
+    }
+  });
+
+  it("tampoco expone costoUnitario", () => {
+    const mapeada = mapOrdenCuenta(ORDEN_CON_DATOS_AJENOS);
+    expect(JSON.stringify(mapeada)).not.toContain("costoUnitario");
+  });
+
+  it("mapOrdenCuentaListado sostiene el mismo guard", () => {
+    const mapeada = mapOrdenCuentaListado({ ...ORDEN_CON_DATOS_AJENOS, items: ORDEN_CON_DATOS_AJENOS.items });
+    const serializado = JSON.stringify(mapeada);
+    expect(serializado).not.toContain("Persona Ajena");
+    expect(serializado).not.toContain("Otra Persona");
+    expect(mapeada).not.toHaveProperty("cliente");
+  });
+});
