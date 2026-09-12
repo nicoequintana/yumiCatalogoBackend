@@ -464,7 +464,9 @@ describe("mapOrdenCuenta — Amenaza 6/7: nunca expone el contacto de nadie", ()
 
   it("tampoco expone costoUnitario", () => {
     const mapeada = mapOrdenCuenta(ORDEN_CON_DATOS_AJENOS);
-    expect(JSON.stringify(mapeada)).not.toContain("costoUnitario");
+    const serializado = JSON.stringify(mapeada);
+    expect(serializado).not.toContain("costoUnitario");
+    expect(serializado).not.toContain("8000");
   });
 
   it("mapOrdenCuentaListado sostiene el mismo guard", () => {
