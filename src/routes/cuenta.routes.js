@@ -6,6 +6,7 @@ import * as registroController from "../controllers/cuentaRegistro.controller.js
 import * as loginController from "../controllers/cuentaLogin.controller.js";
 import * as recuperacionController from "../controllers/cuentaRecuperacion.controller.js";
 import * as perfilController from "../controllers/cuentaPerfil.controller.js";
+import * as cuentaOrdenesController from "../controllers/cuentaOrdenes.controller.js";
 
 /**
  * Rutas de la cuenta de CLIENTE. La sesión viaja en cookie (decisión 10), así
@@ -52,5 +53,11 @@ router.get("/", requireCliente, perfilController.obtenerPerfil);
 router.put("/", requireCliente, perfilController.actualizarPerfil);
 router.put("/password", requireCliente, limitadores.passwordIp, perfilController.cambiarPassword);
 router.put("/email", requireCliente, limitadores.emailIp, perfilController.cambiarEmail);
+
+// "Mis pedidos" (Parte 3). Sin limitador propio: son LECTURAS de la sesión
+// —no hay nada que enumerar ni ningún costo de bcrypt o de correo detrás— y la
+// tabla "Rate limiting" de la spec no les asigna balde.
+router.get("/ordenes", requireCliente, cuentaOrdenesController.listar);
+router.get("/ordenes/:id", requireCliente, cuentaOrdenesController.obtenerPorId);
 
 export default router;
