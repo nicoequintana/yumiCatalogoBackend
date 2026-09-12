@@ -646,9 +646,12 @@ model CuentaCliente {
   intentosFallidos Int       @default(0)
   bloqueadoHasta   DateTime?
 
-  /// Los tres NULLABLE: una cuenta de Google existe antes de tenerlos.
+  /// Los cuatro NULLABLE: una cuenta de Google existe antes de tenerlos.
   nombre   String?
   telefono String?
+  /// Opcional y editable en el perfil; a diferencia de nombre/telefono/dni SE
+  /// PUEDE BORRAR (mandar vacío lo deja en NULL, nunca da 400).
+  apodo    String?
   /// SIN @unique: con unicidad, cualquiera se registra declarando un DNI ajeno
   /// y la persona real no puede registrarse nunca más.
   dni      String? @db.VarChar(8)
