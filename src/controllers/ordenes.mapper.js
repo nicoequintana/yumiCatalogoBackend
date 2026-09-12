@@ -27,11 +27,13 @@ import { urlDeFoto } from "../lib/fotos.js";
 
 export const MAX_ITEMS_RESUMEN = 5;
 
-/** El `select` de `cuentaCliente` en cualquier include de la superficie admin
- * o de "Mis pedidos". SIEMPRE explícito, NUNCA `cuentaCliente: true`: la fila
- * completa lleva `passwordHash`, `tokenVersion`, `intentosFallidos` — datos de
- * autenticación que ningún consumidor de una orden necesita leer. */
-const CUENTA_CLIENTE_SELECT = { id: true, nombre: true, telefono: true, email: true };
+/** El `select` de `cuentaCliente` en CUALQUIER include que traiga la cuenta:
+ * los de este archivo y el del `orden.create` de `crear()` (que lo importa de
+ * acá en vez de repetir el literal, para que no puedan divergir). SIEMPRE
+ * explícito, NUNCA `cuentaCliente: true`: la fila completa lleva
+ * `passwordHash`, `tokenVersion`, `intentosFallidos` — datos de autenticación
+ * que ningún consumidor de una orden necesita leer. */
+export const CUENTA_CLIENTE_SELECT = { id: true, nombre: true, telefono: true, email: true };
 
 /**
  * El `include` del LISTADO de órdenes (superficie ADMIN).

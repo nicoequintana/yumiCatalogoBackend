@@ -3,6 +3,10 @@ import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
+// Puro (sin prisma): se importa de verdad, no se mockea. Es el que decide de
+// qué fila sale el comprobante, así que afirmar sobre ÉL —y no sobre el
+// nombre de una clave— es lo que prueba que el mail va a salir bien.
+import { contactoDeOrden } from "../controllers/ordenes.mapper.js";
 
 process.env.JWT_SECRET = "test-secret";
 
@@ -687,6 +691,69 @@ describe("POST /api/ordenes — con sesión (decisión 8)", () => {
     const fila = notificarOrdenCreadaMock.mock.calls[0][0];
     expect(fila.cuentaCliente?.email ?? fila.cliente?.email).toBe(CUENTA.email);
   });
+
+  /**
+   * El `include` del `create` decide DE DÓNDE sale el comprobante:
+   * `contactoDeOrden` prefiere `cuentaCliente` como objeto ENTERO y solo cae a
+   * `Cliente` cuando no viene. Sin la cuenta en la fila cae SIEMPRE — y hoy
+   * acierta de pura casualidad, porque `upsertClienteConReintento` acaba de
+   * escribir en `Cliente` el contacto de esa misma cuenta.
+   *
+   * El mock se arma A PARTIR del include recibido, como haría Prisma: con uno
+   * que no pide `cuentaCliente`, la fila sale sin ella. Devolver una cuenta
+   * fija haría pasar el test con y sin el arreglo.
+   */
+  function crearDevolviendoSegunElInclude() {
+    const CLIENTE_PISADO = {
+      ...CLIENTE_DE_LA_CUENTA,
+      nombre: "Pisado Por Otro",
+      telefono: "1100000000",
+      email: "otro@evil.com",
+    };
+    const CUENTA_EN_LA_FILA = {
+      id: 9,
+      nombre: "Titular De Cuenta",
+      telefono: "1199887766",
+      email: CUENTA.email,
+    };
+
+    ordenCreateMock.mockImplementation(({ include }) => ({
+      ...ORDEN_CON_CUENTA,
+      ...(include?.cliente && { cliente: CLIENTE_PISADO }),
+      ...(include?.cuentaCliente && { cuentaCliente: CUENTA_EN_LA_FILA }),
+    }));
+
+    return { CLIENTE_PISADO, CUENTA_EN_LA_FILA };
+  }
+
+  it("el comprobante de una orden con sesión se resuelve desde la CUENTA, no desde Cliente", async () => {
+    const { CUENTA_EN_LA_FILA } = crearDevolviendoSegunElInclude();
+
+    await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send(BODY_CON_PERFIL);
+
+    expect(contactoDeOrden(notificarOrdenCreadaMock.mock.calls[0][0])).toEqual({
+      nombre: CUENTA_EN_LA_FILA.nombre,
+      telefono: CUENTA_EN_LA_FILA.telefono,
+      email: CUENTA_EN_LA_FILA.email,
+    });
+  });
+
+  it("el create pide la cuenta con un SELECT explícito, nunca la fila entera", async () => {
+    // `cuentaCliente: true` arrastraría `passwordHash`, `tokenVersion` e
+    // `intentosFallidos` hasta una fila que después viaja a las plantillas de
+    // correo. El select explícito es la regla de toda la Parte 3.
+    await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send(BODY_CON_PERFIL);
+
+    expect(ordenCreateMock.mock.calls[0][0].include.cuentaCliente).toEqual({
+      select: { id: true, nombre: true, telefono: true, email: true },
+    });
+  });
 });
 
 /**
@@ -729,12 +796,37 @@ describe("POST /api/ordenes — idempotencia (decisión 9, amenaza 13)", () => {
     items: [{ nombreProducto: "Producto A", precioUnitario: "100", cantidad: 1 }],
   };
 
-  /** El error que tira Prisma cuando el `@@unique` de la clave rechaza el insert. */
+  /**
+   * El error que tira Prisma cuando el `@@unique` de la clave rechaza el
+   * insert, en la forma de los conectores que SÍ pueblan `meta.target`
+   * (postgres, mysql). Se conserva porque el arbitraje no puede depender de
+   * qué conector esté abajo.
+   */
   function colisionDeClave() {
     return Object.assign(new Error("Unique constraint failed"), {
       code: "P2002",
       meta: { target: ["cuentaClienteId", "clave"] },
     });
+  }
+
+  /**
+   * La forma REAL que llega en producción, medida contra la base: bajo
+   * `@prisma/adapter-mssql` el `P2002` de esta tabla trae
+   * `meta = { modelName, driverAdapterError }` y **ningún `target`**.
+   *
+   * Es exactamente la forma que dejaba la idempotencia INERTE con la suite en
+   * verde: los tests inventaban un `target` que este conector nunca manda, así
+   * que el perdedor de una carrera real recibía un 400 crudo en vez de la
+   * orden del ganador.
+   */
+  function colisionDeClaveMssql() {
+    return Object.assign(
+      new Error("Unique constraint failed on the constraint: `dbo.ClaveIdempotencia`"),
+      {
+        code: "P2002",
+        meta: { modelName: "ClaveIdempotencia", driverAdapterError: {} },
+      },
+    );
   }
 
   function pedir(body = BODY, { conSesion = true } = {}) {
@@ -852,6 +944,22 @@ describe("POST /api/ordenes — idempotencia (decisión 9, amenaza 13)", () => {
     expect(claveIdempotenciaCreateMock).toHaveBeenCalledTimes(1);
   });
 
+  // EL test que la verificación contra la base real obligó a escribir: con la
+  // forma que manda el conector de ESTE proyecto, el perdedor tiene que recibir
+  // la orden del ganador igual que con la forma de los otros conectores.
+  it("carrera con la forma REAL de mssql (P2002 SIN meta.target): 200 con la orden del ganador", async () => {
+    claveIdempotenciaCreateMock.mockRejectedValueOnce(colisionDeClaveMssql());
+    claveIdempotenciaFindUniqueMock
+      .mockResolvedValueOnce(null) // el lookup previo: todavía no había nada
+      .mockResolvedValueOnce({ orden: ORDEN_EXISTENTE }); // el reintento post-P2002
+
+    const res = await pedir();
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(300);
+    expect(claveIdempotenciaCreateMock).toHaveBeenCalledTimes(1);
+  });
+
   it("el perdedor de la carrera no notifica ni emite el evento de orden creada", async () => {
     // Su transacción se revirtió: no hay orden nueva que avisar. Un comprobante
     // por cada reintento sería un mail por click de más.
@@ -884,16 +992,17 @@ describe("POST /api/ordenes — idempotencia (decisión 9, amenaza 13)", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Ya existe un registro/i);
-    // El reintento del lookup es EXCLUSIVO de la colisión de la clave: acá no
-    // se vuelve a consultar la tabla.
-    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(1);
+    // Quien decide ya no es la forma del error sino el re-lookup: se consulta
+    // la tabla (2ª llamada) y, como esta cuenta no tiene ninguna orden con
+    // esta clave, el error original se relanza tal cual.
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(2);
   });
 
   it("el OTRO unique de la tabla (ordenId) tampoco se lee como reenvío", async () => {
-    // `ClaveIdempotencia` tiene dos uniques, y algunos conectores reportan el
-    // NOMBRE del índice en vez de las columnas: `ClaveIdempotencia_ordenId_key`
-    // contiene "clave" por el nombre del modelo. Leerlo como idempotencia
-    // contestaría 200 con la orden de otro envío.
+    // `ClaveIdempotencia` tiene dos uniques. El de `ordenId` no es un reenvío,
+    // y quien lo descarta ya no es el nombre del índice —que este conector ni
+    // siquiera manda— sino el re-lookup: esta cuenta no tiene ninguna orden
+    // atada a esta clave, así que no hay nada que devolver y el error sale.
     claveIdempotenciaCreateMock.mockRejectedValueOnce(
       Object.assign(new Error("Unique constraint failed"), {
         code: "P2002",
@@ -904,8 +1013,8 @@ describe("POST /api/ordenes — idempotencia (decisión 9, amenaza 13)", () => {
     const res = await pedir();
 
     expect(res.status).toBe(400);
-    // No hubo reintento del lookup: esto no es la carrera de la clave.
-    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(1);
+    expect(res.body).not.toHaveProperty("id");
+    expect(claveIdempotenciaFindUniqueMock).toHaveBeenCalledTimes(2);
   });
 
   it("si tras el P2002 la clave no aparece, falla en vez de inventar una respuesta", async () => {

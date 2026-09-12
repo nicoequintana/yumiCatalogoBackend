@@ -19,6 +19,7 @@ import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { exigirTextoAcotado } from "../lib/cuentaClienteReglas.js";
 import {
+  CUENTA_CLIENTE_SELECT,
   DETALLE_ORDEN_CUENTA_INCLUDE,
   DETALLE_ORDEN_INCLUDE,
   LISTADO_ORDEN_INCLUDE,
@@ -361,31 +362,6 @@ function exigirClaveIdempotencia(valor) {
 }
 
 /**
- * ¿Este error es el `@@unique([cuentaClienteId, clave])` rechazando el insert
- * de la clave, o es otra colisión?
- *
- * La distinción decide entre devolver la orden del ganador de la carrera y
- * relanzar: tragar cualquier `P2002` como "reenvío" convertiría la colisión de
- * `Cliente.dni` —la que `upsertClienteConReintento` relanza tras agotar sus
- * intentos— en un 200 con la orden de otro envío, o en un 200 sin ninguna.
- *
- * `meta.target` llega como array de columnas en unos conectores y como nombre
- * del índice en otros, así que se normaliza a texto antes de preguntar.
- *
- * ⚠️ El descarte de `ordenId` es por esa segunda forma: esta tabla tiene DOS
- * uniques (`[cuentaClienteId, clave]` y `ordenId`), y el nombre del índice del
- * segundo —`ClaveIdempotencia_ordenId_key`— también contiene "clave", por el
- * nombre del modelo. Sin el descarte, una colisión de `ordenId` se leería como
- * un reenvío y contestaría 200 con la orden de otro envío.
- */
-function esColisionDeClaveIdempotencia(err) {
-  if (err?.code !== "P2002") return false;
-  const target = err.meta?.target;
-  const texto = (Array.isArray(target) ? target.join(",") : String(target ?? "")).toLowerCase();
-  return texto.includes("clave") && !texto.includes("ordenid");
-}
-
-/**
  * La orden que ESTA cuenta ya creó con ESTA clave, o `null`.
  *
  * El `where` lleva las DOS mitades del `@@unique` (amenaza 13, replay
@@ -394,8 +370,13 @@ function esColisionDeClaveIdempotencia(err) {
  * persona. El scope por cuenta no es una condición extra, es la clave entera.
  *
  * Trae la orden con el include del COMPRADOR (sin `cliente` ni
- * `cuentaCliente`), el mismo que usa el 201: la respuesta del reenvío tiene
- * que ser la misma forma que la del envío original.
+ * `cuentaCliente`), que NO es el mismo que usa el 201 y conviene saberlo: acá
+ * cada ítem viaja con su `fotoPortada` (hay join contra `Product`) y en el 201
+ * no, porque el `create` no joinea `product`. Las dos respuestas pasan por
+ * `mapOrdenCuenta`, así que el sobre coincide, pero un cliente que lea
+ * `fotoPortada` la encuentra en el reenvío y no en el envío original.
+ * Divergencia aceptada en la Parte 3; alinear los dos includes es trabajo de
+ * otra tanda.
  */
 async function buscarOrdenDeLaClave(cuentaClienteId, clave) {
   const fila = await prisma.claveIdempotencia.findUnique({
@@ -434,6 +415,9 @@ async function buscarOrdenDeLaClave(cuentaClienteId, clave) {
  *     dos "no existe": el que decide es el `P2002` del `create` DENTRO de la
  *     transacción. Misma regla que `stockDescontado` — la condición vive en la
  *     escritura, no en un `if` sobre una lectura.
+ *   - Ese `P2002` se reconoce por el CÓDIGO más un re-lookup scopeado por
+ *     `{ cuentaClienteId, clave }`, nunca por `meta.target` ni por el mensaje
+ *     del driver — ver el `catch` de `crear()`.
  *   - El perdedor no deja media orden: su `create` de orden viaja en la misma
  *     transacción que el de la clave, así que el `P2002` revierte las dos. Y
  *     devuelve **la orden del ganador con 200**, no un error ni una segunda
@@ -511,13 +495,29 @@ export async function crear(req, res, next) {
             notas: notas?.trim() || null,
             items: { create: itemsConSnapshot },
           },
-          // El MISMO include con y sin sesión, a propósito: `notificarOrdenCreada`
-          // resuelve el destinatario desde `orden.cliente` (fila cruda), así que
-          // recortarlo acá dejaría al comprador logueado sin comprobante — con
-          // 201 y sin ningún error. Se podrá angostar cuando la Task 8 mueva ese
-          // servicio a `contactoDeOrden`. No filtra nada: la respuesta con sesión
-          // pasa por `mapOrdenCuenta`, que descarta `cliente` y los dos ids.
-          include: { cliente: true, items: true },
+          // El MISMO include con y sin sesión, a propósito: de esta fila CRUDA
+          // sale el comprobante (`notificarOrdenCreada` → `contactoDeOrden`),
+          // así que recortarla dejaría al comprador sin mail — con 201 y sin
+          // ningún error.
+          //
+          // `cuentaCliente` va SÍ o SÍ: `contactoDeOrden` prefiere la cuenta
+          // como objeto ENTERO y solo cae a `Cliente` si no viene. Sin ella caía
+          // siempre a `Cliente`, y acertaba nada más que de casualidad —el
+          // upsert de arriba acaba de escribir ahí el contacto de la cuenta—,
+          // atando el destinatario del comprobante a una fila que se busca y se
+          // pisa POR DNI. Con la cuenta en la fila, los dos notificadores
+          // resuelven igual (decisión 8 de la spec).
+          //
+          // El `select` viene de `ordenes.mapper.js` y no escrito de nuevo acá:
+          // un `cuentaCliente: true` arrastraría `passwordHash` y `tokenVersion`
+          // hasta las plantillas de correo. No filtra nada hacia afuera: la
+          // respuesta con sesión pasa por `mapOrdenCuenta`, que descarta
+          // `cliente`, `cuentaCliente` y los dos ids.
+          include: {
+            cliente: true,
+            cuentaCliente: { select: CUENTA_CLIENTE_SELECT },
+            items: true,
+          },
         });
 
         // DENTRO de la misma transacción, y ese "dentro" es toda la garantía:
@@ -540,12 +540,33 @@ export async function crear(req, res, next) {
       // La carrera, arbitrada por el unique y no por una lectura: el perdedor
       // llega acá con su transacción ENTERA revertida y contesta con la orden
       // que commiteó el ganador.
-      if (!claveIdempotencia || !esColisionDeClaveIdempotencia(err)) throw err;
+      //
+      // La señal es de DOS partes: un `P2002` dentro de esta transacción **y**
+      // un re-lookup por `{ cuentaClienteId, clave }` que devuelve una fila.
+      // Ninguna de las dos alcanza sola, y la segunda es la que manda.
+      //
+      // ⚠️ NO se mira `err.meta.target`, y no es un detalle de estilo: bajo
+      // `@prisma/adapter-mssql` —el conector de este proyecto— un `P2002` real
+      // de esta tabla llega con `meta = { modelName, driverAdapterError }` y
+      // SIN `target`. Preguntar por él daba `false` para CUALQUIER colisión, así
+      // que la rama entera quedaba inerte: el perdedor de una carrera real
+      // recibía un 400 crudo con los 17 tests en verde. Medido contra la base,
+      // no deducido. Tampoco se matchea el mensaje del driver: es texto de un
+      // conector, cambia sin aviso y no es un contrato.
+      //
+      // El re-lookup es una señal MÁS fuerte que cualquier forma del error,
+      // porque va scopeado por cuenta: solo puede devolver una fila si un
+      // request de ESTA cuenta con ESTA clave ya commiteó. Por eso una colisión
+      // mal atribuida (la de `Cliente.dni`, por ejemplo) no puede contestar la
+      // orden de otro: o encuentra la fila que corresponde a esta clave —y
+      // entonces 200 es la respuesta semánticamente correcta— o no encuentra
+      // nada y el error original sale tal cual.
+      if (!claveIdempotencia || err?.code !== "P2002") throw err;
 
       const ganadora = await buscarOrdenDeLaClave(cuentaCliente.id, claveIdempotencia);
-      // Sin fila no hay nada que devolver: el unique rechazó por una clave que
-      // ahora no aparece. Es un estado que no debería existir, y un 201 sin
-      // orden o un 200 vacío lo esconderían.
+      // Sin fila no hay nada que devolver: el unique rechazó y esta clave no
+      // aparece. Un 201 sin orden o un 200 vacío esconderían ese estado, así
+      // que se relanza el error ORIGINAL.
       if (!ganadora) throw err;
 
       // Sin `logEvento` ni `notificarOrdenCreada`: los disparó el ganador. Esta
