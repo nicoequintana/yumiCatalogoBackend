@@ -151,6 +151,110 @@ describe("plantillaOrdenCreadaAdmin", () => {
   });
 });
 
+describe("plantillaOrdenCreadaAdmin — nombre/telefono/email del contacto, dni SIEMPRE de Cliente", () => {
+  const OPCIONES = {
+    urlOrden: "https://yima.test/catalogo/admin/ordenes/42",
+    urlSitio: "https://yima.test",
+  };
+
+  it("usa contacto para nombre/telefono/email y orden.cliente.dni para el DNI", () => {
+    const { texto } = plantillaOrdenCreadaAdmin(ORDEN, {
+      ...OPCIONES,
+      contacto: { nombre: "Nuevo", telefono: "111", email: "nuevo@gmail.com" },
+    });
+
+    expect(texto).toContain("Nombre: Nuevo");
+    expect(texto).toContain("DNI: 12345678");
+    expect(texto).toContain("Teléfono: 111");
+    expect(texto).toContain("Email: nuevo@gmail.com");
+  });
+
+  it("el asunto lleva el nombre del contacto y el DNI de Cliente", () => {
+    const { asunto } = plantillaOrdenCreadaAdmin(ORDEN, {
+      ...OPCIONES,
+      contacto: { nombre: "Nuevo", telefono: "111", email: "nuevo@gmail.com" },
+    });
+
+    expect(asunto).toBe("Nueva orden #42 — Nuevo (DNI 12345678)");
+  });
+
+  // Una cuenta a medio completar devuelve `telefono: null` aunque el `Cliente`
+  // del mismo DNI tenga uno cargado: `contactoDeOrden` elige la fuente ENTERA,
+  // no campo por campo. El aviso interno tiene que salir igual.
+  it("no rompe cuando el contacto resuelto no tiene teléfono", () => {
+    const { texto, html } = plantillaOrdenCreadaAdmin(ORDEN, {
+      ...OPCIONES,
+      contacto: { nombre: "Nuevo", telefono: null, email: "nuevo@gmail.com" },
+    });
+
+    expect(texto).toContain("Teléfono: —");
+    expect(texto).not.toContain("1122334455");
+    expect(html).not.toContain("tel:null");
+  });
+
+  it("no rompe cuando el contacto resuelto no tiene nombre ni email", () => {
+    const { texto } = plantillaOrdenCreadaAdmin(ORDEN, {
+      ...OPCIONES,
+      contacto: { nombre: null, telefono: null, email: null },
+    });
+
+    expect(texto).toContain("Email: —");
+    expect(texto).toContain("DNI: 12345678");
+    expect(texto).not.toContain("null");
+  });
+});
+
+describe("plantillaOrdenCreadaCliente — recibe contacto resuelto", () => {
+  it("el saludo usa contacto.nombre, no orden.cliente.nombre", () => {
+    const { texto } = plantillaOrdenCreadaCliente(ORDEN, {
+      urlSitio: "https://yima.test",
+      contacto: { nombre: "Cuenta Nueva", email: "a@a.com", telefono: "1" },
+    });
+
+    expect(texto).toContain("Hola Cuenta Nueva");
+    expect(texto).not.toContain("Juan Pérez");
+  });
+
+  it("sin contacto sigue saludando con orden.cliente.nombre", () => {
+    expect(plantillaOrdenCreadaCliente(ORDEN).texto).toContain("Hola Juan Pérez");
+  });
+
+  it("no rompe cuando el contacto resuelto no tiene nombre", () => {
+    const { texto, html } = plantillaOrdenCreadaCliente(ORDEN, {
+      urlSitio: "https://yima.test",
+      contacto: { nombre: null, email: "a@a.com", telefono: null },
+    });
+
+    expect(texto).toContain("Hola,");
+    expect(html).not.toContain("null");
+  });
+});
+
+describe("plantillaCambioEstadoCliente — recibe contacto resuelto", () => {
+  it("el saludo usa contacto.nombre", () => {
+    const { texto } = plantillaCambioEstadoCliente(
+      { ...ORDEN, estado: "ENTREGADA" },
+      {
+        urlSitio: "https://yima.test",
+        contacto: { nombre: "Cuenta Nueva", email: "a@a.com", telefono: "1" },
+      },
+    );
+
+    expect(texto).toContain("Hola Cuenta Nueva");
+    expect(texto).not.toContain("Juan Pérez");
+  });
+
+  it("no rompe cuando el contacto resuelto no tiene nombre", () => {
+    const { texto, html } = plantillaCambioEstadoCliente(
+      { ...ORDEN, estado: "ENTREGADA" },
+      { urlSitio: "https://yima.test", contacto: { nombre: null, email: "a@a.com", telefono: null } },
+    );
+
+    expect(texto).toContain("Hola,");
+    expect(html).not.toContain("null");
+  });
+});
+
 describe("plantillaCambioEstadoCliente", () => {
   it("usa la etiqueta legible del estado en el asunto", () => {
     const enPreparacion = { ...ORDEN, estado: "EN_PREPARACION" };

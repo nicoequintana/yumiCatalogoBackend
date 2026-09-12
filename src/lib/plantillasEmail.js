@@ -394,21 +394,39 @@ function contextoDePedido(id, fecha) {
 }
 
 /**
+ * Nombre con el que se saluda al comprador.
+ *
+ * Cuando llega `contacto` (lo resuelve `contactoDeOrden`, decisión 8), se usa
+ * ESE y no se completa campo por campo desde `Cliente`: la preferencia es de
+ * OBJETO COMPLETO, porque mezclar el nombre de una fuente con el email de otra
+ * mandaría "Hola María" a la casilla de Juan. Sin `contacto` —una llamada
+ * vieja, o un test— se sigue leyendo `Cliente`, como siempre.
+ *
+ * Devuelve `""` y no un relleno cuando no hay nombre: quien saluda omite el
+ * nombre en vez de escribir "Hola null".
+ */
+function nombreDeSaludo(orden, contacto) {
+  if (contacto) return contacto.nombre ?? "";
+  return orden.cliente?.nombre ?? "";
+}
+
+/**
  * Mail al cliente cuando su orden entra. Confirma la recepción y deja el
  * detalle de lo que compró, con los precios snapshoteados en `ItemOrden`.
  *
  * @param {{id: number, notas: string|null, createdAt?: Date, cliente: object, items: Array}} orden
- * @param {{urlSitio?: string}} [opciones]
+ * @param {{urlSitio?: string, contacto?: {nombre: string|null, email: string|null, telefono: string|null}}} [opciones]
  * @returns {{asunto: string, texto: string, html: string}}
  */
-export function plantillaOrdenCreadaCliente(orden, { urlSitio } = {}) {
+export function plantillaOrdenCreadaCliente(orden, { urlSitio, contacto } = {}) {
   const asunto = `Recibimos tu pedido #${orden.id}`;
   const total = formatearMonto(totalDeItems(orden.items));
+  const nombre = nombreDeSaludo(orden, contacto);
 
   const bloqueNotasTexto = orden.notas ? `\nNotas: ${orden.notas}\n` : "";
 
   const texto = [
-    `Hola ${orden.cliente.nombre},`,
+    nombre ? `Hola ${nombre},` : "Hola,",
     "",
     `Recibimos tu pedido #${orden.id}. Este es el detalle:`,
     "",
@@ -426,7 +444,7 @@ export function plantillaOrdenCreadaCliente(orden, { urlSitio } = {}) {
     urlSitio,
     vistaPrevia: `Total ${total} · te avisamos apenas lo confirmemos.`,
     rotulo: "Pedido recibido",
-    titulo: `Gracias por tu compra, ${orden.cliente.nombre}`,
+    titulo: nombre ? `Gracias por tu compra, ${nombre}` : "Gracias por tu compra",
     contexto: contextoDePedido(orden.id, formatearFecha(orden.createdAt)),
     cuerpo: `
               <p style="margin:0 0 26px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">
@@ -748,14 +766,29 @@ function barraProgreso(estado) {
  * celular, contactar al cliente pasa a ser un toque en vez de copiar a mano un
  * número de una tabla.
  *
+ * El CONTACTO (nombre, teléfono, email) sale de `contacto` cuando llega —la
+ * fuente entera, ver `nombreDeSaludo`—, pero el **DNI siempre de `Cliente`**:
+ * es la identidad comercial de la compra, no un dato de la cuenta.
+ *
+ * Una cuenta a medio completar devuelve `telefono: null` aunque el `Cliente`
+ * del mismo DNI tenga uno: se muestra un guion, y NO se completa con el de
+ * `Cliente`. Por eso el panel puede mostrar un teléfono que este mail no trae.
+ *
  * @param {{id: number, notas: string|null, createdAt?: Date, cliente: object, items: Array}} orden
- * @param {{urlOrden: string, urlSitio?: string}} opciones
+ * @param {{urlOrden: string, urlSitio?: string, contacto?: {nombre: string|null, email: string|null, telefono: string|null}}} opciones
  * @returns {{asunto: string, texto: string, html: string}}
  */
-export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio }) {
+export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio, contacto }) {
   const { cliente } = orden;
-  const asunto = `Nueva orden #${orden.id} — ${cliente.nombre} (DNI ${cliente.dni})`;
-  const email = cliente.email ?? "—";
+  const fuente = contacto ?? cliente ?? {};
+  const nombre = fuente.nombre ?? "";
+  const telefono = fuente.telefono ?? null;
+  const emailContacto = fuente.email ?? null;
+  // `?.` en el DNI: una orden sin `cliente` no puede tumbar el aviso interno.
+  // Esto se arma dentro de un fire-and-forget (ver `email.md`).
+  const dni = cliente?.dni ?? "—";
+  const asunto = `Nueva orden #${orden.id} — ${nombre} (DNI ${dni})`;
+  const email = emailContacto ?? "—";
   const total = formatearMonto(totalDeItems(orden.items));
   const unidades = unidadesDe(orden.items);
 
@@ -763,9 +796,9 @@ export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio }) {
     `Entró una orden nueva: #${orden.id}`,
     "",
     "CLIENTE",
-    `Nombre: ${cliente.nombre}`,
-    `DNI: ${cliente.dni}`,
-    `Teléfono: ${cliente.telefono}`,
+    `Nombre: ${nombre}`,
+    `DNI: ${dni}`,
+    `Teléfono: ${telefono ?? "—"}`,
     `Email: ${email}`,
     "",
     "PEDIDO",
@@ -794,17 +827,17 @@ export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio }) {
 
   const html = envolver({
     urlSitio,
-    vistaPrevia: `${total} · ${unidades} ${unidades === 1 ? "unidad" : "unidades"} · ${cliente.nombre}`,
+    vistaPrevia: `${total} · ${unidades} ${unidades === 1 ? "unidad" : "unidades"} · ${nombre}`,
     rotulo: "Orden nueva",
     titulo: `Pedido #${orden.id} · ${total}`,
     contexto,
     cuerpo: `
               ${rotuloSeccion("Cliente")}
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background-color:${COLOR_PANEL};border-radius:10px;margin:0 0 26px;">
-                ${fila("Nombre", `<strong>${escaparHtml(cliente.nombre)}</strong>`, "16px 20px 6px")}
-                ${fila("DNI", escaparHtml(cliente.dni), "0 20px 6px")}
-                ${fila("Teléfono", enlace(`tel:${cliente.telefono}`, cliente.telefono), "0 20px 6px")}
-                ${fila("Email", cliente.email ? enlace(`mailto:${cliente.email}`, cliente.email) : "—", "0 20px 16px")}
+                ${fila("Nombre", `<strong>${escaparHtml(nombre)}</strong>`, "16px 20px 6px")}
+                ${fila("DNI", escaparHtml(dni), "0 20px 6px")}
+                ${fila("Teléfono", telefono ? enlace(`tel:${telefono}`, telefono) : "—", "0 20px 6px")}
+                ${fila("Email", emailContacto ? enlace(`mailto:${emailContacto}`, emailContacto) : "—", "0 20px 16px")}
               </table>
               ${rotuloSeccion("Pedido")}
               ${detalleDelPedido(orden.items)}
@@ -835,10 +868,11 @@ export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio }) {
  * entenderse solo, sin obligar a buscar el de la confirmación.
  *
  * @param {{id: number, estado: string, updatedAt?: Date, cliente: object, items: Array}} orden
- * @param {{urlSitio?: string}} [opciones]
+ * @param {{urlSitio?: string, contacto?: {nombre: string|null, email: string|null, telefono: string|null}}} [opciones]
  * @returns {{asunto: string, texto: string, html: string}}
  */
-export function plantillaCambioEstadoCliente(orden, { urlSitio } = {}) {
+export function plantillaCambioEstadoCliente(orden, { urlSitio, contacto } = {}) {
+  const nombre = nombreDeSaludo(orden, contacto);
   const etiqueta = ETIQUETA_ESTADO[orden.estado] ?? orden.estado;
   const asunto = `Tu pedido #${orden.id} está ${etiqueta.toLowerCase()}`;
   const intro = INTRO_POR_ESTADO[orden.estado] ?? `Tu pedido cambió de estado: ${etiqueta}.`;
@@ -846,7 +880,7 @@ export function plantillaCambioEstadoCliente(orden, { urlSitio } = {}) {
   const total = formatearMonto(totalDeItems(orden.items));
 
   const texto = [
-    `Hola ${orden.cliente.nombre},`,
+    nombre ? `Hola ${nombre},` : "Hola,",
     "",
     intro,
     "",
@@ -875,7 +909,7 @@ export function plantillaCambioEstadoCliente(orden, { urlSitio } = {}) {
               ${chipEstado(orden.estado, etiqueta)}
               ${barraProgreso(orden.estado)}
               <p style="margin:0 0 26px;color:${COLOR_TEXTO};font-size:16px;line-height:1.6;">
-                Hola ${escaparHtml(orden.cliente.nombre)}, ${escaparHtml(intro)}
+                ${nombre ? `Hola ${escaparHtml(nombre)}, ` : ""}${escaparHtml(intro)}
               </p>
               ${rotuloSeccion("Detalle del pedido")}
               ${detalleDelPedido(orden.items)}`,

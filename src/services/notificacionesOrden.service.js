@@ -1,5 +1,6 @@
 import { enviarMail } from "./email.service.js";
 import { logError } from "../lib/logError.js";
+import { contactoDeOrden } from "../controllers/ordenes.mapper.js";
 import {
   plantillaCambioEstadoCliente,
   plantillaOrdenCreadaAdmin,
@@ -9,6 +10,13 @@ import {
 /**
  * Reglas de negocio del envío de correo de órdenes: a quién se le escribe,
  * con qué plantilla, y qué pasa cuando falla.
+ *
+ * Desde la Parte 3 (cuentas de cliente), "a quién" lo resuelve
+ * `contactoDeOrden` (decisión 8 de la spec) y las dos funciones lo resuelven
+ * IGUAL: si la orden tiene cuenta, el destinatario y el nombre del saludo
+ * salen de ahí — nunca de `Cliente`, que otra compra de invitado con el mismo
+ * DNI pudo haber pisado. Las plantillas reciben ese contacto ya resuelto en
+ * vez de leer `orden.cliente` a mano.
  *
  * Las dos funciones exportadas tratan el error de forma DISTINTA a propósito:
  *
@@ -97,17 +105,19 @@ async function enviarYRegistrar({ para, armarPlantilla, descripcion }) {
  *
  * NUNCA lanza.
  *
- * @param {object} orden - con `cliente` e `items` incluidos
+ * @param {object} orden - con `cliente`, `cuentaCliente` (si hay) e `items`
  * @returns {Promise<void>}
  */
 export async function notificarOrdenCreada(orden) {
+  const contacto = contactoDeOrden(orden);
   const envios = [];
 
-  if (orden.cliente?.email) {
+  if (contacto.email) {
     envios.push(
       enviarYRegistrar({
-        para: orden.cliente.email,
-        armarPlantilla: () => plantillaOrdenCreadaCliente(orden, { urlSitio: urlSitio() }),
+        para: contacto.email,
+        armarPlantilla: () =>
+          plantillaOrdenCreadaCliente(orden, { urlSitio: urlSitio(), contacto }),
         descripcion: `confirmación de la orden ${orden.id} al cliente`,
       }),
     );
@@ -122,6 +132,7 @@ export async function notificarOrdenCreada(orden) {
           plantillaOrdenCreadaAdmin(orden, {
             urlOrden: urlDeOrden(orden.id),
             urlSitio: urlSitio(),
+            contacto,
           }),
         descripcion: `aviso interno de la orden ${orden.id}`,
       }),
@@ -137,11 +148,12 @@ export async function notificarOrdenCreada(orden) {
  *
  * NUNCA lanza: devuelve el resultado para que el controller lo informe.
  *
- * @param {object} orden - con `cliente` e `items` incluidos
+ * @param {object} orden - con `cliente`, `cuentaCliente` (si hay) e `items`
  * @returns {Promise<{intentada: boolean, enviada: boolean, error?: string}>}
  */
 export async function notificarCambioEstado(orden) {
-  const email = orden.cliente?.email;
+  const contacto = contactoDeOrden(orden);
+  const email = contacto.email;
 
   if (!email) {
     // No es un error de la operación: el estado se guardó igual. Es una orden
@@ -155,7 +167,7 @@ export async function notificarCambioEstado(orden) {
 
   const resultado = await enviarYRegistrar({
     para: email,
-    armarPlantilla: () => plantillaCambioEstadoCliente(orden, { urlSitio: urlSitio() }),
+    armarPlantilla: () => plantillaCambioEstadoCliente(orden, { urlSitio: urlSitio(), contacto }),
     descripcion: `cambio de estado de la orden ${orden.id}`,
   });
 
