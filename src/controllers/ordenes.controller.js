@@ -21,6 +21,7 @@ import {
   DETALLE_ORDEN_INCLUDE,
   LISTADO_ORDEN_INCLUDE,
   mapOrden,
+  mapOrdenCuenta,
   mapOrdenListado,
 } from "./ordenes.mapper.js";
 import { notificarCambioEstado, notificarOrdenCreada } from "../services/notificacionesOrden.service.js";
@@ -207,21 +208,87 @@ async function upsertClienteConReintento(tx, { dni, nombre, telefono, email }) {
 }
 
 /**
- * POST /api/ordenes — checkout de invitado, PÚBLICO (sin requireAuth). El
- * rate-limiting se aplica a nivel de ruta (ver ordenes.routes.js), no acá.
+ * Resuelve el contacto de un checkout CON sesión: los cuatro campos salen de
+ * la cuenta, NINGUNO del body.
+ *
+ * `req.cuentaCliente` solo lleva `{ id, email }` (ver
+ * `authCliente.middleware.js`), así que el perfil se relee acá — fuera de la
+ * transacción, igual que `validarYSnapshotearProductos`.
+ *
+ * **Por qué el body no puede aportar nada** (amenazas 5 y 7 de la spec): el
+ * `Cliente` se busca y se pisa POR DNI, así que un comprador logueado que
+ * mande el DNI de otra persona le reescribiría nombre y teléfono a esa fila,
+ * y el comprobante saldría con datos que él eligió. Con el contacto resuelto
+ * desde la cuenta, el peor caso es que alguien ensucie SU propio `Cliente`.
+ * El guard del frontend (`RequireAuthCliente`) ya exige nombre + teléfono +
+ * DNI antes de dejar llegar al checkout: los campos del body son redundantes
+ * en el camino feliz, y peligrosos en el otro.
+ *
+ * Perfil incompleto → 400 que manda a completarlo. No se completa con el body
+ * ni se deja pasar: `Cliente.nombre` es NOT NULL y el `$transaction`
+ * explotaría con un 500 en vez de decir qué falta.
+ */
+async function resolverContactoDeLaCuenta(cuentaCliente) {
+  const perfil = await prisma.cuentaCliente.findUnique({
+    where: { id: cuentaCliente.id },
+    select: { nombre: true, telefono: true, dni: true },
+  });
+
+  const contacto = {
+    dni: perfil?.dni ?? null,
+    nombre: perfil?.nombre ?? null,
+    telefono: perfil?.telefono ?? null,
+    // La identidad verificada de la cuenta, nunca el del body: es la casilla
+    // a la que va a salir el comprobante.
+    email: cuentaCliente.email,
+  };
+
+  if (!contacto.dni || !contacto.nombre || !contacto.telefono) {
+    throw httpError(
+      400,
+      "Completá tu perfil (nombre, teléfono y DNI) antes de continuar con la compra.",
+    );
+  }
+
+  return contacto;
+}
+
+/**
+ * POST /api/ordenes — checkout con o sin sesión de cliente. PÚBLICO en el
+ * sentido de que no exige auth de ADMIN; ver `ordenes.routes.js` para el
+ * `authClienteOpcional` y el corte por `checkoutRequiereCuenta()`. El
+ * rate-limiting se aplica a nivel de ruta, no acá.
+ *
+ * CON SESIÓN (decisión 8 de la spec):
+ *   - Los cuatro datos de contacto salen de la CUENTA, ninguno del body — ver
+ *     `resolverContactoDeLaCuenta`.
+ *   - La orden se crea con `cuentaClienteId`: es el campo por el que "Mis
+ *     pedidos" filtra, y su NULL en las órdenes de invitado es lo que deja el
+ *     historial anterior a la cuenta fuera de toda vista logueada.
+ *   - La respuesta pasa por `mapOrdenCuenta`, NUNCA por `mapOrden`.
+ *
+ * SIN SESIÓN: comportamiento IDÉNTICO al checkout de invitado de siempre,
+ * eco del body incluido. `upsertClienteConReintento` no cambia de firma en
+ * ningún caso — sigue siendo el único escritor de `Cliente`; lo que cambia es
+ * QUIÉN llena sus cuatro campos.
  *
  * Orden de validación (todo ANTES de cualquier escritura en DB):
- *   1. Campos requeridos presentes (dni/nombre/telefono/items no vacío).
- *   2. DNI normalizado y válido (7-8 dígitos).
- *   3. Forma de cada item (productId/cantidad enteros positivos).
- *   4. Existencia + visibilidad + disponibilidad de cada producto (esto sí
- *      pega contra la DB, es el único paso previo que la requiere).
- * Recién después de pasar las 4 arranca la escritura: upsert de Cliente +
- * creación de Orden/ItemOrden dentro de una misma transacción.
+ *   1. Resolución del contacto, si hay sesión (única consulta nueva).
+ *   2. Campos requeridos presentes (dni/nombre/telefono/email/items no vacío).
+ *   3. DNI normalizado y válido (7-8 dígitos).
+ *   4. Forma de cada item (productId/cantidad enteros positivos).
+ *   5. Existencia + visibilidad + disponibilidad de cada producto.
+ * Recién después arranca la escritura: upsert de Cliente + creación de
+ * Orden/ItemOrden dentro de una misma transacción.
  */
 export async function crear(req, res, next) {
   try {
-    const { dni, nombre, telefono, email, notas, items } = req.body;
+    const cuentaCliente = req.cuentaCliente ?? null;
+    const { notas, items } = req.body;
+
+    const { dni, nombre, telefono, email } = cuentaCliente
+      ? await resolverContactoDeLaCuenta(cuentaCliente)
+      : req.body;
 
     validarCamposBase({ dni, nombre, telefono, email, items });
 
@@ -245,9 +312,18 @@ export async function crear(req, res, next) {
       return tx.orden.create({
         data: {
           clienteId: cliente.id,
+          // NULL explícito sin sesión: es la nulidad de la que depende que
+          // "Mis pedidos" no muestre el historial de invitado de nadie.
+          cuentaClienteId: cuentaCliente?.id ?? null,
           notas: notas?.trim() || null,
           items: { create: itemsConSnapshot },
         },
+        // El MISMO include con y sin sesión, a propósito: `notificarOrdenCreada`
+        // resuelve el destinatario desde `orden.cliente` (fila cruda), así que
+        // recortarlo acá dejaría al comprador logueado sin comprobante — con
+        // 201 y sin ningún error. Se podrá angostar cuando la Task 8 mueva ese
+        // servicio a `contactoDeOrden`. No filtra nada: la respuesta con sesión
+        // pasa por `mapOrdenCuenta`, que descarta `cliente` y los dos ids.
         include: { cliente: true, items: true },
       });
     });
@@ -267,10 +343,15 @@ export async function crear(req, res, next) {
     // hacia el comprador.
     notificarOrdenCreada(orden).catch(() => {});
 
-    // Mapeada, y sin `esAdmin`: este endpoint es público y el 201 lo lee el
-    // comprador. Ver `campoDeCosto` en `ordenes.mapper.js` — devolver la fila
-    // cruda le filtraba `costoUnitario`, o sea el margen del negocio.
-    res.status(201).json(mapOrden(orden));
+    // Mapeada, y sin `esAdmin` en ninguna de las dos ramas: este endpoint lo
+    // lee el comprador. Ver `campoDeCosto` en `ordenes.mapper.js` — devolver
+    // la fila cruda le filtraba `costoUnitario`, o sea el margen del negocio.
+    //
+    // Con sesión va por `mapOrdenCuenta`, que además descarta `cliente`,
+    // `cuentaCliente` y los dos ids de identidad (amenaza 6: el 201 como
+    // oráculo de datos personales). Sin sesión sigue siendo `mapOrden`, con el
+    // eco del body intacto — el checkout de invitado no cambia.
+    res.status(201).json(cuentaCliente ? mapOrdenCuenta(orden) : mapOrden(orden));
   } catch (err) {
     next(err);
   }
