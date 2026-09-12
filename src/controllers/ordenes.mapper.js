@@ -241,6 +241,10 @@ export function mapOrdenCuenta(orden) {
     ...(items !== undefined && {
       items: items.map((item) => mapItemOrden(item, { esAdmin: false })),
     }),
+    // `Orden` no tiene columna `total`: sale de los ítems, igual que en
+    // `mapOrdenCuentaListado`. Sin join, `null` y no `Decimal(0)` — un "$ 0"
+    // inventado es justo el bug que tuvo el detalle de "Mis pedidos".
+    total: items === undefined ? null : totalDeItems(items).toFixed(0),
   };
 }
 

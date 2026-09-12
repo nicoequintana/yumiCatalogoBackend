@@ -405,6 +405,30 @@ describe("mapOrdenCuenta — invariante permanente (amenazas 6/7)", () => {
   });
 });
 
+describe("mapOrdenCuenta — total del detalle", () => {
+  // Bug: el detalle de "Mis pedidos" no emitía `total` y el frontend mostraba
+  // "$ 0" para un pedido que en el listado valía $ 40.025. `Orden` no tiene
+  // columna `total`: sale de los ítems, igual que en `mapOrdenCuentaListado`.
+  it("suma cantidad × precio de TODAS las líneas", () => {
+    const salida = mapOrdenCuenta({
+      id: 7117,
+      estado: "PENDIENTE",
+      items: [
+        { nombreProducto: "Encendedor", precioUnitario: "8005", cantidad: 5 },
+        { nombreProducto: "Mate", precioUnitario: "1000", cantidad: 1 },
+      ],
+    });
+
+    expect(salida.total).toBe("41025");
+  });
+
+  it("emite null cuando nadie joineó los ítems, nunca un $ 0 inventado", () => {
+    const salida = mapOrdenCuenta({ id: 7117, estado: "PENDIENTE" });
+
+    expect(salida.total).toBeNull();
+  });
+});
+
 describe("mapOrdenCuentaListado — invariante permanente (amenazas 6/7)", () => {
   it("nunca emite cliente, cuentaCliente, clienteId, cuentaClienteId ni costoUnitario", () => {
     const salida = mapOrdenCuentaListado(ORDEN_CON_CONTACTO);
