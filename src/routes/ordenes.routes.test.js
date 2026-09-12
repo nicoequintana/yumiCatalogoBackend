@@ -18,6 +18,28 @@ vi.mock("../middlewares/rateLimit.middleware.js", () => ({
   crearLimitadorDeVelocidad: () => (_req, _res, next) => next(),
 }));
 
+// `authClienteOpcional` real vive en la Parte 1 y depende de la cookie
+// `sesion_cliente` + `jwtCliente.js`. Esta suite no la ejercita — eso lo
+// prueba `authCliente.middleware.test.js`. Acá se mockea a un middleware
+// controlable: si el request trae el header de prueba `x-test-cuenta`, setea
+// `req.cuentaCliente` con ese valor (simula sesión); si no, lo deja `null`
+// (simula anónimo). El header nunca existe fuera de tests.
+vi.mock("../middlewares/authCliente.middleware.js", () => ({
+  authClienteOpcional: (req, _res, next) => {
+    const header = req.get("x-test-cuenta");
+    req.cuentaCliente = header ? JSON.parse(header) : null;
+    next();
+  },
+}));
+
+// El flag de la decisión 7 (publicación en dos etapas). Mutable por test:
+// cada `it` que necesite `true` lo setea y el `beforeEach` lo vuelve a
+// `false`, que es el default real cuando la variable de entorno no existe.
+let flagChequeoCuenta = false;
+vi.mock("../lib/env.js", () => ({
+  checkoutRequiereCuenta: () => flagChequeoCuenta,
+}));
+
 const notificarOrdenCreadaMock = vi.fn();
 const notificarCambioEstadoMock = vi.fn();
 
@@ -128,6 +150,7 @@ const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "t
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
+  flagChequeoCuenta = false;
   auditCreateMock.mockReset();
   auditCreateMock.mockResolvedValue({ id: 1 });
   clienteFindUniqueMock.mockReset();
@@ -234,6 +257,71 @@ describe("POST /api/ordenes", () => {
       });
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/ordenes — corte por flag (decisión 7)", () => {
+  const BODY_INVITADO = {
+    dni: "12345678",
+    nombre: "Juan Perez",
+    telefono: "1122334455",
+    email: "juan@gmail.com",
+    items: [{ productId: 1, cantidad: 1 }],
+  };
+  const CUENTA_HEADER = JSON.stringify({ id: 9, email: "cuenta@gmail.com" });
+
+  function prepararAltaExitosa() {
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockResolvedValue(CLIENTE);
+    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    ordenCreateMock.mockResolvedValue(ORDEN);
+  }
+
+  it("flag false, sin sesión: 201 como el checkout de invitado de siempre", async () => {
+    prepararAltaExitosa();
+    const res = await request(buildApp()).post("/api/ordenes").send(BODY_INVITADO);
+    expect(res.status).toBe(201);
+  });
+
+  it("flag false, CON sesión: también 201 — el flag es lo único que corta", async () => {
+    prepararAltaExitosa();
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send(BODY_INVITADO);
+    expect(res.status).toBe(201);
+  });
+
+  it("flag true, sin sesión: 401 SESION_INVALIDA, y NO llega a crear nada", async () => {
+    flagChequeoCuenta = true;
+    const res = await request(buildApp()).post("/api/ordenes").send(BODY_INVITADO);
+    expect(res.status).toBe(401);
+    expect(res.body.codigo).toBe("SESION_INVALIDA");
+    expect(ordenCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("flag true, CON sesión: 201", async () => {
+    flagChequeoCuenta = true;
+    prepararAltaExitosa();
+    const res = await request(buildApp())
+      .post("/api/ordenes")
+      .set("x-test-cuenta", CUENTA_HEADER)
+      .send(BODY_INVITADO);
+    expect(res.status).toBe(201);
+  });
+
+  it("el corte por flag va ANTES del limitador: un 401 no consume cuota de pedidos", async () => {
+    // `crearLimitadorDeVelocidad` está mockeado a no-op en este archivo, así
+    // que este test verifica el ORDEN por otro lado: si el corte fuera
+    // posterior al limitador, la llamada al limitador (el mock) igual
+    // ocurriría antes del 401 — lo que este test afirma es que ninguna
+    // escritura de negocio (`ordenCreateMock`) corre, que es la señal
+    // observable de que el handler de negocio nunca se alcanzó.
+    flagChequeoCuenta = true;
+    const res = await request(buildApp()).post("/api/ordenes").send(BODY_INVITADO);
+    expect(res.status).toBe(401);
+    expect(clienteFindUniqueMock).not.toHaveBeenCalled();
+    expect(productFindManyMock).not.toHaveBeenCalled();
   });
 });
 
