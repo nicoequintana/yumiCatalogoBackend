@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ITEMS_RESUMEN, mapOrden, mapOrdenListado } from "./ordenes.mapper.js";
+import {
+  DETALLE_ORDEN_INCLUDE,
+  LISTADO_ORDEN_INCLUDE,
+  MAX_ITEMS_RESUMEN,
+  contactoDeOrden,
+  mapOrden,
+  mapOrdenListado,
+} from "./ordenes.mapper.js";
 
 /**
  * `ItemOrden.costoUnitario` es lo que el negocio PAGA por su mercadería. El
@@ -250,5 +257,97 @@ describe("mapOrdenListado", () => {
     };
 
     expect(JSON.stringify(mapOrdenListado(conCosto))).not.toContain("costoUnitario");
+  });
+});
+
+/**
+ * Decisión 8 (cuentas de cliente, parte 3): el contacto de una orden con
+ * cuenta se resuelve desde `CuentaCliente`, nunca se expone crudo, y el `dni`
+ * sigue viajando SIEMPRE de `Cliente`.
+ */
+
+const CUENTA_SELECT = { id: true, nombre: true, telefono: true, email: true };
+
+describe("includes del admin — decisión 8", () => {
+  it("DETALLE_ORDEN_INCLUDE joinea cuentaCliente con select explícito, nunca true", () => {
+    expect(DETALLE_ORDEN_INCLUDE.cuentaCliente).toEqual({ select: CUENTA_SELECT });
+  });
+
+  it("LISTADO_ORDEN_INCLUDE joinea cuentaCliente con select explícito, nunca true", () => {
+    expect(LISTADO_ORDEN_INCLUDE.cuentaCliente).toEqual({ select: CUENTA_SELECT });
+  });
+});
+
+describe("mapOrden — contacto resuelto (decisión 8 y 12)", () => {
+  const CLIENTE = { id: 1, dni: "12345678", nombre: "Juan Invitado", telefono: "111", email: "juan@viejo.com" };
+  const CUENTA = { id: 9, nombre: "Juan Cuenta", telefono: "222", email: "juan@cuenta.com" };
+
+  it("con cuentaCliente, nombre/telefono/email salen de la cuenta", () => {
+    const mapeada = mapOrden({ id: 1, estado: "PENDIENTE", cliente: CLIENTE, cuentaCliente: CUENTA });
+    expect(mapeada.cliente.nombre).toBe("Juan Cuenta");
+    expect(mapeada.cliente.telefono).toBe("222");
+    expect(mapeada.cliente.email).toBe("juan@cuenta.com");
+  });
+
+  it("el dni SIEMPRE sale de Cliente, nunca de CuentaCliente", () => {
+    const mapeada = mapOrden({ id: 1, estado: "PENDIENTE", cliente: CLIENTE, cuentaCliente: { ...CUENTA, dni: "99999999" } });
+    expect(mapeada.cliente.dni).toBe("12345678");
+  });
+
+  it("campo por campo: un hueco en la cuenta cae al Cliente, no rompe el resto", () => {
+    const cuentaIncompleta = { id: 9, nombre: null, telefono: null, email: "juan@cuenta.com" };
+    const mapeada = mapOrden({ id: 1, estado: "PENDIENTE", cliente: CLIENTE, cuentaCliente: cuentaIncompleta });
+    expect(mapeada.cliente.nombre).toBe("Juan Invitado");
+    expect(mapeada.cliente.telefono).toBe("111");
+    expect(mapeada.cliente.email).toBe("juan@cuenta.com");
+  });
+
+  it("sin cuentaCliente (orden de invitado), el cliente viaja tal cual", () => {
+    const mapeada = mapOrden({ id: 1, estado: "PENDIENTE", cliente: CLIENTE });
+    expect(mapeada.cliente).toEqual(CLIENTE);
+  });
+
+  it("la respuesta NUNCA expone la clave cuentaCliente cruda", () => {
+    const mapeada = mapOrden({ id: 1, estado: "PENDIENTE", cliente: CLIENTE, cuentaCliente: CUENTA });
+    expect(mapeada).not.toHaveProperty("cuentaCliente");
+    expect(JSON.stringify(mapeada)).not.toContain("cuentaCliente");
+  });
+
+  it("orden sin cliente joineado no explota (mapOrden tolera cliente ausente)", () => {
+    expect(() => mapOrden({ id: 1, estado: "PENDIENTE" })).not.toThrow();
+  });
+});
+
+describe("mapOrdenListado — mismo contacto resuelto que mapOrden", () => {
+  it("resuelve nombre desde la cuenta y no expone cuentaCliente", () => {
+    const orden = {
+      id: 1,
+      estado: "PENDIENTE",
+      cliente: { nombre: "Invitado", telefono: "1", email: "a@a.com" },
+      cuentaCliente: { nombre: "De la cuenta", telefono: "2", email: "b@b.com" },
+      items: [{ nombreProducto: "X", precioUnitario: "100", cantidad: 1 }],
+    };
+    const mapeada = mapOrdenListado(orden);
+    expect(mapeada.cliente.nombre).toBe("De la cuenta");
+    expect(mapeada).not.toHaveProperty("cuentaCliente");
+  });
+});
+
+describe("contactoDeOrden — decisión 8, preferencia de OBJETO completo", () => {
+  it("con cuentaCliente, usa la cuenta ENTERA (no mezcla campos)", () => {
+    const orden = {
+      cliente: { nombre: "Invitado", telefono: "111", email: "viejo@x.com" },
+      cuentaCliente: { nombre: "Cuenta", telefono: "222", email: "nuevo@x.com" },
+    };
+    expect(contactoDeOrden(orden)).toEqual({ nombre: "Cuenta", telefono: "222", email: "nuevo@x.com" });
+  });
+
+  it("sin cuentaCliente, cae a Cliente entero", () => {
+    const orden = { cliente: { nombre: "Invitado", telefono: "111", email: "viejo@x.com" } };
+    expect(contactoDeOrden(orden)).toEqual({ nombre: "Invitado", telefono: "111", email: "viejo@x.com" });
+  });
+
+  it("sin ninguno de los dos, devuelve los tres campos en null (nunca explota)", () => {
+    expect(contactoDeOrden({})).toEqual({ nombre: null, telefono: null, email: null });
   });
 });
