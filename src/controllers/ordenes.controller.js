@@ -185,6 +185,24 @@ async function validarYSnapshotearProductos(items) {
  * Regla de negocio: si el cliente YA existe, se actualizan sus datos de
  * contacto con los valores nuevos (el negocio quiere el dato de contacto más
  * reciente, no el primero que se cargó).
+ *
+ * PRECONDICIÓN NO OBVIA — `XACT_ABORT` tiene que seguir en OFF. A diferencia
+ * del re-lookup de la idempotencia (`buscarOrdenDeLaClave`), que corre FUERA de
+ * la transacción y después de que revirtió, el re-lookup del `catch` de acá
+ * corre DENTRO de la misma transacción cuyo statement anterior acaba de fallar.
+ * Eso solo es válido porque un error de clave duplicada (severidad 14) no deja
+ * la transacción condenada: con `XACT_ABORT` en OFF el `SELECT` posterior y el
+ * COMMIT siguen siendo legales. Hoy nadie prende ese flag —
+ * `@prisma/adapter-mssql@7.9.1` nunca setea `abortTransactionOnError`,
+ * `lib/prisma.js` le pasa solo `DATABASE_URL`, no hay nada en el repo que lo
+ * toque, y `tedious` lo default-ea a `false`—, pero si algún día se prende, el
+ * `SELECT` del catch lanzaría un error DISTINTO encima del original y el
+ * reintento quedaría inerte otra vez: exactamente la falla que este código
+ * existe para sacar, y otra vez sin un solo test en rojo.
+ *
+ * Probado contra la base, no supuesto: dos checkouts de invitado simultáneos
+ * con el mismo DNI nuevo, cuatro rondas, 201/201 y una sola fila de `Cliente`
+ * (evidencia: `.superpowers/sdd/fix-meta-target/verificacion-real.md`).
  */
 async function upsertClienteConReintento(tx, { dni, nombre, telefono, email }) {
   const datosDeContacto = { nombre, telefono, email: email ?? null };

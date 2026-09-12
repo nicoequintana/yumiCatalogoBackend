@@ -617,6 +617,11 @@ describe("crear() — concurrencia (retry-on-P2002 para dni)", () => {
 
       expect(next).not.toHaveBeenCalled();
       expect(clienteCreateMock).toHaveBeenCalledTimes(1);
+      // Exactamente tres: el lookup inicial, el re-lookup del catch y el del
+      // giro siguiente del loop, que es el que sale por update(). Clavado a
+      // propósito — sin este número, el camino feliz no se daría cuenta de que
+      // el loop empezó a girar lookups de más.
+      expect(clienteFindUniqueMock).toHaveBeenCalledTimes(3);
       expect(clienteUpdateMock).toHaveBeenCalledWith(
         expect.objectContaining({ where: { dni: "12345678" } }),
       );
