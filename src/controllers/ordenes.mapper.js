@@ -123,9 +123,16 @@ function resolverCliente(cliente, cuentaCliente) {
  * nombre de una fuente con el email de otra podría mandarle "Hola María" a
  * la casilla de Juan. Si hay cuenta, se confía en ella entera; si no, se cae
  * entera a `Cliente`.
+ *
+ * `orden` se lee con `?.`, a diferencia del resto del archivo que usa
+ * `if (!orden) return orden`: esta función siempre devuelve la MISMA forma
+ * (los tres campos en `null`), nunca la orden de entrada, así que la guarda
+ * de "orden ausente" tiene que vivir adentro. Lo dispara
+ * `notificacionesOrden.service.js` en fire-and-forget: un throw ahí lo traga
+ * el `.catch` del servicio y el mail desaparece sin ningún rastro.
  */
 export function contactoDeOrden(orden) {
-  const fuente = orden.cuentaCliente ?? orden.cliente ?? {};
+  const fuente = orden?.cuentaCliente ?? orden?.cliente ?? {};
   return {
     nombre: fuente.nombre ?? null,
     email: fuente.email ?? null,

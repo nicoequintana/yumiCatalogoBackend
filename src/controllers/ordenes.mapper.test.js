@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  DETALLE_ORDEN_CUENTA_INCLUDE,
   DETALLE_ORDEN_INCLUDE,
+  LISTADO_ORDEN_CUENTA_INCLUDE,
   LISTADO_ORDEN_INCLUDE,
   MAX_ITEMS_RESUMEN,
   contactoDeOrden,
   mapOrden,
+  mapOrdenCuenta,
+  mapOrdenCuentaListado,
   mapOrdenListado,
 } from "./ordenes.mapper.js";
 
@@ -349,5 +353,79 @@ describe("contactoDeOrden — decisión 8, preferencia de OBJETO completo", () =
 
   it("sin ninguno de los dos, devuelve los tres campos en null (nunca explota)", () => {
     expect(contactoDeOrden({})).toEqual({ nombre: null, telefono: null, email: null });
+  });
+
+  it("con orden null o undefined, nunca explota (fix round 1)", () => {
+    // `notificacionesOrden.service.js` llama a esto fire-and-forget: si
+    // tirara, el `.catch` de ese servicio se lo traga y el mail desaparece
+    // sin dejar rastro. A diferencia de `mapOrden`/`mapOrdenListado`, esta
+    // función no tenía guarda de falsy — se agrega acá.
+    expect(contactoDeOrden(null)).toEqual({ nombre: null, telefono: null, email: null });
+    expect(contactoDeOrden(undefined)).toEqual({ nombre: null, telefono: null, email: null });
+  });
+});
+
+/**
+ * Fix round 1 — amenazas 6/7: `mapOrdenCuenta`/`mapOrdenCuentaListado` (y sus
+ * includes) son el guard entero de "ninguna superficie del comprador emite
+ * `Cliente`/`CuentaCliente`". Hasta ahora el invariante vivía solo en un
+ * docstring; estos tests lo fijan para que un edit futuro que borre una
+ * clave del destructuring falle en rojo en vez de filtrar en silencio.
+ */
+
+const ORDEN_CON_CONTACTO = {
+  id: 1,
+  estado: "PENDIENTE",
+  clienteId: 10,
+  cuentaClienteId: 9,
+  cliente: { id: 10, dni: "12345678", nombre: "Juan Invitado", telefono: "111", email: "juan@viejo.com" },
+  cuentaCliente: { id: 9, nombre: "Juan Cuenta", telefono: "222", email: "juan@cuenta.com" },
+  items: [
+    {
+      id: 1,
+      productId: 7,
+      nombreProducto: "Termo",
+      precioUnitario: "3075",
+      costoUnitario: "1500",
+      cantidad: 2,
+    },
+  ],
+};
+
+describe("mapOrdenCuenta — invariante permanente (amenazas 6/7)", () => {
+  it("nunca emite cliente, cuentaCliente, clienteId, cuentaClienteId ni costoUnitario", () => {
+    const salida = mapOrdenCuenta(ORDEN_CON_CONTACTO);
+    const crudo = JSON.stringify(salida);
+
+    expect(crudo).not.toContain("cuentaCliente");
+    expect(crudo).not.toContain("clienteId");
+    expect(crudo).not.toContain("cuentaClienteId");
+    expect(crudo).not.toContain("costoUnitario");
+    expect(salida).not.toHaveProperty("cliente");
+  });
+});
+
+describe("mapOrdenCuentaListado — invariante permanente (amenazas 6/7)", () => {
+  it("nunca emite cliente, cuentaCliente, clienteId, cuentaClienteId ni costoUnitario", () => {
+    const salida = mapOrdenCuentaListado(ORDEN_CON_CONTACTO);
+    const crudo = JSON.stringify(salida);
+
+    expect(crudo).not.toContain("cuentaCliente");
+    expect(crudo).not.toContain("clienteId");
+    expect(crudo).not.toContain("cuentaClienteId");
+    expect(crudo).not.toContain("costoUnitario");
+    expect(salida).not.toHaveProperty("cliente");
+  });
+});
+
+describe("includes de la superficie del comprador — nunca joinean cliente/cuentaCliente", () => {
+  it("DETALLE_ORDEN_CUENTA_INCLUDE no declara cliente ni cuentaCliente", () => {
+    expect(DETALLE_ORDEN_CUENTA_INCLUDE).not.toHaveProperty("cliente");
+    expect(DETALLE_ORDEN_CUENTA_INCLUDE).not.toHaveProperty("cuentaCliente");
+  });
+
+  it("LISTADO_ORDEN_CUENTA_INCLUDE no declara cliente ni cuentaCliente", () => {
+    expect(LISTADO_ORDEN_CUENTA_INCLUDE).not.toHaveProperty("cliente");
+    expect(LISTADO_ORDEN_CUENTA_INCLUDE).not.toHaveProperty("cuentaCliente");
   });
 });
