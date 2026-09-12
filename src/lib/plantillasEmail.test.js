@@ -202,6 +202,23 @@ describe("plantillaOrdenCreadaAdmin — nombre/telefono/email del contacto, dni 
     expect(texto).toContain("DNI: 12345678");
     expect(texto).not.toContain("null");
   });
+
+  // `CuentaCliente.nombre` es nullable, así que una cuenta a medio completar
+  // llega hasta acá. El vacío se muestra con el MISMO guion que el teléfono y
+  // el email ausentes: un `<strong></strong>` y un asunto con dos espacios
+  // seguidos se leen como un mail roto, no como un dato que falta.
+  it("un nombre nulo se muestra como guion, igual que los demás campos vacíos", () => {
+    const { texto, asunto, html } = plantillaOrdenCreadaAdmin(ORDEN, {
+      ...OPCIONES,
+      contacto: { nombre: null, telefono: "111", email: "nuevo@gmail.com" },
+    });
+
+    expect(texto).toContain("Nombre: —");
+    expect(asunto).toBe("Nueva orden #42 — — (DNI 12345678)");
+    // El doble espacio que dejaba el nombre vacío en el asunto.
+    expect(asunto).not.toMatch(/ {2}/);
+    expect(html).not.toContain("<strong></strong>");
+  });
 });
 
 describe("plantillaOrdenCreadaCliente — recibe contacto resuelto", () => {

@@ -781,7 +781,14 @@ function barraProgreso(estado) {
 export function plantillaOrdenCreadaAdmin(orden, { urlOrden, urlSitio, contacto }) {
   const { cliente } = orden;
   const fuente = contacto ?? cliente ?? {};
-  const nombre = fuente.nombre ?? "";
+  // Guion y no `""`: `CuentaCliente.nombre` es nullable, así que una cuenta a
+  // medio completar llega hasta acá. Con la cadena vacía el asunto salía
+  // `Nueva orden #42 —  (DNI ...)` —dos espacios— y la fila era un
+  // `<strong></strong>` vacío, que se lee como un mail roto en vez de como un
+  // dato que falta. Los otros dos campos ausentes de este aviso ya mostraban
+  // `—`. El saludo al COMPRADOR es otra cosa y sigue con `""`: ahí la
+  // degradación correcta es "Hola," (ver `nombreDeSaludo`).
+  const nombre = fuente.nombre ?? "—";
   const telefono = fuente.telefono ?? null;
   const emailContacto = fuente.email ?? null;
   // `?.` en el DNI: una orden sin `cliente` no puede tumbar el aviso interno.
