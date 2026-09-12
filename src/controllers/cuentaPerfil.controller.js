@@ -13,6 +13,7 @@ import {
   exigirTextoAcotado,
   purgarVencidaConEmail,
   responderMotivo,
+  textoOpcionalAcotado,
 } from "../lib/cuentaClienteReglas.js";
 import { firmarSesionCliente } from "../lib/jwtCliente.js";
 import { borrarCookieSesion, setCookieSesion } from "../lib/cookiesCliente.js";
@@ -32,6 +33,7 @@ const SELECT_PERFIL = {
   nombre: true,
   telefono: true,
   dni: true,
+  apodo: true,
   passwordHash: true,
   identidadGoogle: { select: { cuentaClienteId: true } },
 };
@@ -45,6 +47,7 @@ function mapPerfil(cuenta) {
     nombre: cuenta.nombre,
     telefono: cuenta.telefono,
     dni: cuenta.dni,
+    apodo: cuenta.apodo,
     tieneGoogle: Boolean(cuenta.identidadGoogle),
     tienePassword: Boolean(cuenta.passwordHash),
   };
@@ -65,10 +68,13 @@ export async function obtenerPerfil(req, res, next) {
 }
 
 /**
- * Lista blanca: SOLO nombre/telefono/dni pueden llegar a `data` — ni email,
- * password, `emailVerificado`, `origenRegistro` ni `tokenVersion` (Amenaza 8,
- * mismo criterio que `registro`). Mismas reglas de campo que `registro`
- * (obligatorio no vacío, tope `LARGO_MAX_TEXTO`, DNI normalizado y validado).
+ * Lista blanca: SOLO nombre/telefono/dni/apodo pueden llegar a `data` — ni
+ * email, password, `emailVerificado`, `origenRegistro` ni `tokenVersion`
+ * (Amenaza 8, mismo criterio que `registro`). nombre/telefono/dni son
+ * obligatorios no vacíos (mismas reglas que `registro`, tope
+ * `LARGO_MAX_TEXTO`, DNI normalizado y validado); `apodo` es el único que
+ * pasa por `textoOpcionalAcotado`, así mandar `""` lo BORRA (queda `null`) en
+ * vez de tirar 400 — comportamiento querido, no un error.
  */
 export async function actualizarPerfil(req, res, next) {
   try {
@@ -86,6 +92,9 @@ export async function actualizarPerfil(req, res, next) {
       const dni = normalizarDni(req.body.dni);
       if (!esDniValido(dni)) throw httpError(400, "El DNI debe tener 7 u 8 dígitos.");
       data.dni = dni;
+    }
+    if (req.body?.apodo !== undefined) {
+      data.apodo = textoOpcionalAcotado(req.body.apodo, { etiqueta: "El apodo" });
     }
 
     let cuenta;

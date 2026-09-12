@@ -104,6 +104,22 @@ describe("GET /cuenta", () => {
     expect(res.body.tienePassword).toBe(false);
   });
 
+  it("emite el apodo", async () => {
+    findUniqueMock.mockResolvedValue({
+      id: 1,
+      email: "juan@gmail.com",
+      origenRegistro: "LOCAL",
+      nombre: "Juan",
+      telefono: "111",
+      dni: "12345678",
+      apodo: "Juancito",
+      passwordHash: "$2a$11$x",
+      identidadGoogle: null,
+    });
+    const res = await request(buildApp()).get("/perfil");
+    expect(res.body.apodo).toBe("Juancito");
+  });
+
   it("cuenta borrada entre requests: 404, no 500", async () => {
     findUniqueMock.mockResolvedValue(null);
     const res = await request(buildApp()).get("/perfil");
@@ -155,5 +171,64 @@ describe("PUT /cuenta", () => {
     updateMock.mockRejectedValue(err);
     const res = await request(buildApp()).put("/perfil").send({ nombre: "Juan Perez" });
     expect(res.status).toBe(404);
+  });
+
+  it("apodo: lo setea", async () => {
+    updateMock.mockResolvedValue({
+      id: 1,
+      email: "juan@gmail.com",
+      origenRegistro: "LOCAL",
+      nombre: "Juan",
+      telefono: "111",
+      dni: "12345678",
+      apodo: "Juancito",
+      passwordHash: null,
+      identidadGoogle: null,
+    });
+    const res = await request(buildApp()).put("/perfil").send({ apodo: "Juancito" });
+    expect(res.status).toBe(200);
+    expect(updateMock.mock.calls[0][0].data).toEqual({ apodo: "Juancito" });
+    expect(res.body.apodo).toBe("Juancito");
+  });
+
+  it("apodo con string vacío: lo BORRA (queda null), no es un error", async () => {
+    updateMock.mockResolvedValue({
+      id: 1,
+      email: "juan@gmail.com",
+      origenRegistro: "LOCAL",
+      nombre: "Juan",
+      telefono: "111",
+      dni: "12345678",
+      apodo: null,
+      passwordHash: null,
+      identidadGoogle: null,
+    });
+    const res = await request(buildApp()).put("/perfil").send({ apodo: "" });
+    expect(res.status).toBe(200);
+    expect(updateMock.mock.calls[0][0].data).toEqual({ apodo: null });
+    expect(res.body.apodo).toBeNull();
+  });
+
+  it("apodo mas largo que la columna: 400, no llega a escribir", async () => {
+    const res = await request(buildApp()).put("/perfil").send({ apodo: "a".repeat(1001) });
+    expect(res.status).toBe(400);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("PUT sin la clave apodo: no la toca", async () => {
+    updateMock.mockResolvedValue({
+      id: 1,
+      email: "juan@gmail.com",
+      origenRegistro: "LOCAL",
+      nombre: "Juan Perez",
+      telefono: "111",
+      dni: "12345678",
+      apodo: "Ya tenía uno",
+      passwordHash: null,
+      identidadGoogle: null,
+    });
+    await request(buildApp()).put("/perfil").send({ nombre: "Juan Perez" });
+    expect(updateMock.mock.calls[0][0].data).toEqual({ nombre: "Juan Perez" });
+    expect(updateMock.mock.calls[0][0].data).not.toHaveProperty("apodo");
   });
 });
