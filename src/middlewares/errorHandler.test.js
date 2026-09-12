@@ -187,6 +187,26 @@ describe("manejadorDeErrores — errores de Prisma", () => {
     expect(res.body.error).toBe("Ya existe un registro con ese valor.");
   });
 
+  it("mapea P2002 con la forma REAL de @prisma/adapter-mssql (meta SIN target) al texto genérico", async () => {
+    // Esta es la forma que llega en producción: `meta = { modelName,
+    // driverAdapterError }`, sin `target` (medido contra la base el
+    // 2026-09-11). El handler NO puede nombrar el campo acá, y no debe
+    // inventarlo: `modelName` es el MODELO ("Cliente"), no la columna, y
+    // "Ya existe un registro con ese Cliente" sería una mentira.
+    // Degradar al texto genérico es la respuesta correcta, no un bug — este
+    // test lo fija para que nadie lo "arregle" adivinando un nombre de campo.
+    const err = new Error("Unique constraint failed");
+    err.code = "P2002";
+    err.meta = { modelName: "Cliente", driverAdapterError: {} };
+
+    const res = await request(appQueLanza(err)).get("/boom");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Ya existe un registro con ese valor.");
+    expect(res.body.error).not.toContain("undefined");
+    expect(res.body.error).not.toContain("Cliente");
+  });
+
   it("mapea P2003 en un DELETE a 400 sugiriendo ocultar en vez de borrar", async () => {
     const err = new Error("Foreign key constraint failed");
     err.code = "P2003";

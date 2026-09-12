@@ -972,6 +972,9 @@ export async function crear(req, res, next) {
     // instead of failing the whole request over it.
     const MAX_INTENTOS_SKU = 5;
     for (let intento = 1; intento <= MAX_INTENTOS_SKU; intento++) {
+      // El sku se genera FUERA del `create` porque el `catch` lo necesita: la
+      // señal de la colisión es un re-lookup por ESTE sku, no la forma del error.
+      const sku = generarSku(nombre.trim());
       try {
         producto = await prisma.product.create({
           data: {
@@ -990,7 +993,7 @@ export async function crear(req, res, next) {
             coeficiente: costeo.coeficiente,
             etiquetaId: etiquetaIdParseado,
             categoriaId: categoriaIdParseado,
-            sku: generarSku(nombre.trim()),
+            sku,
             stock: merchandising.stock ?? 0,
             destacado: merchandising.destacado ?? false,
             caracteristicas: { create: caracteristicas },
@@ -1011,8 +1014,22 @@ export async function crear(req, res, next) {
         });
         break;
       } catch (err) {
-        const esColisionSku = err?.code === "P2002" && err.meta?.target?.includes?.("sku");
-        if (!esColisionSku || intento === MAX_INTENTOS_SKU) throw err;
+        // Señal de DOS partes: un `P2002` **y** un re-lookup por `sku` —la
+        // clave natural— que devuelve una fila.
+        //
+        // ⚠️ NO se mira `err.meta.target`: bajo `@prisma/adapter-mssql` un
+        // `P2002` real llega con `meta = { modelName, driverAdapterError }` y
+        // SIN `target` (medido contra la base el 2026-09-11). Preguntar por él
+        // daba `false` para CUALQUIER colisión, así que este reintento estaba
+        // inerte y un choque del sufijo aleatorio le devolvía un 400 al admin
+        // en vez de resolverse solo. Mismo criterio que el `catch` de
+        // `ordenes.controller.js`'s `crear()`.
+        if (err?.code !== "P2002" || intento === MAX_INTENTOS_SKU) throw err;
+
+        const tomado = await prisma.product.findUnique({ where: { sku }, select: { id: true } });
+        // Sin fila, el sku está libre y la colisión fue de otro unique:
+        // reintentar sería chocar cinco veces contra lo mismo. Sale el original.
+        if (!tomado) throw err;
       }
     }
 

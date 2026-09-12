@@ -187,25 +187,38 @@ async function validarYSnapshotearProductos(items) {
  * reciente, no el primero que se cargó).
  */
 async function upsertClienteConReintento(tx, { dni, nombre, telefono, email }) {
+  const datosDeContacto = { nombre, telefono, email: email ?? null };
+
   for (let intento = 1; intento <= MAX_INTENTOS_DNI; intento++) {
     const existente = await tx.cliente.findUnique({ where: { dni } });
 
     if (existente) {
-      return tx.cliente.update({
-        where: { dni },
-        data: { nombre, telefono, email: email ?? null },
-      });
+      return tx.cliente.update({ where: { dni }, data: datosDeContacto });
     }
 
     try {
-      return await tx.cliente.create({
-        data: { dni, nombre, telefono, email: email ?? null },
-      });
+      return await tx.cliente.create({ data: { dni, ...datosDeContacto } });
     } catch (err) {
-      const esColisionDni = err?.code === "P2002" && err.meta?.target?.includes?.("dni");
-      if (!esColisionDni || intento === MAX_INTENTOS_DNI) throw err;
-      // Otro request ganó la carrera y creó el cliente primero — el próximo
-      // loop lo encuentra vía findUnique y sigue por la rama de update().
+      // La señal de "otro request creó este DNI mientras tanto" es de DOS
+      // partes: un `P2002` **y** un re-lookup por `dni` —la clave natural— que
+      // devuelve una fila. Ninguna alcanza sola, y la segunda es la que manda.
+      //
+      // ⚠️ NO se mira `err.meta.target`, por el MISMO motivo que en el `catch`
+      // de `crear()`: bajo `@prisma/adapter-mssql` un `P2002` real llega con
+      // `meta = { modelName, driverAdapterError }` y SIN `target` (medido
+      // contra la base el 2026-09-11, no deducido). Preguntar por él daba
+      // `false` para CUALQUIER colisión, así que este reintento —que existe
+      // justo para la carrera de dos checkouts con el mismo DNI nuevo— nunca
+      // llegaba a correr: el perdedor recibía el error crudo. Tampoco se
+      // matchea el mensaje del driver: es texto de un conector, no un contrato.
+      if (err?.code !== "P2002" || intento === MAX_INTENTOS_DNI) throw err;
+
+      const ganador = await tx.cliente.findUnique({ where: { dni } });
+      // Sin fila, esta colisión no es la de `Cliente.dni`: reintentar el mismo
+      // create sería gastar intentos para chocar igual, y tragarse el error
+      // escondería el estado real. Sale el error ORIGINAL.
+      if (!ganador) throw err;
+      // Con fila: el próximo loop la encuentra y sigue por la rama de update().
     }
   }
 }

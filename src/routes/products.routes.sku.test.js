@@ -89,11 +89,36 @@ describe("crear() genera el sku", () => {
     );
   });
 
-  it("reintenta con un nuevo sku si choca con uno existente (P2002)", async () => {
-    const errorColision = Object.assign(new Error("Unique constraint failed"), {
+  /**
+   * La forma que mandan los conectores que SÍ pueblan `meta.target`.
+   */
+  const P2002_CON_TARGET = () =>
+    Object.assign(new Error("Unique constraint failed"), {
       code: "P2002",
       meta: { target: ["sku"] },
     });
+
+  /**
+   * La forma REAL bajo `@prisma/adapter-mssql` —el conector de este proyecto—,
+   * medida contra la base el 2026-09-11: `meta = { modelName,
+   * driverAdapterError }` y NINGÚN `target`. Preguntar por `target` daba
+   * `false` para CUALQUIER colisión, así que el reintento del sku nunca
+   * corría: un choque del sufijo aleatorio devolvía un 400 al admin.
+   */
+  const P2002_SIN_TARGET = () =>
+    Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { modelName: "Product", driverAdapterError: {} },
+    });
+
+  it.each([
+    ["con meta.target (conectores que lo pueblan)", P2002_CON_TARGET],
+    ["SIN meta.target (forma real de @prisma/adapter-mssql)", P2002_SIN_TARGET],
+  ])("reintenta con un nuevo sku si choca con uno existente (P2002 %s)", async (_titulo, armarError) => {
+    const errorColision = armarError();
+    // La señal NO es la forma del error: es el re-lookup por la clave natural.
+    // Si el sku que se intentó escribir ya está tomado, esa ES la colisión.
+    findUniqueMock.mockResolvedValue({ id: 7, sku: "YIMA-BRUMAF-1234" });
 
     createMock.mockRejectedValueOnce(errorColision).mockResolvedValueOnce({
       id: 42,
@@ -131,6 +156,36 @@ describe("crear() genera el sku", () => {
 
     expect(res.status).toBe(201);
     expect(createMock).toHaveBeenCalledTimes(2);
+    // El re-lookup va por el sku que se intentó escribir, no por la forma del error.
+    expect(findUniqueMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { sku: expect.stringMatching(/^YIMA-BRUMAF-\d{4}$/) } }),
+    );
+  });
+
+  it("un P2002 cuyo re-lookup por sku no encuentra nada se relanza tal cual: no se reintenta a ciegas", async () => {
+    // Otro unique del insert (no el del sku). Sin `target` no se puede saber
+    // cuál fue por la forma del error, así que decide el re-lookup: si el sku
+    // que se intentó escribir está libre, la colisión es otra y el error
+    // original sale sin tocar, en vez de gastar cinco intentos idénticos.
+    const errorColision = Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { modelName: "Product", driverAdapterError: {} },
+    });
+
+    findUniqueMock.mockResolvedValue(null);
+    createMock.mockRejectedValue(errorColision);
+
+    const res = await request(buildApp())
+      .post("/api/products")
+      .set("Authorization", authHeader)
+      .field("nombre", "Bruma Facial")
+      .field("descripcion", "Descripción de prueba")
+      .field("precio", "100")
+      .field("costo", "100");
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(400);
   });
 });
 

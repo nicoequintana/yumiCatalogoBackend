@@ -572,29 +572,81 @@ describe("crear() — snapshot de precio y nombre (invariante permanente)", () =
 });
 
 describe("crear() — concurrencia (retry-on-P2002 para dni)", () => {
-  it("dos requests simultáneos con el mismo DNI nuevo no duplican el Cliente: reintenta con findUnique tras P2002", async () => {
-    const errorColisionDni = Object.assign(new Error("Unique constraint failed"), {
+  /**
+   * La forma que mandan los conectores que SÍ pueblan `meta.target`. Se
+   * conserva para que el reintento siga siendo correcto ahí, pero NO es la
+   * forma de este proyecto — ver el test siguiente.
+   */
+  const P2002_CON_TARGET = () =>
+    Object.assign(new Error("Unique constraint failed"), {
       code: "P2002",
       meta: { target: ["dni"] },
     });
 
-    // First lookup: no client yet (both requests race past this check).
-    // create() throws P2002 (the other request won the race and created it
-    // first). Retry loop then re-fetches via findUnique and proceeds with
-    // that row instead of failing the whole request.
-    clienteFindUniqueMock.mockResolvedValueOnce(null).mockResolvedValueOnce(CLIENTE_EXISTENTE);
-    clienteCreateMock.mockRejectedValueOnce(errorColisionDni);
-    clienteUpdateMock.mockResolvedValue(CLIENTE_EXISTENTE);
+  /**
+   * La forma REAL bajo `@prisma/adapter-mssql`, medida contra la base el
+   * 2026-09-11: `meta = { modelName, driverAdapterError }` y NINGÚN `target`.
+   * Mientras la guarda preguntaba por `target`, esta colisión no entraba al
+   * reintento y el perdedor de la carrera se comía el error crudo — con la
+   * suite entera en verde, porque los tests inventaban un `target`.
+   */
+  const P2002_SIN_TARGET = () =>
+    Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { modelName: "Cliente", driverAdapterError: {} },
+    });
+
+  it.each([
+    ["con meta.target (conectores que lo pueblan)", P2002_CON_TARGET],
+    ["SIN meta.target (forma real de @prisma/adapter-mssql)", P2002_SIN_TARGET],
+  ])(
+    "dos requests simultáneos con el mismo DNI nuevo no duplican el Cliente: reintenta tras P2002 %s",
+    async (_titulo, armarError) => {
+      // Primer lookup: todavía no hay cliente (las dos requests pasan de largo
+      // por acá). El create choca porque la otra ganó la carrera; el re-lookup
+      // por `dni` —la clave natural— encuentra la fila recién creada y el loop
+      // sale por update() en vez de tumbar la request.
+      clienteFindUniqueMock.mockResolvedValueOnce(null).mockResolvedValue(CLIENTE_EXISTENTE);
+      clienteCreateMock.mockRejectedValueOnce(armarError());
+      clienteUpdateMock.mockResolvedValue(CLIENTE_EXISTENTE);
+      productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+      ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
+
+      const { req, res, next } = buildReqRes({ body: bodyValido() });
+      await crear(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(clienteCreateMock).toHaveBeenCalledTimes(1);
+      expect(clienteUpdateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { dni: "12345678" } }),
+      );
+      expect(res.statusCode).toBe(201);
+    },
+  );
+
+  it("un P2002 cuyo re-lookup por dni no encuentra nada se relanza tal cual: no se reintenta a ciegas", async () => {
+    // Un P2002 que NO es el de `Cliente.dni` (otro unique de la transacción).
+    // Sin `target` no se puede saber cuál fue por la forma del error, así que
+    // la señal es el re-lookup: si el dni no aparece, esta colisión no es la
+    // que el reintento sabe resolver y el error original sale sin tocar.
+    const err = Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { modelName: "Cliente", driverAdapterError: {} },
+    });
+
+    clienteFindUniqueMock.mockResolvedValue(null);
+    clienteCreateMock.mockRejectedValue(err);
     productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
-    ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
     const { req, res, next } = buildReqRes({ body: bodyValido() });
     await crear(req, res, next);
 
-    expect(next).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(err);
     expect(clienteCreateMock).toHaveBeenCalledTimes(1);
+    // El lookup inicial MÁS el re-lookup del catch: sin el segundo, la decisión
+    // volvería a depender de la forma del error.
     expect(clienteFindUniqueMock).toHaveBeenCalledTimes(2);
-    expect(res.statusCode).toBe(201);
+    expect(clienteUpdateMock).not.toHaveBeenCalled();
   });
 });
 
