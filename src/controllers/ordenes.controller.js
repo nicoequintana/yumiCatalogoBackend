@@ -585,8 +585,10 @@ export async function crear(req, res, next) {
 /**
  * Construye el `where` de `listar()` (y el de `resumen()`) a partir de los
  * filtros opcionales de query string: estado (match exacto), período sobre
- * `createdAt` (`desde`/`hasta`/`dias`), y dni/nombre del cliente (relation
- * filter contra `Cliente`, vía `where.cliente`). Todos combinables.
+ * `createdAt` (`desde`/`hasta`/`dias`), dni (relation filter contra
+ * `Cliente`) y nombre (relation filter contra `Cliente` Y `CuentaCliente`,
+ * combinados con `OR` — decisión 12 de la spec: lo que el panel MUESTRA como
+ * nombre puede salir de la cuenta). Todos combinables.
  *
  * Mismo criterio que `products.controller.js`'s `construirFiltrosListado`, y
  * dicho sin ambigüedad porque acá los dos comportamientos posibles no dan lo
@@ -654,19 +656,42 @@ function construirFiltrosOrdenes(query, { incluirEstado = true } = {}) {
     where.createdAt = { gte: periodo.desde, lte: periodo.hastaInclusive };
   }
 
-  const filtroCliente = {};
+  // Dos condiciones independientes, combinadas recién al final: `dni` filtra
+  // SOLO `Cliente.dni` (es la identidad comercial; `CuentaCliente.dni` no
+  // entra acá — sigue siendo un dato de perfil, no la clave de búsqueda del
+  // panel). `nombre` busca en LAS DOS tablas con `OR`: decisión 12 de la
+  // spec, "lo que se ve se tiene que poder buscar" — lo que el panel MUESTRA
+  // como nombre del cliente hoy puede salir de `CuentaCliente` (ver
+  // `mapOrdenListado`), así que buscar solo en `Cliente` dejaría invisibles
+  // exactamente las órdenes cuyo nombre visible viene de la cuenta.
+  const condiciones = [];
+
   if (typeof query.dni === "string" && query.dni !== "") {
-    filtroCliente.dni = normalizarDni(query.dni);
+    condiciones.push({ cliente: { dni: normalizarDni(query.dni) } });
   }
+
   // Sin `mode: "insensitive"` a propósito: el conector mssql de Prisma no lo
   // soporta y la collation por defecto de esta base ya es case-insensitive
   // (mismo criterio que `products.controller.js`'s `construirFiltrosListado`).
   // Los metacaracteres de LIKE se escapan antes del `contains` — ver
   // `lib/escaparLike.js`.
   if (typeof query.nombre === "string" && query.nombre !== "") {
-    filtroCliente.nombre = { contains: escaparLike(query.nombre) };
+    const termino = escaparLike(query.nombre);
+    condiciones.push({
+      OR: [{ cliente: { nombre: { contains: termino } } }, { cuentaCliente: { nombre: { contains: termino } } }],
+    });
   }
-  if (Object.keys(filtroCliente).length > 0) where.cliente = filtroCliente;
+
+  // Con UNA sola condición se aplica directo (mismo shape que antes cuando
+  // solo había `dni` o solo `nombre`, para no romper ningún consumidor que
+  // dependa de esa forma). Con DOS, se combinan con AND explícito: Prisma no
+  // permite escribir dos claves `OR` en el mismo nivel del `where`, y un
+  // `Object.assign` ciego pisaría la primera condición con la segunda.
+  if (condiciones.length === 1) {
+    Object.assign(where, condiciones[0]);
+  } else if (condiciones.length > 1) {
+    where.AND = condiciones;
+  }
 
   return { where, periodo };
 }

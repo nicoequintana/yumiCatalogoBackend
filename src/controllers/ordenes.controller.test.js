@@ -872,7 +872,7 @@ describe("listar()", () => {
     expect(where.cliente).toEqual(expect.objectContaining({ dni: "12345678" }));
   });
 
-  it("filtra por nombre del cliente (relation filter, contains)", async () => {
+  it("filtra por nombre del cliente Y de la cuenta (relation filter, contains, combinados con OR)", async () => {
     ordenFindManyMock.mockResolvedValue([]);
     ordenCountMock.mockResolvedValue(0);
 
@@ -880,7 +880,10 @@ describe("listar()", () => {
     await listar(req, res, next);
 
     const where = ordenFindManyMock.mock.calls[0][0].where;
-    expect(where.cliente).toEqual(expect.objectContaining({ nombre: { contains: "Juan" } }));
+    expect(where.OR).toEqual([
+      { cliente: { nombre: { contains: "Juan" } } },
+      { cuentaCliente: { nombre: { contains: "Juan" } } },
+    ]);
   });
 
   it("combina múltiples filtros a la vez", async () => {
@@ -894,7 +897,12 @@ describe("listar()", () => {
 
     const where = ordenFindManyMock.mock.calls[0][0].where;
     expect(where.estado).toBe("PENDIENTE");
-    expect(where.cliente).toEqual(expect.objectContaining({ dni: "12345678", nombre: { contains: "Juan" } }));
+    // dni y nombre son dos condiciones independientes: se combinan con AND,
+    // y la de nombre sigue siendo el OR entre Cliente y CuentaCliente.
+    expect(where.AND).toEqual([
+      { cliente: { dni: "12345678" } },
+      { OR: [{ cliente: { nombre: { contains: "Juan" } } }, { cuentaCliente: { nombre: { contains: "Juan" } } }] },
+    ]);
     expect(where.createdAt.gte).toBeInstanceOf(Date);
   });
 
@@ -1122,7 +1130,10 @@ describe("resumen()", () => {
     const { where } = ordenGroupByMock.mock.calls[0][0];
     expect(where.createdAt.gte).toEqual(new Date("2026-08-01T03:00:00.000Z"));
     expect(where.createdAt.lte).toEqual(new Date("2026-08-16T02:59:59.999Z"));
-    expect(where.cliente).toEqual({ dni: "12345678", nombre: { contains: "Juan" } });
+    expect(where.AND).toEqual([
+      { cliente: { dni: "12345678" } },
+      { OR: [{ cliente: { nombre: { contains: "Juan" } } }, { cuentaCliente: { nombre: { contains: "Juan" } } }] },
+    ]);
   });
 
   it("sin filtros de fecha NO acota el período", async () => {

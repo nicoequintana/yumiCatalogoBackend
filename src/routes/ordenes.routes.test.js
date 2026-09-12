@@ -1003,7 +1003,10 @@ describe("GET /api/ordenes", () => {
     expect(res.body.data).toHaveLength(1);
   });
 
-  it("escapa los comodines de LIKE del filtro por nombre de cliente", async () => {
+});
+
+describe("GET /api/ordenes — filtro ?nombre= busca en Cliente Y CuentaCliente", () => {
+  it("con solo ?nombre=, arma un OR entre cliente.nombre y cuentaCliente.nombre, con LIKE escapado", async () => {
     ordenFindManyMock.mockResolvedValue([]);
     ordenCountMock.mockResolvedValue(0);
 
@@ -1012,7 +1015,45 @@ describe("GET /api/ordenes", () => {
     await request(buildApp()).get("/api/ordenes?nombre=Pe%25rez").set("Authorization", authHeader);
 
     const { where } = ordenFindManyMock.mock.calls[0][0];
-    expect(where.cliente.nombre).toEqual({ contains: "Pe[%]rez" });
+    expect(where.OR).toEqual([
+      { cliente: { nombre: { contains: "Pe[%]rez" } } },
+      { cuentaCliente: { nombre: { contains: "Pe[%]rez" } } },
+    ]);
+  });
+
+  it("con ?dni= Y ?nombre= juntos, combina con AND: dni exacto de Cliente + el OR de nombre", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    await request(buildApp()).get("/api/ordenes?dni=12345678&nombre=Perez").set("Authorization", authHeader);
+
+    const { where } = ordenFindManyMock.mock.calls[0][0];
+    expect(where.AND).toEqual([
+      { cliente: { dni: "12345678" } },
+      { OR: [{ cliente: { nombre: { contains: "Perez" } } }, { cuentaCliente: { nombre: { contains: "Perez" } } }] },
+    ]);
+  });
+
+  it("solo ?dni=, sigue filtrando únicamente Cliente.dni (CuentaCliente.dni no entra acá)", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    await request(buildApp()).get("/api/ordenes?dni=12345678").set("Authorization", authHeader);
+
+    const { where } = ordenFindManyMock.mock.calls[0][0];
+    expect(where).toEqual({ cliente: { dni: "12345678" } });
+  });
+
+  it("sin dni ni nombre, no arma ninguna condición de cliente", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+    ordenCountMock.mockResolvedValue(0);
+
+    await request(buildApp()).get("/api/ordenes").set("Authorization", authHeader);
+
+    const { where } = ordenFindManyMock.mock.calls[0][0];
+    expect(where).not.toHaveProperty("cliente");
+    expect(where).not.toHaveProperty("OR");
+    expect(where).not.toHaveProperty("AND");
   });
 });
 
