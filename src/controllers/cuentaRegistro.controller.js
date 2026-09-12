@@ -16,6 +16,7 @@ import {
   marcarDispositivoConocido,
   marcarVerificada,
   responderMotivo,
+  textoOpcionalAcotado,
 } from "../lib/cuentaClienteReglas.js";
 import { enviarVerificacion, enviarYaTenesCuenta } from "../services/notificacionesCuenta.service.js";
 
@@ -66,7 +67,7 @@ async function purgarNoVerificadasVencidas() {
  * tres registros concurrentes con SMTP degradado en un 503 para TODO el
  * sistema, login incluido.
  */
-async function procesarRegistro({ email, password, nombre, telefono, dni }, liberarSlot) {
+async function procesarRegistro({ email, password, nombre, telefono, dni, apodo }, liberarSlot) {
   let passwordHash;
   try {
     passwordHash = await hashearPassword(password);
@@ -95,7 +96,7 @@ async function procesarRegistro({ email, password, nombre, telefono, dni }, libe
       const cuenta = await prisma.cuentaCliente.create({
         // Lista blanca campo por campo: un body con `emailVerificado`,
         // `tokenVersion`, `origenRegistro` o `id` NO llega a `data` (Amenaza 8).
-        data: { email, passwordHash, origenRegistro: ORIGENES_REGISTRO.LOCAL, nombre, telefono, dni },
+        data: { email, passwordHash, origenRegistro: ORIGENES_REGISTRO.LOCAL, nombre, telefono, dni, apodo },
       });
       await enviarVerificacion(cuenta);
     } catch (err) {
@@ -123,6 +124,7 @@ export async function registro(req, res, next) {
     const telefono = exigirTextoAcotado(req.body?.telefono, { etiqueta: "El teléfono", siVacio: "El teléfono es obligatorio." });
     const dni = normalizarDni(req.body?.dni);
     if (!esDniValido(dni)) throw httpError(400, "El DNI debe tener 7 u 8 dígitos.");
+    const apodo = textoOpcionalAcotado(req.body?.apodo, { etiqueta: "El apodo" });
 
     const motivo = motivoPasswordRechazada(password, { email: emailBruto, dni });
     if (motivo) throw httpError(400, motivo);
@@ -146,7 +148,7 @@ export async function registro(req, res, next) {
 
     res.json({ mensaje: MENSAJE_REGISTRO });
 
-    procesarRegistro({ email, password, nombre, telefono, dni }, liberarSlot)
+    procesarRegistro({ email, password, nombre, telefono, dni, apodo }, liberarSlot)
       .catch((err) => {
         logError({ mensaje: `No se pudo procesar el registro de ${email}`, stack: err.stack, causa: err });
       })

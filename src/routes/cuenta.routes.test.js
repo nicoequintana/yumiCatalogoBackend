@@ -182,6 +182,7 @@ describe("POST /api/cuenta/registro", () => {
           nombre: "Juan",
           telefono: "1122334455",
           dni: "12345678",
+          apodo: null,
         },
       });
       expect(enviarVerificacionMock).toHaveBeenCalled();
@@ -243,6 +244,52 @@ describe("POST /api/cuenta/registro", () => {
       .post("/api/cuenta/registro")
       .set("Origin", ORIGIN)
       .send({ ...BODY_VALIDO, telefono: "1".repeat(1001) });
+    expect(res.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("con apodo: lo guarda en el create", async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+    createMock.mockResolvedValueOnce({ id: 40, email: "juan@gmail.com", nombre: "Juan", apodo: "Juancito" });
+
+    await request(buildApp())
+      .post("/api/cuenta/registro")
+      .set("Origin", ORIGIN)
+      .send({ ...BODY_VALIDO, apodo: "Juancito" });
+
+    await vi.waitFor(() => {
+      expect(createMock).toHaveBeenCalledWith({
+        data: {
+          email: "juan@gmail.com",
+          passwordHash: expect.any(String),
+          origenRegistro: "LOCAL",
+          nombre: "Juan",
+          telefono: "1122334455",
+          dni: "12345678",
+          apodo: "Juancito",
+        },
+      });
+    });
+    await esperarPurga(1);
+  });
+
+  it("sin apodo: guarda null (el apodo es opcional)", async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+    createMock.mockResolvedValueOnce({ id: 41, email: "juan@gmail.com", nombre: "Juan", apodo: null });
+
+    await request(buildApp()).post("/api/cuenta/registro").set("Origin", ORIGIN).send(BODY_VALIDO);
+
+    await vi.waitFor(() => {
+      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ apodo: null }) }));
+    });
+    await esperarPurga(1);
+  });
+
+  it("apodo demasiado largo: 400 ANTES de responder (columna NVarChar(1000))", async () => {
+    const res = await request(buildApp())
+      .post("/api/cuenta/registro")
+      .set("Origin", ORIGIN)
+      .send({ ...BODY_VALIDO, apodo: "a".repeat(1001) });
     expect(res.status).toBe(400);
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
