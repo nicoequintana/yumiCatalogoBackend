@@ -27,7 +27,13 @@ router.put("/contacto", requireAuth, configController.actualizarContacto);
 // controller; mismo techo que `/contacto`: la home lo pide sin login en
 // cada carga y son 3 consultas por request — `ConfiguracionHome`, `Product`
 // y `PromocionItem` de `resolverDescuentos`), PUT solo admin.
-router.get("/home", limitadorLecturaPublica, configController.obtenerConfiguracionHome);
+//
+// `authOpcional`, mismo criterio que `/contacto`: el panel necesita saber el
+// `productoIconoId` CRUDO (sin degradar por oculto/sin stock) para no
+// mostrar "nadie eligió nada" cuando en realidad hay uno elegido que no se ve
+// hoy en la home pública — el controller decide esa clave aditiva por
+// `esRequestDeAdmin(req)`, nunca por querystring.
+router.get("/home", limitadorLecturaPublica, authOpcional, configController.obtenerConfiguracionHome);
 router.put("/home", requireAuth, configController.actualizarConfiguracionHome);
 
 export default router;

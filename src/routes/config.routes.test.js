@@ -567,6 +567,44 @@ describe("GET /api/config/home", () => {
     expect(res.body.productoIcono.descuento).toEqual({ porcentaje: 10 });
   });
 
+  /**
+   * `productoIconoId` — clave ADITIVA, SOLO con token admin (T7 revisión).
+   *
+   * `AdminProductos.jsx` no puede confiar en `productoIcono` para saber cuál
+   * es el elegido: ese campo degrada a `null` con el mismo criterio que el
+   * catálogo público (oculto/sin stock/borrado), así que el panel vería
+   * "nadie eligió nada" mientras la columna sigue apuntando a un producto
+   * real. `productoIconoId` viaja SIN ese degradado — mismo criterio que
+   * `crudo` en `GET /config/contacto`.
+   */
+  it("anónimo NO recibe productoIconoId, ni cuando hay uno elegido", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9, visibleEnCatalogo: true, stock: 5 }));
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.body).not.toHaveProperty("productoIconoId");
+  });
+
+  it("admin recibe productoIconoId sin degradar, aunque el producto esté oculto", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9, visibleEnCatalogo: false }));
+
+    const res = await request(buildApp()).get("/api/config/home").set("Authorization", authHeader);
+
+    // La forma pública sigue degradando (nunca miente sobre lo que ve un
+    // visitante); la clave admin dice la verdad de la base.
+    expect(res.body.productoIcono).toBeNull();
+    expect(res.body.productoIconoId).toBe(9);
+  });
+
+  it("admin recibe productoIconoId null cuando nadie eligió nada", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/api/config/home").set("Authorization", authHeader);
+
+    expect(res.body).toEqual({ productoIcono: null, productoIconoId: null });
+  });
 });
 
 describe("PUT /api/config/home", () => {

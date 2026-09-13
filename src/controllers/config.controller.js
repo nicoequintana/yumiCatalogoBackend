@@ -313,17 +313,26 @@ async function mapearProductoIcono(producto) {
 }
 
 /**
- * `GET /config/home` — PÚBLICO. El producto ícono que la home muestra en su
- * sección homónima, con el detalle YA RESUELTO (mismo criterio que
+ * `GET /config/home` — `authOpcional`. El producto ícono que la home muestra
+ * en su sección homónima, con el detalle YA RESUELTO (mismo criterio que
  * `GET /products/:id`).
  *
- * Degrada a `productoIcono: null` en los tres casos en los que afirmar algo
+ * `productoIcono` degrada a `null` en los tres casos en los que afirmar algo
  * sería mentir: nadie eligió un producto todavía, el producto elegido se
  * borró, o dejó de estar `visibleEnCatalogo`/con stock — mismo criterio "no
  * se afirma nada falso" del resto del catálogo público (`docs/reglas` §
- * Presencia pública).
+ * Presencia pública). Esta forma NUNCA cambia con el token: nunca filtra
+ * `costo`/`coeficiente` (no es una pantalla de costeo) y nunca destapa un
+ * producto oculto al anónimo.
+ *
+ * `productoIconoId` es una clave ADITIVA, mismo criterio que `crudo` en
+ * `GET /config/contacto`: sale SOLO con `esRequestDeAdmin(req)`, con el id
+ * CRUDO de `ConfiguracionHome` (o `null`), sin el degradado de arriba. Existe
+ * porque el panel (`AdminProductos.jsx`) necesita distinguir "nadie eligió
+ * nada" de "hay uno elegido que hoy no se ve en la home" — el `productoIcono`
+ * degradado por sí solo confunde esos dos casos.
  */
-export async function obtenerConfiguracionHome(_req, res, next) {
+export async function obtenerConfiguracionHome(req, res, next) {
   try {
     const config = await prisma.configuracionHome.findUnique({ where: { id: ID_CONFIGURACION_HOME } });
 
@@ -332,7 +341,13 @@ export async function obtenerConfiguracionHome(_req, res, next) {
       : null;
 
     const publicado = Boolean(producto) && producto.visibleEnCatalogo && producto.stock > 0;
-    res.json({ productoIcono: publicado ? await mapearProductoIcono(producto) : null });
+    const respuesta = { productoIcono: publicado ? await mapearProductoIcono(producto) : null };
+
+    if (esRequestDeAdmin(req)) {
+      respuesta.productoIconoId = config?.productoIconoId ?? null;
+    }
+
+    res.json(respuesta);
   } catch (err) {
     next(err);
   }
