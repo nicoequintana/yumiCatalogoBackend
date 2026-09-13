@@ -97,6 +97,30 @@ export function inicioDelDiaArgentino(clave) {
   return new Date(medianoche.getTime() - DESFASE_ARGENTINA_MS);
 }
 
+/**
+ * Contraparte exacta de `inicioDelDiaArgentino`: el ÚLTIMO instante de un día
+ * argentino (23:59:59.999 hora Argentina), como la medianoche del día
+ * SIGUIENTE menos 1ms.
+ *
+ * Hace falta para exponer un "fin de vigencia" real: `hasta` en la base guarda
+ * la medianoche de INICIO de su día (docs/reglas/campanias.md, fin inclusivo),
+ * así que el instante en que una promoción deja de estar vigente no es esa
+ * medianoche sino la de mañana, menos un milisegundo.
+ *
+ * El día siguiente se calcula con aritmética de calendario UTC pura
+ * (`Date.UTC` normaliza el desborde de fin de mes/año), NUNCA pasando por
+ * `claveDiaArgentino`: `clave` ya es un día calendario sin huso horario, y
+ * pasarlo por el desfase de -3h lo correría un día para atrás.
+ *
+ * @param {string} clave - `"YYYY-MM-DD"`
+ * @returns {Date}
+ */
+export function finDelDiaArgentino(clave) {
+  const [anio, mes, dia] = clave.split("-").map(Number);
+  const siguiente = new Date(Date.UTC(anio, mes - 1, dia + 1)).toISOString().slice(0, 10);
+  return new Date(inicioDelDiaArgentino(siguiente).getTime() - 1);
+}
+
 /** Formato de clave que este módulo acepta: día argentino, sin hora. */
 const SOLO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 

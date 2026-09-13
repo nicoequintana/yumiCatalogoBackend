@@ -1,6 +1,6 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { redondearAEntero } from "./precios.js";
-import { claveDiaArgentino, inicioDelDiaArgentino } from "./horarioArgentino.js";
+import { claveDiaArgentino, finDelDiaArgentino, inicioDelDiaArgentino } from "./horarioArgentino.js";
 
 /**
  * El precio que efectivamente paga un cliente cuando hay una promoción activa.
@@ -136,6 +136,53 @@ export function condicionPromocionVigente(ahora = new Date()) {
  */
 export function condicionProductoConDescuento(ahora = new Date()) {
   return { some: { habilitado: true, promocion: condicionPromocionVigente(ahora) } };
+}
+
+/**
+ * El INSTANTE en el que una promoción destacada de la home deja de estar
+ * vigente — para que la sección "Promos activas" del público pueda mostrar un
+ * reloj sin calcular fechas del lado del navegador (regla 1 de la
+ * metodología: el dato derivado viaja en la respuesta).
+ *
+ * Misma pareja de caminos que `condicionPromocionVigente` (programación
+ * individual habilitada, o campaña HABILITADA), pero acá NO arma un `where` de
+ * Prisma: recibe la promoción YA LEÍDA con sus relaciones y resuelve un valor
+ * sobre JS puro, así que esta es la TERCERA función de vigencia y no una
+ * cuarta — sigue viviendo en este archivo, la única casa del precio
+ * promocional y de su vigencia.
+ *
+ * Se toma el `hasta` MÁS TARDE (`Math.max`) entre todos los períodos vigentes
+ * — una promoción puede tener varias programaciones o campañas superpuestas —
+ * y se lo lleva al FIN de ese día argentino: `hasta` guarda la medianoche de
+ * INICIO de su día (fin inclusivo, `docs/reglas/campanias.md`), así que el
+ * instante de fin real es `finDelDiaArgentino`, no el `hasta` crudo.
+ *
+ * `null` sin ningún período vigente — incluido el caso en que el flag
+ * `destacadaEnHome` siga en `true` pero la promoción ya no esté vigente: el
+ * llamador (`GET /promociones/destacada`) trata eso como "no hay destacada".
+ *
+ * @param {{programaciones?: Array<{habilitada: boolean, desde: Date, hasta: Date}>, campanias?: Array<{campania: {estado: string, desde: Date, hasta: Date}}>}} promocion
+ * @param {Date} [ahora]
+ * @returns {Date|null}
+ */
+export function resolverFinVigenciaHome(promocion, ahora = new Date()) {
+  const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+
+  const vigentes = [
+    ...(promocion.programaciones ?? [])
+      .filter((p) => p.habilitada && p.desde <= ahora && p.hasta >= medianocheDeHoy)
+      .map((p) => p.hasta),
+    ...(promocion.campanias ?? [])
+      .filter(
+        (c) =>
+          c.campania.estado === "HABILITADA" && c.campania.desde <= ahora && c.campania.hasta >= medianocheDeHoy,
+      )
+      .map((c) => c.campania.hasta),
+  ];
+  if (vigentes.length === 0) return null;
+
+  const masTarde = new Date(Math.max(...vigentes.map((f) => f.getTime())));
+  return finDelDiaArgentino(claveDiaArgentino(masTarde));
 }
 
 /**

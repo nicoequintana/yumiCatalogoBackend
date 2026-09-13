@@ -9,8 +9,10 @@ process.env.JWT_SECRET = "test-secret";
 const promocionMock = {
   findMany: vi.fn(),
   findUnique: vi.fn(),
+  findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   delete: vi.fn(),
 };
 const promocionItemMock = { findMany: vi.fn(), deleteMany: vi.fn(), createMany: vi.fn(), update: vi.fn() };
@@ -34,8 +36,10 @@ vi.mock("../lib/prisma.js", () => ({
     promocion: {
       findMany: (...a) => promocionMock.findMany(...a),
       findUnique: (...a) => promocionMock.findUnique(...a),
+      findFirst: (...a) => promocionMock.findFirst(...a),
       create: (...a) => promocionMock.create(...a),
       update: (...a) => promocionMock.update(...a),
+      updateMany: (...a) => promocionMock.updateMany(...a),
       delete: (...a) => promocionMock.delete(...a),
     },
     promocionItem: {
@@ -101,6 +105,29 @@ function promo(extra = {}) {
   };
 }
 
+/** Una fila leída con `LIST_SELECT`, forma mínima que `mapProductoListado` acepta. */
+function productoDeListado(overrides = {}) {
+  return {
+    id: 1,
+    sku: "SKU-1",
+    nombre: "Producto",
+    precio: "1000",
+    costo: null,
+    coeficiente: null,
+    etiqueta: null,
+    visibleEnCatalogo: true,
+    stock: 5,
+    destacado: false,
+    vistas: 0,
+    compartidos: 0,
+    categoria: null,
+    fotos: [],
+    _count: { fotos: 0 },
+    createdAt: new Date(),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   auditCreateMock.mockResolvedValue({ id: 1 });
@@ -123,12 +150,24 @@ beforeEach(() => {
     cloudinaryResourceType: "image",
   });
   eliminarArchivoMock.mockResolvedValue(undefined);
+  promocionMock.findFirst.mockResolvedValue(null);
+  promocionMock.updateMany.mockResolvedValue({ count: 0 });
   transactionMock.mockImplementation(async (arg) =>
     typeof arg === "function"
       ? arg({
           promocionItem: {
             deleteMany: (...a) => promocionItemMock.deleteMany(...a),
             createMany: (...a) => promocionItemMock.createMany(...a),
+          },
+          // `PATCH /:id/home` corre `findUnique`/`updateMany`/`update` DENTRO
+          // de la transacción (mismo criterio que `actualizarDestacada` de
+          // categorías): la `tx` del test tiene que enrutar esas tres al
+          // mismo `promocionMock` que usa el resto de la suite, o el mock no
+          // ve las llamadas que hace el controller.
+          promocion: {
+            findUnique: (...a) => promocionMock.findUnique(...a),
+            updateMany: (...a) => promocionMock.updateMany(...a),
+            update: (...a) => promocionMock.update(...a),
           },
         })
       : Promise.all(arg),
@@ -1152,5 +1191,134 @@ describe("POST /api/promociones/:id/evento", () => {
       .send({ tipo: "IMPRESION_COMERCIAL", origen: "BANNER" });
 
     expect(res.headers["ratelimit-limit"]).toBe("1800");
+  });
+});
+
+describe("PATCH /api/promociones/:id/home", () => {
+  it("401 sin token", async () => {
+    const res = await request(buildApp()).patch("/api/promociones/1/home").send({ destacadaEnHome: true });
+    expect(res.status).toBe(401);
+  });
+
+  it("404 si la promoción no existe", async () => {
+    promocionMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .patch("/api/promociones/99/home")
+      .set("Authorization", authHeader)
+      .send({ destacadaEnHome: true });
+
+    expect(res.status).toBe(404);
+    expect(promocionMock.update).not.toHaveBeenCalled();
+  });
+
+  it("apaga a la anterior destacada y prende la nueva, en la MISMA transacción", async () => {
+    // El guard de 404 corre DENTRO de la transacción (mismo patrón que
+    // `actualizarDestacada` de categorías): sin este mock, el 404 llegaría
+    // por el motivo equivocado y no por las aserciones de abajo.
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3 }));
+    promocionMock.updateMany.mockResolvedValue({ count: 1 });
+    promocionMock.update.mockResolvedValue(promo({ id: 3, destacadaEnHome: true }));
+
+    const res = await request(buildApp())
+      .patch("/api/promociones/3/home")
+      .set("Authorization", authHeader)
+      .send({ destacadaEnHome: true });
+
+    expect(res.status).toBe(200);
+    expect(promocionMock.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { destacadaEnHome: true, id: { not: 3 } }, data: { destacadaEnHome: false } }),
+    );
+    expect(transactionMock).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
+  });
+
+  it("apagar la propia NO toca a las demás", async () => {
+    promocionMock.findUnique.mockResolvedValue(promo({ id: 3 }));
+    promocionMock.update.mockResolvedValue(promo({ id: 3, destacadaEnHome: false }));
+
+    await request(buildApp())
+      .patch("/api/promociones/3/home")
+      .set("Authorization", authHeader)
+      .send({ destacadaEnHome: false });
+
+    expect(promocionMock.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("400 si destacadaEnHome no es booleano", async () => {
+    const res = await request(buildApp())
+      .patch("/api/promociones/3/home")
+      .set("Authorization", authHeader)
+      .send({ destacadaEnHome: "si" });
+
+    expect(res.status).toBe(400);
+    expect(promocionMock.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/promociones/destacada", () => {
+  it("null sin promo destacada", async () => {
+    promocionMock.findFirst.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+  });
+
+  it("no exige auth: es lectura pública", async () => {
+    promocionMock.findFirst.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).not.toBe(401);
+  });
+
+  it("null si la destacada perdió vigencia (aunque el flag siga en true)", async () => {
+    promocionMock.findFirst.mockResolvedValue(
+      promo({ destacadaEnHome: true, programaciones: [], campanias: [] }),
+    );
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toBeNull();
+  });
+
+  it("con destacada vigente, emite finVigencia y sus productos", async () => {
+    promocionMock.findFirst.mockResolvedValue(
+      promo({
+        id: 3,
+        nombre: "Semana del Hogar",
+        destacadaEnHome: true,
+        programaciones: [{ habilitada: true, desde: new Date("2026-09-01"), hasta: new Date("2026-09-30") }],
+        campanias: [],
+        items: [{ productId: 1, habilitado: true }],
+      }),
+    );
+    productMock.findMany.mockResolvedValue([productoDeListado({ id: 1 })]);
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 3, nombre: "Semana del Hogar" });
+    expect(new Date(res.body.finVigencia).getTime()).toBeGreaterThan(Date.now());
+    expect(res.body.productos).toHaveLength(1);
+  });
+
+  it("sin productos habilitados no consulta product.findMany", async () => {
+    promocionMock.findFirst.mockResolvedValue(
+      promo({
+        destacadaEnHome: true,
+        programaciones: [{ habilitada: true, desde: new Date("2026-09-01"), hasta: new Date("2026-09-30") }],
+        campanias: [],
+        items: [],
+      }),
+    );
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).toBe(200);
+    expect(res.body.productos).toEqual([]);
+    expect(productMock.findMany).not.toHaveBeenCalled();
   });
 });

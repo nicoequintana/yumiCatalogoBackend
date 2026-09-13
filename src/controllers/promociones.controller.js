@@ -9,7 +9,7 @@ import { subtotalDeItem } from "../lib/dinero.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "../lib/horarioArgentino.js";
 import { detectarConflictos } from "../lib/conflictosPromociones.js";
 import { ESTADOS_FACTURABLES } from "./admin.controller.js";
-import { LIST_SELECT } from "./products.mapper.js";
+import { LIST_SELECT, mapProductoListado } from "./products.mapper.js";
 import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
@@ -23,6 +23,7 @@ import {
   PORCENTAJE_MIN,
   esPorcentajeValido,
   precioConDescuento,
+  resolverFinVigenciaHome,
 } from "../lib/precioEfectivo.js";
 
 /**
@@ -325,6 +326,118 @@ export async function actualizar(req, res, next) {
     });
 
     res.json(mapPromocionDetalle(promocion));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PATCH /promociones/:id/home` — la promoción que la sección "Promos
+ * activas" de la HOME usa para el modo con reloj.
+ *
+ * **Concepto NUEVO y DISTINTO de `bannerEnHome`**: ese controla el slide del
+ * carrusel de campañas; `destacadaEnHome` controla una superficie aparte de
+ * la home pública. Una promoción puede tener las dos en cualquier
+ * combinación.
+ *
+ * **GANADOR ÚNICO**, no un tope como `MAX_CATEGORIAS_HOME`: al marcar una en
+ * `true`, se apagan TODAS las demás dentro de la MISMA transacción
+ * `Serializable` que hace el `update` — modelado sobre
+ * `categorias.controller.js`'s `actualizarDestacada` (mismo aislamiento,
+ * mismo criterio de "todo o nada dentro de la transacción"; dos pestañas del
+ * panel marcando a la vez con lecturas sueltas podrían dejar DOS destacadas
+ * en vez de una). Apagar la PROPIA (`destacada: false`) no toca a las demás:
+ * no hay ganador que resolver.
+ */
+export async function destacarEnHome(req, res, next) {
+  try {
+    const id = idDeParams(req);
+
+    const destacada = req.body?.destacadaEnHome;
+    if (typeof destacada !== "boolean") {
+      throw httpError(400, "El campo destacadaEnHome debe ser true o false.");
+    }
+
+    const promocion = await prisma.$transaction(
+      async (tx) => {
+        const actual = await tx.promocion.findUnique({ where: { id } });
+        if (!actual) throw httpError(404, "Promoción no encontrada.");
+
+        if (destacada) {
+          await tx.promocion.updateMany({
+            where: { destacadaEnHome: true, id: { not: id } },
+            data: { destacadaEnHome: false },
+          });
+        }
+
+        return tx.promocion.update({
+          where: { id },
+          data: { destacadaEnHome: destacada },
+          include: DETALLE_INCLUDE,
+        });
+      },
+      { isolationLevel: "Serializable" },
+    );
+
+    logAudit(req, {
+      accion: "DESTACAR_EN_HOME",
+      entidad: "Promocion",
+      entidadId: id,
+      detalle: { nombre: promocion.nombre, destacadaEnHome: promocion.destacadaEnHome },
+    });
+
+    res.json(mapPromocionDetalle(promocion));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `GET /promociones/destacada` — PÚBLICO. La promoción que la home pública
+ * muestra en la sección "Promos activas", con el instante de fin YA
+ * RESUELTO: el frontend "solo descuenta segundos" (spec), nunca calcula
+ * fechas (regla 1 de la metodología).
+ *
+ * `null` sin ninguna destacada, y TAMBIÉN cuando el flag sigue en `true` pero
+ * la promoción ya perdió vigencia (`resolverFinVigenciaHome` da `null`): el
+ * flag es la INTENCIÓN del admin, la vigencia es lo que de verdad decide si
+ * algo le llega al público — mismo criterio que separa `activa` de "vigente
+ * ahora" en `condicionPromocionVigente`.
+ *
+ * Los productos pasan por las MISMAS guardas públicas que `GET /products`
+ * (`visibleEnCatalogo`, `stock > 0`): un producto oculto o agotado no puede
+ * colarse por esta puerta trasera aunque siga en `items` con `habilitado`.
+ */
+export async function obtenerDestacadaPublica(_req, res, next) {
+  try {
+    const ahora = new Date();
+    const destacada = await prisma.promocion.findFirst({
+      where: { destacadaEnHome: true },
+      include: {
+        programaciones: true,
+        campanias: { include: { campania: true } },
+        items: { where: { habilitado: true } },
+      },
+    });
+    if (!destacada) return res.json(null);
+
+    const finVigencia = resolverFinVigenciaHome(destacada, ahora);
+    if (!finVigencia) return res.json(null);
+
+    const ids = destacada.items.map((item) => item.productId);
+    const productos = ids.length
+      ? await prisma.product.findMany({
+          where: { id: { in: ids }, visibleEnCatalogo: true, stock: { gt: 0 } },
+          select: LIST_SELECT,
+        })
+      : [];
+
+    res.json({
+      id: destacada.id,
+      nombre: destacada.nombre,
+      finVigencia: finVigencia.toISOString(),
+      productos: productos.map((p) => mapProductoListado(p, {})),
+    });
   } catch (err) {
     next(err);
   }

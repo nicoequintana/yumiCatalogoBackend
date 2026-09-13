@@ -4,6 +4,7 @@ import {
   claveDiaArgentino,
   diasHastaClave,
   enHorarioArgentino,
+  finDelDiaArgentino,
   inicioDelDiaArgentino,
 } from "./horarioArgentino.js";
 
@@ -62,6 +63,25 @@ describe("enHorarioArgentino", () => {
     expect(enHorarioArgentino(null)).toBeNull();
     expect(enHorarioArgentino(undefined)).toBeNull();
     expect(enHorarioArgentino("cualquier cosa")).toBeNull();
+  });
+});
+
+describe("finDelDiaArgentino", () => {
+  it("finDelDiaArgentino es la medianoche argentina del día siguiente menos 1ms", () => {
+    const clave = "2026-09-20";
+    const fin = finDelDiaArgentino(clave);
+    const inicioSiguiente = inicioDelDiaArgentino("2026-09-21");
+    expect(fin.getTime()).toBe(inicioSiguiente.getTime() - 1);
+  });
+
+  it("cruza de mes sin contar de más", () => {
+    const fin = finDelDiaArgentino("2026-09-30");
+    expect(fin.getTime()).toBe(inicioDelDiaArgentino("2026-10-01").getTime() - 1);
+  });
+
+  it("cruza de año sin contar de más", () => {
+    const fin = finDelDiaArgentino("2026-12-31");
+    expect(fin.getTime()).toBe(inicioDelDiaArgentino("2027-01-01").getTime() - 1);
   });
 });
 

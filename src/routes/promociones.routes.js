@@ -34,19 +34,29 @@ const uploadArte = multer({
 });
 
 /**
- * ADMIN → Promociones. **Todo el módulo exige auth, con UNA excepción**:
- * `POST /:id/evento`, que registra impresiones y clicks del slide de una
- * promoción y la emite el navegador de cualquier visitante (07/09/2026).
- * Es la única ruta pública acá, lleva su propio limitador, y NO expone nada:
- * escribe un evento y responde `{ id }`. Las lecturas siguen todas detrás de
- * `requireAuth` — los descuentos que el catálogo necesita ya viajan resueltos
- * en `GET /products`, así que un endpoint público de lectura solo agregaría
- * superficie, y una de las peores, porque expone costo y coeficiente.
+ * ADMIN → Promociones. **Todo el módulo exige auth, con DOS excepciones**:
  *
- * ⚠️ `/productos` va ANTES de `/:id`: si no, Express matchea "productos" como
- * un id. Mismo pisotón que evitan `/products/import` y `/campanias/activas`.
+ * - `POST /:id/evento`, que registra impresiones y clicks del slide de una
+ *   promoción y la emite el navegador de cualquier visitante (07/09/2026). No
+ *   expone nada: escribe un evento y responde `{ id }`.
+ * - `GET /destacada` (13/09/2026), que alimenta la sección "Promos activas"
+ *   de la home pública. Emite SOLO lo que `mapProductoListado` sin `esAdmin`
+ *   ya expone en `GET /products` — nombre, id y el instante de fin — nunca
+ *   costo ni coeficiente.
+ *
+ * Las demás lecturas siguen todas detrás de `requireAuth` — los descuentos
+ * que el catálogo necesita ya viajan resueltos en `GET /products`, así que un
+ * endpoint público de lectura solo agregaría superficie, y una de las peores
+ * si expusiera costo y coeficiente.
+ *
+ * ⚠️ `/productos` y `/destacada` van ANTES de `/:id`: si no, Express matchea
+ * el literal como un id. Mismo pisotón que evitan `/products/import` y
+ * `/campanias/activas`.
  */
 router.get("/productos", requireAuth, promocionesController.listadoComercial);
+// Pública: ver el docblock del archivo. Antes de `/:id` por el mismo motivo
+// que `/productos`.
+router.get("/destacada", promocionesController.obtenerDestacadaPublica);
 // Solo lectura: los conflictos se calculan cada vez, no se guardan. Un snapshot
 // habría que invalidarlo ante cualquier cambio de items, de programación o de
 // estado de campaña — y el §41 pide que agregar un producto a una promoción ya
@@ -70,6 +80,9 @@ router.post("/", requireAuth, promocionesController.crear);
 // También antes de `/:id`, por lo mismo.
 router.put("/:id/items", requireAuth, promocionesController.guardarItems);
 router.patch("/:id/items/:productId", requireAuth, promocionesController.cambiarEstadoItem);
+// Ganador único de la sección "Promos activas": ver el docblock de
+// `destacarEnHome`. El literal va DESPUÉS de `:id`, sin pisotón posible.
+router.patch("/:id/home", requireAuth, promocionesController.destacarEnHome);
 
 // Pública, con limitador propio: ver el docblock del archivo.
 router.post("/:id/evento", limitadorEventosComerciales, eventosComercialesController.crearDePromocion);

@@ -416,6 +416,16 @@ model Promocion {
   /// default en la base a propósito: el default vive en un solo lado.
   bannerColor    String? @db.VarChar(20)
 
+  /// La promoción que la sección "Promos activas" de la HOME usa para el modo
+  /// con reloj. Concepto NUEVO y DISTINTO de `bannerEnHome`: ese controla el
+  /// slide del carrusel de campañas, este controla una superficie aparte de
+  /// la home pública — una promoción puede tener las dos en `true`, las dos
+  /// en `false`, o cualquier combinación cruzada. GANADOR ÚNICO: al marcar una
+  /// en `true`, `PATCH /promociones/:id/home` apaga a todas las demás dentro
+  /// de la misma transacción `Serializable` (ver `promociones.controller.js`,
+  /// `destacarEnHome`).
+  destacadaEnHome Boolean @default(false)
+
   /// El arte apaisado del slide. Mismo trío que el Doodle y que la imagen de
   /// `Categoria`. Sin arte, el slide cae al molde compuesto sobre `bannerColor`.
   ///

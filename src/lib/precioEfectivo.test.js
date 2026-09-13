@@ -7,6 +7,7 @@ import {
   condicionProductoConDescuento,
   esPorcentajeValido,
   precioConDescuento,
+  resolverFinVigenciaHome,
 } from "./precioEfectivo.js";
 
 /**
@@ -148,5 +149,77 @@ describe("condicionPromocionVigente", () => {
 
     expect(cond.some.habilitado).toBe(true);
     expect(cond.some.promocion.activa).toBe(true);
+  });
+});
+
+describe("resolverFinVigenciaHome", () => {
+  // `hasta` guarda SIEMPRE la medianoche ARGENTINA de su día (T03:00:00Z, ver
+  // `inicioDelDiaArgentino`), nunca la medianoche UTC (T00:00:00Z) — usar la
+  // segunda forma correría la clave un día para atrás al pasarla por
+  // `claveDiaArgentino` y desalinearía el resultado con la convención real de
+  // `ProgramacionPromocion.hasta`/`Campania.hasta`.
+  it("null sin programaciones ni campañas vigentes", () => {
+    expect(resolverFinVigenciaHome({ programaciones: [], campanias: [] }, new Date())).toBeNull();
+  });
+
+  it("toma el hasta MÁS TARDE entre programaciones y campañas vigentes", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const promocion = {
+      programaciones: [
+        { habilitada: true, desde: new Date("2026-09-01T03:00:00.000Z"), hasta: new Date("2026-09-15T03:00:00.000Z") },
+      ],
+      campanias: [
+        {
+          campania: {
+            estado: "HABILITADA",
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-20T03:00:00.000Z"),
+          },
+        },
+      ],
+    };
+    const fin = resolverFinVigenciaHome(promocion, ahora);
+    // El hasta más tarde es el día 20 (la campaña); su fin de vigencia es la
+    // medianoche argentina del 21 menos 1ms, que en UTC cae en el 21.
+    expect(fin.toISOString().slice(0, 10)).toBe("2026-09-21");
+  });
+
+  it("ignora una programación deshabilitada", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const promocion = {
+      programaciones: [
+        { habilitada: false, desde: new Date("2026-09-01T03:00:00.000Z"), hasta: new Date("2026-09-30T03:00:00.000Z") },
+      ],
+      campanias: [],
+    };
+    expect(resolverFinVigenciaHome(promocion, ahora)).toBeNull();
+  });
+
+  it("ignora una campaña que no está HABILITADA", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const promocion = {
+      programaciones: [],
+      campanias: [
+        {
+          campania: {
+            estado: "DESHABILITADA",
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-30T03:00:00.000Z"),
+          },
+        },
+      ],
+    };
+    expect(resolverFinVigenciaHome(promocion, ahora)).toBeNull();
+  });
+
+  it("null cuando el período ya terminó (hasta anterior a la medianoche de hoy)", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const promocion = {
+      programaciones: [
+        { habilitada: true, desde: new Date("2026-09-01T03:00:00.000Z"), hasta: new Date("2026-09-10T03:00:00.000Z") },
+      ],
+      campanias: [],
+    };
+    expect(resolverFinVigenciaHome(promocion, ahora)).toBeNull();
   });
 });
