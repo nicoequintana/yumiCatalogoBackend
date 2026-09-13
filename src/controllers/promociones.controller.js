@@ -23,6 +23,7 @@ import {
   PORCENTAJE_MIN,
   esPorcentajeValido,
   precioConDescuento,
+  resolverDescuentos,
   resolverFinVigenciaHome,
 } from "../lib/precioEfectivo.js";
 
@@ -416,7 +417,16 @@ export async function obtenerDestacadaPublica(_req, res, next) {
   try {
     const ahora = new Date();
     const destacada = await prisma.promocion.findFirst({
-      where: { destacadaEnHome: true },
+      // `activa: true`, mismo criterio que `condicionPromocionVigente`: una
+      // promoción desactivada no puede exponerse al público aunque conserve
+      // `destacadaEnHome: true` y una programación vigente — el flag es la
+      // intención de "esta es la que va", `activa` es el apagado general.
+      where: { destacadaEnHome: true, activa: true },
+      // Red de seguridad ante un estado inconsistente en la base: el
+      // invariante de "ganador único" de `destacarEnHome` ya garantiza como
+      // mucho una fila, pero un `findFirst` sin orden explícito no es
+      // determinista si alguna vez hubiera más de una.
+      orderBy: { updatedAt: "desc" },
       include: {
         programaciones: true,
         campanias: { include: { campania: true } },
@@ -436,11 +446,20 @@ export async function obtenerDestacadaPublica(_req, res, next) {
         })
       : [];
 
+    // Mismo descuento resuelto que cualquier listado público (`GET
+    // /products`): sin esto, esta sería la única vidriera del catálogo que
+    // muestra un producto en oferta al precio de lista.
+    const descuentos = await resolverDescuentos(
+      prisma,
+      productos.map((p) => p.id),
+      ahora,
+    );
+
     res.json({
       id: destacada.id,
       nombre: destacada.nombre,
       finVigencia: finVigencia.toISOString(),
-      productos: productos.map((p) => mapProductoListado(p, {})),
+      productos: productos.map((p) => mapProductoListado(p, { descuento: descuentos.get(p.id) ?? null })),
     });
   } catch (err) {
     next(err);

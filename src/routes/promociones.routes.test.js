@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -187,6 +187,7 @@ describe("seguridad", () => {
       ["put", "/api/promociones/3/arte"],
       ["delete", "/api/promociones/3/arte"],
       ["delete", "/api/promociones/3"],
+      ["patch", "/api/promociones/3/home"],
     ];
 
     for (const [metodo, ruta] of rutas) {
@@ -1208,7 +1209,13 @@ describe("PATCH /api/promociones/:id/home", () => {
       .set("Authorization", authHeader)
       .send({ destacadaEnHome: true });
 
+    // Prueba el GUARD DEL CONTROLLER, no solo "la ruta no matcheó": afirma
+    // que `findUnique` corrió (DENTRO de la transacción) y con qué id, y el
+    // mensaje que devuelve el error handler real — no un 404 que podría venir
+    // de una ruta inexistente.
+    expect(promocionMock.findUnique).toHaveBeenCalledWith({ where: { id: 99 } });
     expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no encontrada/i);
     expect(promocionMock.update).not.toHaveBeenCalled();
   });
 
@@ -1260,6 +1267,15 @@ describe("PATCH /api/promociones/:id/home", () => {
 });
 
 describe("GET /api/promociones/destacada", () => {
+  // Dos tests de acá abajo fijan el reloj: el instante de fin se compara
+  // EXACTO, y con la fecha real de "hoy" el fixture (`hasta` fijo) se hubiera
+  // vuelto falso positivo hasta esa fecha y roto sin aviso después — mismo
+  // gotcha documentado en `docs/reglas/testing.md` (faquear SOLO `Date`, ver
+  // `campanias.routes.test.js`).
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("null sin promo destacada", async () => {
     promocionMock.findFirst.mockResolvedValue(null);
 
@@ -1277,9 +1293,29 @@ describe("GET /api/promociones/destacada", () => {
     expect(res.status).not.toBe(401);
   });
 
+  it("consulta activa:true junto a destacadaEnHome, con orden determinista", async () => {
+    // Una promoción DESACTIVADA no puede quedar expuesta al público aunque
+    // conserve `destacadaEnHome: true` y una programación vigente — mismo
+    // criterio que `condicionPromocionVigente`, que arranca por `activa:
+    // true`. `orderBy: updatedAt desc` es la red de seguridad: el invariante
+    // de "ganador único" ya lo garantiza, pero sin un orden explícito un
+    // `findFirst` con más de una fila que matchee (un estado inconsistente
+    // en la base) sería no determinista.
+    promocionMock.findFirst.mockResolvedValue(null);
+
+    await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(promocionMock.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { destacadaEnHome: true, activa: true },
+        orderBy: { updatedAt: "desc" },
+      }),
+    );
+  });
+
   it("null si la destacada perdió vigencia (aunque el flag siga en true)", async () => {
     promocionMock.findFirst.mockResolvedValue(
-      promo({ destacadaEnHome: true, programaciones: [], campanias: [] }),
+      promo({ activa: true, destacadaEnHome: true, programaciones: [], campanias: [] }),
     );
 
     const res = await request(buildApp()).get("/api/promociones/destacada");
@@ -1288,13 +1324,26 @@ describe("GET /api/promociones/destacada", () => {
     expect(res.body).toBeNull();
   });
 
-  it("con destacada vigente, emite finVigencia y sus productos", async () => {
+  it("con destacada vigente, emite el instante EXACTO de fin y sus productos", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-13T12:00:00.000Z"));
+
     promocionMock.findFirst.mockResolvedValue(
       promo({
         id: 3,
         nombre: "Semana del Hogar",
+        activa: true,
         destacadaEnHome: true,
-        programaciones: [{ habilitada: true, desde: new Date("2026-09-01"), hasta: new Date("2026-09-30") }],
+        // `hasta` guarda SIEMPRE la medianoche ARGENTINA de su día
+        // (`T03:00:00Z`, ver `mapProgramacion`) — no la medianoche UTC, mismo
+        // gotcha ya documentado en `precioEfectivo.test.js`.
+        programaciones: [
+          {
+            habilitada: true,
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-20T03:00:00.000Z"),
+          },
+        ],
         campanias: [],
         items: [{ productId: 1, habilitado: true }],
       }),
@@ -1305,15 +1354,27 @@ describe("GET /api/promociones/destacada", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: 3, nombre: "Semana del Hogar" });
-    expect(new Date(res.body.finVigencia).getTime()).toBeGreaterThan(Date.now());
+    // Fin del día 20 argentino = medianoche argentina del 21 menos 1ms, que
+    // en UTC cae en el 21 (ver `horarioArgentino.test.js`).
+    expect(res.body.finVigencia).toBe(new Date("2026-09-21T02:59:59.999Z").toISOString());
     expect(res.body.productos).toHaveLength(1);
   });
 
   it("sin productos habilitados no consulta product.findMany", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-13T12:00:00.000Z"));
+
     promocionMock.findFirst.mockResolvedValue(
       promo({
+        activa: true,
         destacadaEnHome: true,
-        programaciones: [{ habilitada: true, desde: new Date("2026-09-01"), hasta: new Date("2026-09-30") }],
+        programaciones: [
+          {
+            habilitada: true,
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-20T03:00:00.000Z"),
+          },
+        ],
         campanias: [],
         items: [],
       }),
@@ -1324,5 +1385,45 @@ describe("GET /api/promociones/destacada", () => {
     expect(res.status).toBe(200);
     expect(res.body.productos).toEqual([]);
     expect(productMock.findMany).not.toHaveBeenCalled();
+  });
+
+  it("los productos destacados traen su descuento resuelto, como cualquier listado público", async () => {
+    // Sin esto, la sección "Promos activas" sería el ÚNICO listado público
+    // del catálogo que muestra un producto en oferta al precio de lista —
+    // regla 1 de la metodología, el dato derivado viaja en la respuesta.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-13T12:00:00.000Z"));
+
+    promocionMock.findFirst.mockResolvedValue(
+      promo({
+        id: 3,
+        activa: true,
+        destacadaEnHome: true,
+        programaciones: [
+          {
+            habilitada: true,
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-20T03:00:00.000Z"),
+          },
+        ],
+        campanias: [],
+        items: [{ productId: 1, habilitado: true }],
+      }),
+    );
+    productMock.findMany.mockResolvedValue([productoDeListado({ id: 1, precio: "1000" })]);
+    promocionItemMock.findMany.mockResolvedValue([
+      { productId: 1, porcentaje: 15, promocion: { id: 3, nombre: "Semana del Hogar" } },
+    ]);
+
+    const res = await request(buildApp()).get("/api/promociones/destacada");
+
+    expect(res.status).toBe(200);
+    expect(res.body.productos[0]).toMatchObject({
+      precioEfectivo: "850",
+      // Al público solo le viaja el porcentaje, mismo criterio que
+      // `camposDeDescuento` en `products.mapper.js`: ni promocionId ni
+      // promocionNombre.
+      descuento: { porcentaje: 15 },
+    });
   });
 });
