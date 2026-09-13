@@ -272,6 +272,14 @@ describe("GET /api/promociones", () => {
 
     expect(res.body[0].items).toBeUndefined();
   });
+
+  it("emite destacadaEnHome, para que el switch del panel refleje el ganador sin abrir el detalle", async () => {
+    promocionMock.findMany.mockResolvedValue([promo({ destacadaEnHome: true })]);
+
+    const res = await request(buildApp()).get("/api/promociones").set("Authorization", authHeader);
+
+    expect(res.body[0].destacadaEnHome).toBe(true);
+  });
 });
 
 describe("GET /api/promociones/:id — el detalle", () => {

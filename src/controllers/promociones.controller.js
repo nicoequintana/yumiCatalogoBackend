@@ -191,6 +191,10 @@ function mapPromocionListado(promocion) {
     nombre: promocion.nombre,
     descripcion: promocion.descripcion,
     activa: promocion.activa,
+    // Mismo criterio que `mapPromocionDetalle`: el panel pinta el switch de
+    // "Destacar en home" desde ESTE listado (`AdminPromociones.jsx`), no
+    // desde el detalle — sin la clave acá el switch se ve siempre apagado.
+    destacadaEnHome: promocion.destacadaEnHome ?? false,
     cantidadProductos: promocion.items?.length ?? 0,
     // Las dos preguntas que se hacen mirando la lista: a cuántos alcanza, y si
     // está haciendo algo. Sin ellas hay que abrir cada promoción.
