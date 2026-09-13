@@ -597,10 +597,18 @@ const PAGE_SIZE_MAS_VENDIDOS = 8;
  */
 export async function masVendidos(req, res, next) {
   try {
-    const pageSize = Math.min(
-      Number(req.query.pageSize) || PAGE_SIZE_MAS_VENDIDOS,
-      MAX_IDS_LISTADO,
-    );
+    // `esEnteroSeguro`, no `Number.isFinite` ni `|| PAGE_SIZE_MAS_VENDIDOS`:
+    // un negativo (`?pageSize=-5`) es truthy y pasaba tal cual a `take`, y un
+    // fraccionario (`?pageSize=2.5`) es finito pero no es el entero que
+    // Prisma espera ahí — los dos cortaban con un 500 en vez de caer al
+    // default. Mismo criterio que `parsearPaginacion` (`lib/paginacion.js`) y
+    // `parsearIdEntero` (`lib/enteroSeguro.js`): fuera de rango o no
+    // representable se DESCARTA en silencio, no se trunca a la fuerza.
+    const pageSizePedido = Number(req.query.pageSize);
+    const pageSize =
+      esEnteroSeguro(pageSizePedido) && pageSizePedido > 0
+        ? Math.min(pageSizePedido, MAX_IDS_LISTADO)
+        : PAGE_SIZE_MAS_VENDIDOS;
     const hace90Dias = new Date(Date.now() - VENTANA_MAS_VENDIDOS_DIAS * 24 * 60 * 60 * 1000);
 
     const ranking = await prisma.itemOrden.groupBy({

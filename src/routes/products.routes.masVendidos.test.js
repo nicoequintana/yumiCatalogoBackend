@@ -30,6 +30,10 @@ vi.mock("../services/cloudinary.service.js", () => ({}));
 
 const { default: productsRouter } = await import("./products.routes.js");
 
+// Espeja `PAGE_SIZE_MAS_VENDIDOS` del controller (no exportada): el default
+// cuando `?pageSize` no viene o no es un entero positivo utilizable.
+const PAGE_SIZE_MAS_VENDIDOS_DEFAULT = 8;
+
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -123,5 +127,39 @@ describe("GET /api/products/mas-vendidos", () => {
 
     const args = groupByItemOrdenMock.mock.calls[0][0];
     expect(args.take).toBe(100);
+  });
+
+  // `?pageSize` inválido no puede llegar a Prisma `take`: un negativo, un
+  // fraccionario o basura no numérica caen al default, mismo criterio que
+  // `parsearPaginacion`/`esEnteroSeguro` (`lib/paginacion.js`,
+  // `lib/enteroSeguro.js`) — sin la guarda, `?pageSize=-5` o `?pageSize=2.5`
+  // viajaban tal cual a `take` y Prisma cortaba con un 500 en vez de un 200
+  // con el default.
+  it.each([
+    ["negativo", "-5"],
+    ["fraccionario", "2.5"],
+    ["no numérico", "abc"],
+  ])("descarta un pageSize %s y cae al default sin explotar", async (_caso, valor) => {
+    groupByItemOrdenMock.mockResolvedValue([]);
+    findManyProductMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get(`/api/products/mas-vendidos?pageSize=${valor}`);
+
+    expect(res.status).toBe(200);
+    const args = groupByItemOrdenMock.mock.calls[0][0];
+    expect(args.take).toBe(PAGE_SIZE_MAS_VENDIDOS_DEFAULT);
+  });
+
+  // El listado público NUNCA emite costo/coeficiente (admin-only, ver
+  // `camposDePrecio` en `products.mapper.js`) — este riel usa el mismo mapper
+  // que el resto del catálogo y no puede ser la excepción que los filtre.
+  it("nunca expone costo ni coeficiente", async () => {
+    groupByItemOrdenMock.mockResolvedValue([{ productId: 1, _sum: { cantidad: 5 } }]);
+    findManyProductMock.mockResolvedValue([productoDeListado({ id: 1, costo: 500, coeficiente: 2 })]);
+
+    const res = await request(buildApp()).get("/api/products/mas-vendidos");
+
+    expect(res.body.data[0]).not.toHaveProperty("costo");
+    expect(res.body.data[0]).not.toHaveProperty("coeficiente");
   });
 });
