@@ -870,3 +870,30 @@ model AuditLog {
   @@index([createdAt])
   @@index([entidad, createdAt])
 }
+
+/// Fila ÚNICA (`id` fijo en 1, sin `autoincrement`) con los datos de contacto
+/// que hoy vivían solo en variables de entorno (`WHATSAPP_*`) o no existían
+/// (email, redes, dirección). Editable desde Configuración › Contacto.
+///
+/// Los cuatro campos `whatsapp*` son NULLABLE y así se quedan: `GET
+/// /config/{whatsapp,contacto}` arma la respuesta con fallback POR CAMPO a
+/// las env vars homónimas cuando la columna es NULL — el día que TODOS los
+/// admin hayan guardado el formulario, `historia-y-deploy.md` documenta el
+/// paso de retirar las env vars, no antes.
+///
+/// `whatsappDias` repite el formato de `WHATSAPP_DIAS` (dígitos 0-6,
+/// `Date.getDay()`, separados por coma) para que `lib/horarioAtencion.js`
+/// reciba el mismo shape venga el dato de donde venga.
+model ConfiguracionContacto {
+  id                Int      @id @default(1)
+  whatsappNumero    String?  @db.VarChar(20)
+  whatsappHoraDesde Int?
+  whatsappHoraHasta Int?
+  whatsappDias      String?  @db.VarChar(20)
+  email             String?  @db.NVarChar(255)
+  instagramUrl      String?  @db.NVarChar(300)
+  facebookUrl       String?  @db.NVarChar(300)
+  tiktokUrl         String?  @db.NVarChar(300)
+  direccion         String?  @db.NVarChar(300)
+  updatedAt         DateTime @updatedAt
+}
