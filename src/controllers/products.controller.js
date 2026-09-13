@@ -10,6 +10,10 @@ import { resolverImagenOg } from "../lib/ogMeta.js";
 import { urlFrontend } from "../lib/urlsPublicas.js";
 import { httpError } from "../lib/httpError.js";
 import { MAX_IDS_LISTADO, parsearIdsMasivos } from "./products.input.js";
+// Misma lista que usa `promociones.controller.js`'s `listadoComercial` para
+// "ventas agregadas por producto" (decisión del orquestador, T3): una
+// CANCELADA o PENDIENTE no es una venta confirmada.
+import { ESTADOS_FACTURABLES } from "./admin.controller.js";
 
 // Se reexporta porque varios tests y `products.routes.js` lo importaban desde
 // acá antes de que se mudara: mantener el nombre disponible evita un cambio
@@ -538,6 +542,99 @@ export async function listar(req, res, next) {
       // que `res.json` descarta) rompería el contrato de cuatro claves que el
       // resto del listado tiene fijado por test.
       ...(vitrina ? { campania: vitrina.campania } : {}),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Ventana de "más vendidos", en días. Se resuelve con `createdAt >= hace90Dias`
+ * en el `where` de la consulta de órdenes — es una ventana RELATIVA, no un
+ * corte de día calendario, así que no hace falta `lib/horarioArgentino.js` acá
+ * (a diferencia de `esProductoNuevo`, que sí compara contra un calendario).
+ */
+const VENTANA_MAS_VENDIDOS_DIAS = 90;
+
+/** Default de `?pageSize` en `GET /products/mas-vendidos`, sin paginación real. */
+const PAGE_SIZE_MAS_VENDIDOS = 8;
+
+/**
+ * GET /products/mas-vendidos — ranking de unidades vendidas de los últimos
+ * `VENTANA_MAS_VENDIDOS_DIAS` días, para el riel "Más vendidos" de la home.
+ *
+ * Público (`authOpcional`, como el resto del listado). Devuelve un ARRAY
+ * PLANO rankeado (`{ data: [...] }`, sin `page`/`pageSize`/`total`): no hay
+ * paginación real, solo un tope (`pageSize`, techo defensivo
+ * `MAX_IDS_LISTADO`). El umbral de "¿se muestra la sección?" (`>= 4`
+ * productos) lo aplica el FRONTEND (`MIN_MAS_VENDIDOS`, T14) sobre lo que acá
+ * se devuelva — este endpoint SIEMPRE responde con lo que haya, incluido `[]`,
+ * nunca decide él si "hay sección". Mismo criterio que `destacado`/
+ * `MIN_DESTACADOS`.
+ *
+ * "Venta" es `ESTADOS_FACTURABLES` (`EN_PREPARACION`/`ENTREGADA`), NO
+ * `estado: { not: "CANCELADA" }` — este último dejaría pasar `PENDIENTE`, que
+ * todavía no es una venta confirmada. Se reutiliza el patrón de agregación en
+ * memoria de `promociones.controller.js`'s `listadoComercial` (ver ese
+ * archivo), acá resuelto con `groupBy` porque no hay una página de productos
+ * previa sobre la que agregar — al revés, el ranking de ventas ES lo que
+ * decide qué productos entran.
+ *
+ * Cada producto sale con la MISMA forma que el resto del listado público
+ * (`LIST_SELECT` + `mapProductoListado` + `resolverDescuentos`): incluye
+ * `esNuevo` (gratis desde T2), `precioEfectivo` y `descuento`. Sin esto, la
+ * card de "Más vendidos" tendría que ramificar según de dónde vino el
+ * producto — la regla documentada en `productos.md` de que
+ * `mapProductoListado` es la única forma del listado.
+ *
+ * `visibleEnCatalogo: true, stock: { gt: 0 }` en la consulta de productos:
+ * mismas guardas públicas que el resto de `GET /products` — un producto
+ * oculto o sin stock no puede aparecer acá aunque haya vendido mucho.
+ *
+ * El orden de `groupBy` no sobrevive al `findMany` por `id: { in: [...] }`
+ * (SQL Server no garantiza el orden de un IN), así que se reordena en memoria
+ * contra el ranking después de traer los productos.
+ */
+export async function masVendidos(req, res, next) {
+  try {
+    const pageSize = Math.min(
+      Number(req.query.pageSize) || PAGE_SIZE_MAS_VENDIDOS,
+      MAX_IDS_LISTADO,
+    );
+    const hace90Dias = new Date(Date.now() - VENTANA_MAS_VENDIDOS_DIAS * 24 * 60 * 60 * 1000);
+
+    const ranking = await prisma.itemOrden.groupBy({
+      by: ["productId"],
+      where: {
+        productId: { not: null },
+        orden: { estado: { in: ESTADOS_FACTURABLES }, createdAt: { gte: hace90Dias } },
+      },
+      _sum: { cantidad: true },
+      orderBy: { _sum: { cantidad: "desc" } },
+      take: pageSize,
+    });
+
+    const ids = ranking.map((fila) => fila.productId);
+    if (ids.length === 0) return res.json({ data: [] });
+
+    const productos = await prisma.product.findMany({
+      where: { id: { in: ids }, visibleEnCatalogo: true, stock: { gt: 0 } },
+      select: LIST_SELECT,
+    });
+
+    const cantidadPorId = new Map(ranking.map((fila) => [fila.productId, fila._sum.cantidad ?? 0]));
+    const ordenados = productos
+      .filter((p) => cantidadPorId.has(p.id))
+      .sort((a, b) => cantidadPorId.get(b.id) - cantidadPorId.get(a.id));
+
+    // Misma consulta de descuentos que el resto del listado: una sola para
+    // toda la tanda, no una por producto.
+    const descuentos = await resolverDescuentos(prisma, ordenados.map((p) => p.id));
+
+    res.json({
+      data: ordenados.map((producto) =>
+        mapProductoListado(producto, { descuento: descuentos.get(producto.id) ?? null }),
+      ),
     });
   } catch (err) {
     next(err);

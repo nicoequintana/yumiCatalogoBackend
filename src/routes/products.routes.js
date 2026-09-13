@@ -175,6 +175,10 @@ router.get("/salud", requireAuth, productsController.salud);
 // Declarada ANTES de las rutas `/:id`, mismo pisotón que evitan `/resumen` y
 // `/salud`: si no, Express matchea "etiquetas" como un id.
 router.get("/etiquetas", requireAuth, productsController.etiquetas);
+// Riel "Más vendidos" de la home (T14). Público, mismo `authOpcional` que el
+// resto del listado. Va ANTES de `GET /:id`, mismo pisotón que `/resumen`,
+// `/salud` y `/etiquetas`: si no, Express matchea "mas-vendidos" como un id.
+router.get("/mas-vendidos", limitadorLecturaPublica, authOpcional, productsController.masVendidos);
 // NOTA — acá vivían `GET /:id/video` y `GET /:id/fotos/:fotoId`, dos proxies de
 // streaming que servían la media legada de Google Drive. Ese storage se retiró
 // del proyecto (no quedaba una sola foto apoyada en él: 327 de 327 en
