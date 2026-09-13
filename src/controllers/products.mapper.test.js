@@ -3,6 +3,8 @@ import { Decimal } from "@prisma/client/runtime/client.js";
 import {
   LIST_SELECT,
   PRODUCT_INCLUDE,
+  VENTANA_NUEVO_DIAS,
+  esProductoNuevo,
   mapEtiqueta,
   mapProducto,
   mapProductoListado,
@@ -353,6 +355,41 @@ describe("mapEtiqueta", () => {
   it("un producto sin etiqueta da null", () => {
     expect(mapEtiqueta(null)).toBeNull();
     expect(mapEtiqueta(undefined)).toBeNull();
+  });
+});
+
+describe("esProductoNuevo", () => {
+  it("es true el mismo día de creación", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    expect(esProductoNuevo(new Date("2026-09-13T00:00:00Z"), ahora)).toBe(true);
+  });
+
+  it(`es true a los ${VENTANA_NUEVO_DIAS} días exactos`, () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const limite = new Date(ahora.getTime() - VENTANA_NUEVO_DIAS * 24 * 60 * 60 * 1000);
+    expect(esProductoNuevo(limite, ahora)).toBe(true);
+  });
+
+  it(`es false pasados los ${VENTANA_NUEVO_DIAS} días`, () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    const vencido = new Date(ahora.getTime() - (VENTANA_NUEVO_DIAS + 1) * 24 * 60 * 60 * 1000);
+    expect(esProductoNuevo(vencido, ahora)).toBe(false);
+  });
+});
+
+describe("mapProductoListado — esNuevo", () => {
+  it("emite esNuevo y NUNCA createdAt", () => {
+    const producto = filaDeProducto({ createdAt: new Date() });
+    const mapeado = mapProductoListado(producto, {});
+    expect(mapeado.esNuevo).toBe(true);
+    expect(mapeado).not.toHaveProperty("createdAt");
+  });
+});
+
+describe("mapProducto — esNuevo", () => {
+  it("emite esNuevo con el MISMO criterio que el listado", () => {
+    const producto = filaDeProducto({ createdAt: new Date() });
+    expect(mapProducto(producto, {}).esNuevo).toBe(true);
   });
 });
 

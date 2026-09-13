@@ -72,7 +72,28 @@ export const LIST_SELECT = {
     take: 1,
   },
   _count: { select: { fotos: true } },
+  // Solo para que `esProductoNuevo` lo consuma — el crudo NUNCA se emite en el
+  // listado, ver `mapProductoListado`.
+  createdAt: true,
 };
+
+/**
+ * Ventana de "nuevo", en días. Un producto creado hace este número de días
+ * o menos emite `esNuevo: true` en cualquier tarjeta del sitio. Exportada
+ * para que otros consumidores del mismo criterio (p. ej. `seo.controller.js`)
+ * no reinventen el número.
+ */
+export const VENTANA_NUEVO_DIAS = 30;
+
+/**
+ * `esNuevo` es dato derivado: se calcula acá, nunca en el frontend (regla 1
+ * de la metodología). `createdAt` crudo no se emite en el listado —
+ * `LIST_SELECT` lo trae solo para que esta función lo consuma.
+ */
+export function esProductoNuevo(createdAt, ahora = new Date()) {
+  const limiteMs = VENTANA_NUEVO_DIAS * 24 * 60 * 60 * 1000;
+  return ahora.getTime() - new Date(createdAt).getTime() <= limiteMs;
+}
 
 /**
  * Los cuatro campos de costeo, o nada.
@@ -190,6 +211,7 @@ export function mapProductoListado(producto, { esAdmin = false, descuento = null
     visibleEnCatalogo: producto.visibleEnCatalogo,
     stock: producto.stock,
     destacado: producto.destacado,
+    esNuevo: esProductoNuevo(producto.createdAt),
     cantidadFotos: producto._count?.fotos ?? producto.fotos.length,
     fotos: producto.fotos.map((f) => ({
       id: f.id,
@@ -234,6 +256,7 @@ export function mapProducto(producto, { esAdmin = false, descuento = null } = {}
     visibleEnCatalogo: producto.visibleEnCatalogo,
     stock: producto.stock,
     destacado: producto.destacado,
+    esNuevo: esProductoNuevo(producto.createdAt),
     caracteristicas: producto.caracteristicas.map((c) => ({ id: c.id, texto: c.texto })),
     fraseComercial: producto.fraseComercial,
     porQueLoVasAQuerer: producto.porQueLoVasAQuerer,

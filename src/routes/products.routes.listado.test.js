@@ -58,6 +58,7 @@ const filaListado = {
   categoria: { id: 5, nombre: "Cuidado" },
   fotos: [{ id: 900, url: "https://cdn/foto.jpg", orden: 0, cloudinaryPublicId: "p/1", driveFileId: null }],
   _count: { fotos: 4 },
+  createdAt: new Date("2020-01-01"),
 };
 
 beforeEach(() => {
@@ -118,6 +119,7 @@ describe("GET /api/products - payload liviano de listado", () => {
         // tendría que distinguir "sin promo" de "no vino en esta respuesta".
         "descuento",
         "destacado",
+        "esNuevo",
         "etiqueta",
         "fotos",
         "id",
@@ -131,6 +133,10 @@ describe("GET /api/products - payload liviano de listado", () => {
       ].sort(),
     );
     expect(producto.precio).toBe("100");
+    // `createdAt` se consulta (LIST_SELECT) SOLO para calcular `esNuevo`; el
+    // crudo nunca sale en el listado, a diferencia del detalle.
+    expect(producto).not.toHaveProperty("createdAt");
+    expect(producto.esNuevo).toBe(false);
     // La forma real que arma `mapEtiqueta` a partir de `LIST_SELECT` —
     // {id, nombre, color} entra, {id, nombre, colorFondo, colorTexto} sale.
     // Antes esta fixture guardaba un string y el `Object.keys` de arriba
