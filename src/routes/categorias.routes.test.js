@@ -209,6 +209,51 @@ describe("PUT /api/categorias/:id (protegido)", () => {
       expect.objectContaining({ data: expect.objectContaining({ icono: "lightbulb" }) }),
     );
   });
+
+  // Bug real: un PUT que no manda `icono` (todo renombrado hecho desde
+  // AdminCategorias, que no tiene selector) lo borraba en silencio porque
+  // `parsearIcono(undefined)` siempre devolvía `null` sin mirar el valor
+  // vigente. Mismo idioma que `parsearBannerPromocion`
+  // (`promociones.controller.js`): ausente preserva, `null` explícito borra.
+  it("un PUT sin la clave icono preserva el icono existente (no lo borra)", async () => {
+    categoriaMock.findUnique.mockResolvedValueOnce({ id: 1, nombre: "Cocina", icono: "restaurant" });
+    categoriaMock.update.mockResolvedValue({
+      id: 1,
+      nombre: "Cocina renombrada",
+      icono: "restaurant",
+      _count: { productos: 0 },
+    });
+
+    const res = await request(buildApp())
+      .put("/api/categorias/1")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Cocina renombrada" });
+
+    expect(categoriaMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ icono: "restaurant" }) }),
+    );
+    expect(res.body.icono).toBe("restaurant");
+  });
+
+  it("un PUT con icono: null explícito sí lo borra", async () => {
+    categoriaMock.findUnique.mockResolvedValueOnce({ id: 1, nombre: "Cocina", icono: "restaurant" });
+    categoriaMock.update.mockResolvedValue({
+      id: 1,
+      nombre: "Cocina",
+      icono: null,
+      _count: { productos: 0 },
+    });
+
+    const res = await request(buildApp())
+      .put("/api/categorias/1")
+      .set("Authorization", authHeader)
+      .send({ nombre: "Cocina", icono: null });
+
+    expect(categoriaMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ icono: null }) }),
+    );
+    expect(res.body.icono).toBe(null);
+  });
 });
 
 describe("DELETE /api/categorias/:id (protegido)", () => {
