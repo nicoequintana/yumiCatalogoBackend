@@ -907,3 +907,20 @@ model ConfiguracionContacto {
   direccion         String?  @db.NVarChar(300)
   updatedAt         DateTime @updatedAt
 }
+
+/// Fila ÚNICA (`id` fijo en 1, `@default(1)`, sin `autoincrement`) — mismo
+/// patrón que `ConfiguracionContacto`. Guarda el producto ícono que la home
+/// pública destaca en su sección homónima.
+///
+/// `productoIconoId` NO lleva FK a `Product`: mismo motivo que
+/// `modalCtaReferenciaId` de `Campania` — una FK acá sumada a las que ya
+/// cuelgan de `Product` abre un segundo camino de cascada y SQL Server
+/// rechaza la migración con el error 1785. La integridad va en las dos
+/// puntas: `PUT /config/home` exige que el producto exista antes de guardar,
+/// `GET /config/home` degrada a `null` si la referencia quedó colgada o el
+/// producto dejó de estar publicado.
+model ConfiguracionHome {
+  id              Int      @id @default(1)
+  productoIconoId Int?
+  updatedAt       DateTime @updatedAt
+}

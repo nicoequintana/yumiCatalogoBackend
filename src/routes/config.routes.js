@@ -23,4 +23,9 @@ router.get("/contacto", limitadorLecturaPublica, authOpcional, configController.
 
 router.put("/contacto", requireAuth, configController.actualizarContacto);
 
+// Producto ícono de la home — GET público (degrada a `null`, ver el
+// controller), PUT solo admin.
+router.get("/home", configController.obtenerConfiguracionHome);
+router.put("/home", requireAuth, configController.actualizarConfiguracionHome);
+
 export default router;

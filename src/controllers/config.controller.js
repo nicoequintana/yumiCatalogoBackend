@@ -5,12 +5,17 @@ import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 import { estaDentroDeHorario } from "../lib/horarioAtencion.js";
 import { esEmailValido } from "../lib/emailValido.js";
 import { esUrlHttpsValida } from "../lib/urlHttpsValida.js";
+import { PRODUCT_INCLUDE, mapProducto } from "./products.mapper.js";
+import { resolverDescuentos } from "../lib/precioEfectivo.js";
 
 const TEXTO_EN_HORARIO = "Te respondemos ahora";
 const TEXTO_FUERA_DE_HORARIO = "Fuera de horario de atención — te respondemos apenas podamos";
 
 /** Fila única de `ConfiguracionContacto` (ver schema.prisma). */
 const ID_CONFIGURACION = 1;
+
+/** Fila única de `ConfiguracionHome` (ver schema.prisma) — mismo patrón. */
+const ID_CONFIGURACION_HOME = 1;
 
 // Espejan las columnas de `ConfiguracionContacto` en schema.prisma — un valor
 // más largo produciría un P2000 que el error handler traduce a un 400
@@ -266,6 +271,107 @@ export async function actualizarContacto(req, res, next) {
     });
 
     res.json(construirVista(fila, { admin: true }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Arma `{productoIcono}` a partir de una fila de `Product` (o `null`).
+ *
+ * SIEMPRE forma pública (`mapProducto(producto, { descuento })` sin
+ * `esAdmin`): este endpoint no es una pantalla de costeo, es el mismo bloque
+ * que va a ver el visitante en la home — filtrar `costo`/`coeficiente` acá
+ * sería la única lectura de producto del panel que además expone el dato al
+ * anónimo, si algún día este mapeo se reusara sin pasar por la guarda.
+ *
+ * El descuento se resuelve con `resolverDescuentos`, la MISMA función que usa
+ * cualquier otra vidriera pública (`GET /products`, `GET /products/:id`,
+ * `GET /promociones/destacada`): sin esto, el producto ícono sería la única
+ * superficie del catálogo que muestra un producto en oferta a precio de
+ * lista mientras dura la promoción.
+ */
+async function mapearProductoIcono(producto) {
+  if (!producto) return null;
+  const descuentos = await resolverDescuentos(prisma, [producto.id]);
+  return mapProducto(producto, { descuento: descuentos.get(producto.id) ?? null });
+}
+
+/**
+ * `GET /config/home` — PÚBLICO. El producto ícono que la home muestra en su
+ * sección homónima, con el detalle YA RESUELTO (mismo criterio que
+ * `GET /products/:id`).
+ *
+ * Degrada a `productoIcono: null` en los tres casos en los que afirmar algo
+ * sería mentir: nadie eligió un producto todavía, el producto elegido se
+ * borró, o dejó de estar `visibleEnCatalogo`/con stock — mismo criterio "no
+ * se afirma nada falso" del resto del catálogo público (`docs/reglas` §
+ * Presencia pública).
+ */
+export async function obtenerConfiguracionHome(_req, res, next) {
+  try {
+    const config = await prisma.configuracionHome.findUnique({ where: { id: ID_CONFIGURACION_HOME } });
+
+    const producto = config?.productoIconoId
+      ? await prisma.product.findUnique({ where: { id: config.productoIconoId }, include: PRODUCT_INCLUDE })
+      : null;
+
+    const publicado = Boolean(producto) && producto.visibleEnCatalogo && producto.stock > 0;
+    res.json({ productoIcono: publicado ? await mapearProductoIcono(producto) : null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PUT /config/home` — `requireAuth`. Elige (o borra, con `null`) el producto
+ * ícono de la home.
+ *
+ * La escritura EXIGE que el producto exista — `productoIconoId` no lleva FK a
+ * `Product` (mismo motivo que `modalCtaReferenciaId` de `Campania`: sumarle
+ * una FK a las que ya cuelgan de `Product` abre un segundo camino de cascada
+ * y SQL Server la rechaza con el error 1785). La integridad va en las dos
+ * puntas: acá se valida antes de guardar, `GET /config/home` degrada si la
+ * referencia quedó colgada o dejó de estar publicada.
+ *
+ * A diferencia de la lectura pública, esta respuesta NO vuelve a exigir
+ * `visibleEnCatalogo`/stock: el admin tiene que ver la verdad de lo que
+ * acaba de guardar (por ejemplo, para elegir un producto y recién después
+ * publicarlo), la guarda de "no afirmar nada falso" es del catálogo público,
+ * no de esta pantalla.
+ *
+ * Responde el detalle actualizado directamente (mismo criterio que
+ * `PATCH /categorias/:id/home`): un solo `findUnique` con `PRODUCT_INCLUDE`
+ * sirve tanto para validar que el producto existe como para armar la
+ * respuesta, sin una segunda consulta ni un segundo `GET` desde el cliente.
+ */
+export async function actualizarConfiguracionHome(req, res, next) {
+  try {
+    const { productoIconoId } = req.body ?? {};
+    if (productoIconoId !== null && !Number.isInteger(productoIconoId)) {
+      throw httpError(400, "productoIconoId debe ser un entero o null.");
+    }
+
+    let producto = null;
+    if (productoIconoId !== null) {
+      producto = await prisma.product.findUnique({ where: { id: productoIconoId }, include: PRODUCT_INCLUDE });
+      if (!producto) throw httpError(400, "El producto elegido no existe.");
+    }
+
+    const config = await prisma.configuracionHome.upsert({
+      where: { id: ID_CONFIGURACION_HOME },
+      create: { id: ID_CONFIGURACION_HOME, productoIconoId },
+      update: { productoIconoId },
+    });
+
+    logAudit(req, {
+      accion: "ACTUALIZAR",
+      entidad: "ConfiguracionHome",
+      entidadId: ID_CONFIGURACION_HOME,
+      detalle: { productoIconoId: config.productoIconoId },
+    });
+
+    res.json({ productoIcono: await mapearProductoIcono(producto) });
   } catch (err) {
     next(err);
   }

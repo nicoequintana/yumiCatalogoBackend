@@ -10,6 +10,18 @@ const configuracionContactoMock = {
   findUnique: vi.fn(),
   upsert: vi.fn(),
 };
+const configuracionHomeMock = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
+const productMock = {
+  findUnique: vi.fn(),
+};
+// `resolverDescuentos` (lib/precioEfectivo.js) no se mockea: corre de verdad y
+// pega contra `prisma.promocionItem.findMany`, mismo criterio que
+// `products.routes.conDescuento.test.js`. Sin promociones vigentes (caso
+// normal de estos tests) devuelve `[]`.
+const promocionItemFindManyMock = vi.fn();
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
 
@@ -18,6 +30,16 @@ vi.mock("../lib/prisma.js", () => ({
     configuracionContacto: {
       findUnique: (...args) => configuracionContactoMock.findUnique(...args),
       upsert: (...args) => configuracionContactoMock.upsert(...args),
+    },
+    configuracionHome: {
+      findUnique: (...args) => configuracionHomeMock.findUnique(...args),
+      upsert: (...args) => configuracionHomeMock.upsert(...args),
+    },
+    product: {
+      findUnique: (...args) => productMock.findUnique(...args),
+    },
+    promocionItem: {
+      findMany: (...args) => promocionItemFindManyMock(...args),
     },
     usuario: { findUnique: (...args) => usuarioFindUniqueMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
@@ -66,7 +88,45 @@ beforeEach(() => {
   auditCreateMock.mockResolvedValue({ id: 1 });
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
   configuracionContactoMock.findUnique.mockResolvedValue(null);
+  configuracionHomeMock.findUnique.mockResolvedValue(null);
+  productMock.findUnique.mockResolvedValue(null);
+  promocionItemFindManyMock.mockResolvedValue([]);
 });
+
+/**
+ * Fila de `Product` con la forma de `PRODUCT_INCLUDE` (todas las relaciones
+ * que `mapProducto` necesita para no explotar) — mismo patrón que
+ * `filaDeProducto` de `products.mapper.test.js`. `precio` imita un
+ * `Decimal` de Prisma con un `{toString}` en vez de traer la clase real.
+ */
+function productoDeDetalle(extra = {}) {
+  return {
+    id: 9,
+    sku: "YIMA-ICONO-0009",
+    nombre: "Producto ícono",
+    descripcion: "El producto que abre la home",
+    precio: { toString: () => "45000" },
+    etiqueta: null,
+    categoria: { id: 1, nombre: "Cocina" },
+    vistas: 0,
+    compartidos: 0,
+    favoritosCount: 0,
+    visibleEnCatalogo: true,
+    stock: 5,
+    destacado: false,
+    fraseComercial: "El favorito de la casa.",
+    porQueLoVasAQuerer: "Porque sí.",
+    tePasaEsto: null,
+    caracteristicas: [],
+    listas: [],
+    especificaciones: [],
+    fotos: [],
+    video: null,
+    createdAt: new Date("2026-08-26"),
+    updatedAt: new Date("2026-08-26"),
+    ...extra,
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -412,6 +472,165 @@ describe("PUT /api/config/contacto", () => {
     expect(auditCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ accion: "ACTUALIZAR", entidad: "ConfiguracionContacto" }),
+      }),
+    );
+  });
+});
+
+describe("GET /api/config/home", () => {
+  it("null sin producto elegido", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ productoIcono: null });
+  });
+
+  it("null si el producto elegido ya no está publicado", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue({ id: 9, visibleEnCatalogo: false });
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ productoIcono: null });
+  });
+
+  it("null si el producto elegido se quedó sin stock", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ visibleEnCatalogo: true, stock: 0 }));
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.body).toEqual({ productoIcono: null });
+  });
+
+  it("null si el producto elegido ya no existe (fue borrado)", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.body).toEqual({ productoIcono: null });
+  });
+
+  it("con producto publicado, emite el detalle completo", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9, visibleEnCatalogo: true, stock: 5 }));
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.status).toBe(200);
+    expect(res.body.productoIcono).toMatchObject({
+      id: 9,
+      nombre: "Producto ícono",
+      esNuevo: expect.any(Boolean),
+    });
+    // Nunca filtra costeo — mismo criterio que cualquier lectura pública.
+    expect(res.body.productoIcono.costo).toBeUndefined();
+    expect(res.body.productoIcono.coeficiente).toBeUndefined();
+  });
+
+  it("resuelve el descuento vigente, igual que cualquier vidriera pública", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9, precio: { toString: () => "1000" } }));
+    promocionItemFindManyMock.mockResolvedValue([
+      { productId: 9, porcentaje: 10, promocion: { id: 5, nombre: "Liquidación" } },
+    ]);
+
+    const res = await request(buildApp()).get("/api/config/home");
+
+    expect(res.body.productoIcono.precioEfectivo).toBe("900");
+    expect(res.body.productoIcono.descuento).toEqual({ porcentaje: 10 });
+  });
+
+  it("no requiere autenticación", async () => {
+    const res = await request(buildApp()).get("/api/config/home");
+    expect(res.status).not.toBe(401);
+  });
+});
+
+describe("PUT /api/config/home", () => {
+  it("401 sin token", async () => {
+    const res = await request(buildApp()).put("/api/config/home").send({ productoIconoId: 9 });
+
+    expect(res.status).toBe(401);
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
+  it("400 si el producto no existe", async () => {
+    productMock.findUnique.mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 999 });
+
+    expect(res.status).toBe(400);
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
+  it("400 si productoIconoId no es un entero ni null", async () => {
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: "nueve" });
+
+    expect(res.status).toBe(400);
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
+  it("acepta null para 'ninguno elegido'", async () => {
+    configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: null });
+
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.productoIcono).toBeNull();
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("con un producto existente, hace upsert y devuelve el detalle actualizado sin un segundo GET", async () => {
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9 }));
+    configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: 9 });
+
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 9 });
+
+    expect(res.status).toBe(200);
+    expect(configuracionHomeMock.upsert).toHaveBeenCalledWith({
+      where: { id: 1 },
+      create: { id: 1, productoIconoId: 9 },
+      update: { productoIconoId: 9 },
+    });
+    expect(res.body.productoIcono).toMatchObject({ id: 9 });
+    // Un solo `findUnique` para validar existencia: la escritura reutiliza
+    // ESA fila para armar la respuesta, no dispara una segunda consulta.
+    expect(productMock.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("registra auditoría con el productoIconoId elegido", async () => {
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9 }));
+    configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: 9 });
+
+    await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 9 });
+
+    expect(auditCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          accion: "ACTUALIZAR",
+          entidad: "ConfiguracionHome",
+          entidadId: 1,
+        }),
       }),
     );
   });
