@@ -18,6 +18,20 @@ const ID_CONFIGURACION = 1;
 /** Fila única de `ConfiguracionHome` (ver schema.prisma) — mismo patrón. */
 const ID_CONFIGURACION_HOME = 1;
 
+/**
+ * Tope de la columna `Int` de SQL Server que guarda `Product.id`.
+ *
+ * `esEnteroSeguro` (`lib/enteroSeguro.js`) mide una frontera DISTINTA — la
+ * representación exacta en `Number`, hasta `2^53 - 1` — y a propósito NO usa
+ * el rango de la columna: para un FILTRO de listado (`?categoria=`), un valor
+ * mayor a este tope simplemente no matchea nada y responde 200 vacío, sin
+ * romper nada. Acá el valor no es un filtro: viaja a un `findUnique` por
+ * clave primaria, así que dejarlo pasar sería una consulta ya condenada a
+ * "no existe" en vez de un 400 inmediato — y ningún otro módulo del backend
+ * tenía este tope, así que vive acá, junto al único lugar que lo necesita.
+ */
+const PRODUCTO_ICONO_ID_MAX = 2147483647;
+
 // Espejan las columnas de `ConfiguracionContacto` en schema.prisma — un valor
 // más largo produciría un P2000 que el error handler traduce a un 400
 // genérico sin decir qué campo ni cuál es el límite. Mismo criterio que
@@ -356,7 +370,10 @@ export async function actualizarConfiguracionHome(req, res, next) {
     // error sin `status`, que el handler global vuelve 500. Acá, a diferencia
     // de un filtro de listado, el valor fuera de rango no se descarta en
     // silencio: es una escritura explícita, así que es 400.
-    if (productoIconoId !== null && !esEnteroSeguro(productoIconoId)) {
+    if (
+      productoIconoId !== null &&
+      (!esEnteroSeguro(productoIconoId) || productoIconoId < 1 || productoIconoId > PRODUCTO_ICONO_ID_MAX)
+    ) {
       throw httpError(400, "productoIconoId debe ser un entero o null.");
     }
 

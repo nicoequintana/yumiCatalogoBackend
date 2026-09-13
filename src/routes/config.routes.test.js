@@ -614,6 +614,34 @@ describe("PUT /api/config/home", () => {
     expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
   });
 
+  // `esEnteroSeguro` mide una frontera DISTINTA (representación exacta en
+  // `Number`, hasta 2^53-1) — no alcanza para esto. `2147483648` ES un
+  // entero seguro, pero ya no entra en la columna `Int` de `Product.id`:
+  // sin esta guarda llegaría igual a `prisma.product.findUnique`, una
+  // consulta ya condenada a "no existe" en vez de un 400 inmediato.
+  // Hallazgo de la revisión de T5 (ronda 2).
+  it("400 si productoIconoId supera el Int32 de la columna, sin llegar a Prisma", async () => {
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 2147483648 });
+
+    expect(res.status).toBe(400);
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
+  it("400 si productoIconoId es menor a 1", async () => {
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 0 });
+
+    expect(res.status).toBe(400);
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
   it("acepta null para 'ninguno elegido'", async () => {
     configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: null });
 
