@@ -106,6 +106,14 @@ function productoDeDetalle(extra = {}) {
     nombre: "Producto ícono",
     descripcion: "El producto que abre la home",
     precio: { toString: () => "45000" },
+    // Valores REALES (no `undefined`): si algún día `mapearProductoIcono`
+    // pasara `esAdmin: true` por error, estos números tienen que aparecer en
+    // la respuesta para que el test de abajo los pueda cazar — con el campo
+    // ausente en la fila, un bug así igual respondería `costo: null` en vez
+    // de la plata real, y el `toBeUndefined()` de todos modos fallaría, pero
+    // sin probar que el dato que se estaba por filtrar era de verdad plata.
+    costo: { toString: () => "30000" },
+    coeficiente: { toString: () => "1.5" },
     etiqueta: null,
     categoria: { id: 1, nombre: "Cocina" },
     vistas: 0,
@@ -528,6 +536,20 @@ describe("GET /api/config/home", () => {
       esNuevo: expect.any(Boolean),
     });
     // Nunca filtra costeo — mismo criterio que cualquier lectura pública.
+    // La fila mockeada TIENE costo/coeficiente reales (`productoDeDetalle`):
+    // si el guard de abajo se rompiera, acá aparecerían "30000"/"1.5", no
+    // `undefined` por ausencia de dato.
+    expect(res.body.productoIcono.costo).toBeUndefined();
+    expect(res.body.productoIcono.coeficiente).toBeUndefined();
+  });
+
+  it("un token admin NO destapa costo/coeficiente: este endpoint no tiene vista admin", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 9 });
+    productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9, visibleEnCatalogo: true, stock: 5 }));
+
+    const res = await request(buildApp()).get("/api/config/home").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
     expect(res.body.productoIcono.costo).toBeUndefined();
     expect(res.body.productoIcono.coeficiente).toBeUndefined();
   });
@@ -545,10 +567,6 @@ describe("GET /api/config/home", () => {
     expect(res.body.productoIcono.descuento).toEqual({ porcentaje: 10 });
   });
 
-  it("no requiere autenticación", async () => {
-    const res = await request(buildApp()).get("/api/config/home");
-    expect(res.status).not.toBe(401);
-  });
 });
 
 describe("PUT /api/config/home", () => {
@@ -581,6 +599,21 @@ describe("PUT /api/config/home", () => {
     expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
   });
 
+  // Mismo criterio (y misma frontera) que `lib/enteroSeguro.js`: un valor que
+  // ya no se puede representar exacto como `Number` revienta el query engine
+  // de Prisma con un error sin `status` — acá, a diferencia de un filtro de
+  // listado, eso tiene que ser 400 ANTES de llegar a la base, no un 500.
+  it("400 si productoIconoId supera Number.MAX_SAFE_INTEGER", async () => {
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: Number.MAX_SAFE_INTEGER + 2 });
+
+    expect(res.status).toBe(400);
+    expect(productMock.findUnique).not.toHaveBeenCalled();
+    expect(configuracionHomeMock.upsert).not.toHaveBeenCalled();
+  });
+
   it("acepta null para 'ninguno elegido'", async () => {
     configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: null });
 
@@ -610,12 +643,33 @@ describe("PUT /api/config/home", () => {
       update: { productoIconoId: 9 },
     });
     expect(res.body.productoIcono).toMatchObject({ id: 9 });
-    // Un solo `findUnique` para validar existencia: la escritura reutiliza
-    // ESA fila para armar la respuesta, no dispara una segunda consulta.
+    // Un solo `findUnique` de `Product` para validar existencia: la
+    // escritura reutiliza ESA fila para armar la respuesta, no dispara una
+    // segunda consulta.
     expect(productMock.findUnique).toHaveBeenCalledTimes(1);
   });
 
-  it("registra auditoría con el productoIconoId elegido", async () => {
+  // A diferencia del GET público, el PUT no vuelve a exigir
+  // `visibleEnCatalogo`/stock: el admin tiene que ver la verdad de lo que
+  // acaba de guardar (puede elegir un producto y publicarlo después).
+  it("con un producto oculto o sin stock, igual responde el detalle (no degrada como el GET)", async () => {
+    productMock.findUnique.mockResolvedValue(
+      productoDeDetalle({ id: 9, visibleEnCatalogo: false, stock: 0 }),
+    );
+    configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: 9 });
+
+    const res = await request(buildApp())
+      .put("/api/config/home")
+      .set("Authorization", authHeader)
+      .send({ productoIconoId: 9 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.productoIcono).not.toBeNull();
+    expect(res.body.productoIcono).toMatchObject({ id: 9 });
+  });
+
+  it("registra auditoría con {anterior, nuevo}, mismo criterio que actualizarContacto", async () => {
+    configuracionHomeMock.findUnique.mockResolvedValue({ id: 1, productoIconoId: 3 });
     productMock.findUnique.mockResolvedValue(productoDeDetalle({ id: 9 }));
     configuracionHomeMock.upsert.mockResolvedValue({ id: 1, productoIconoId: 9 });
 
@@ -630,6 +684,7 @@ describe("PUT /api/config/home", () => {
           accion: "ACTUALIZAR",
           entidad: "ConfiguracionHome",
           entidadId: 1,
+          detalle: JSON.stringify({ anterior: 3, nuevo: 9 }),
         }),
       }),
     );

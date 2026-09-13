@@ -17,6 +17,15 @@ const limitadorEventosComerciales = crearLimitadorDeVelocidad({
   message: "Demasiadas solicitudes. Probá de nuevo en unos minutos.",
 });
 
+// Mismo techo que `GET /categorias`, `GET /config/contacto` y `GET
+// /campanias/activas` (600/5min): se pide sin login en cada carga de la home
+// pública (`GET /destacada`) y no tenía ningún límite.
+const limitadorLecturaPublica = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
+});
+
 // Instancia propia (y no compartida con campañas) para que el campo multipart
 // que espera —"arte"— quede en el nombre de la variable y no en un parámetro
 // que hay que ir a buscar. Mismo criterio que `uploadArte` de campanias.routes.
@@ -56,7 +65,7 @@ const uploadArte = multer({
 router.get("/productos", requireAuth, promocionesController.listadoComercial);
 // Pública: ver el docblock del archivo. Antes de `/:id` por el mismo motivo
 // que `/productos`.
-router.get("/destacada", promocionesController.obtenerDestacadaPublica);
+router.get("/destacada", limitadorLecturaPublica, promocionesController.obtenerDestacadaPublica);
 // Solo lectura: los conflictos se calculan cada vez, no se guardan. Un snapshot
 // habría que invalidarlo ante cualquier cambio de items, de programación o de
 // estado de campaña — y el §41 pide que agregar un producto a una promoción ya

@@ -24,8 +24,10 @@ router.get("/contacto", limitadorLecturaPublica, authOpcional, configController.
 router.put("/contacto", requireAuth, configController.actualizarContacto);
 
 // Producto ícono de la home — GET público (degrada a `null`, ver el
-// controller), PUT solo admin.
-router.get("/home", configController.obtenerConfiguracionHome);
+// controller; mismo techo que `/contacto`: la home lo pide sin login en
+// cada carga y son 3 consultas por request — `ConfiguracionHome`, `Product`
+// y `PromocionItem` de `resolverDescuentos`), PUT solo admin.
+router.get("/home", limitadorLecturaPublica, configController.obtenerConfiguracionHome);
 router.put("/home", requireAuth, configController.actualizarConfiguracionHome);
 
 export default router;

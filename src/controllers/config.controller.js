@@ -7,6 +7,7 @@ import { esEmailValido } from "../lib/emailValido.js";
 import { esUrlHttpsValida } from "../lib/urlHttpsValida.js";
 import { PRODUCT_INCLUDE, mapProducto } from "./products.mapper.js";
 import { resolverDescuentos } from "../lib/precioEfectivo.js";
+import { esEnteroSeguro } from "../lib/enteroSeguro.js";
 
 const TEXTO_EN_HORARIO = "Te respondemos ahora";
 const TEXTO_FUERA_DE_HORARIO = "Fuera de horario de atención — te respondemos apenas podamos";
@@ -348,7 +349,14 @@ export async function obtenerConfiguracionHome(_req, res, next) {
 export async function actualizarConfiguracionHome(req, res, next) {
   try {
     const { productoIconoId } = req.body ?? {};
-    if (productoIconoId !== null && !Number.isInteger(productoIconoId)) {
+    // `esEnteroSeguro` (`Number.isSafeInteger`), no `Number.isInteger`: es la
+    // MISMA frontera que `lib/enteroSeguro.js` mide contra el SQL Server real
+    // para cualquier entero que viaje a Prisma — un valor no representable
+    // exacto (`> Number.MAX_SAFE_INTEGER`) revienta el query engine con un
+    // error sin `status`, que el handler global vuelve 500. Acá, a diferencia
+    // de un filtro de listado, el valor fuera de rango no se descarta en
+    // silencio: es una escritura explícita, así que es 400.
+    if (productoIconoId !== null && !esEnteroSeguro(productoIconoId)) {
       throw httpError(400, "productoIconoId debe ser un entero o null.");
     }
 
@@ -357,6 +365,11 @@ export async function actualizarConfiguracionHome(req, res, next) {
       producto = await prisma.product.findUnique({ where: { id: productoIconoId }, include: PRODUCT_INCLUDE });
       if (!producto) throw httpError(400, "El producto elegido no existe.");
     }
+
+    // `anterior`/`nuevo`, mismo criterio que `actualizarContacto`: sin esto la
+    // auditoría dice QUE se tocó `ConfiguracionHome` pero no cuál era el
+    // producto ícono antes del cambio.
+    const actual = await prisma.configuracionHome.findUnique({ where: { id: ID_CONFIGURACION_HOME } });
 
     const config = await prisma.configuracionHome.upsert({
       where: { id: ID_CONFIGURACION_HOME },
@@ -368,7 +381,7 @@ export async function actualizarConfiguracionHome(req, res, next) {
       accion: "ACTUALIZAR",
       entidad: "ConfiguracionHome",
       entidadId: ID_CONFIGURACION_HOME,
-      detalle: { productoIconoId: config.productoIconoId },
+      detalle: { anterior: actual?.productoIconoId ?? null, nuevo: config.productoIconoId },
     });
 
     res.json({ productoIcono: await mapearProductoIcono(producto) });
