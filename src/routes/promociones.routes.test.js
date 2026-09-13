@@ -1230,6 +1230,10 @@ describe("PATCH /api/promociones/:id/home", () => {
       expect.objectContaining({ where: { destacadaEnHome: true, id: { not: 3 } }, data: { destacadaEnHome: false } }),
     );
     expect(transactionMock).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "Serializable" });
+    // Mismo criterio que `mapCategoria` (`categorias.controller.js:59`): el
+    // DETALLE emite el flag, para que el panel vea el estado actual sin un
+    // segundo `GET`.
+    expect(res.body.destacadaEnHome).toBe(true);
   });
 
   it("apagar la propia NO toca a las demás", async () => {

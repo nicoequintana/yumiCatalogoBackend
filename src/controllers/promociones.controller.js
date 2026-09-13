@@ -209,6 +209,10 @@ function mapPromocionDetalle(promocion) {
     nombre: promocion.nombre,
     descripcion: promocion.descripcion,
     activa: promocion.activa,
+    // Mismo criterio que `mapCategoria` (`categorias.controller.js`): el
+    // DETALLE emite el flag del interruptor para que el panel vea el estado
+    // actual de "Promos activas" sin un segundo `GET`.
+    destacadaEnHome: promocion.destacadaEnHome ?? false,
     bannerEnHome: promocion.bannerEnHome,
     bannerTitulo: promocion.bannerTitulo ?? null,
     bannerTexto: promocion.bannerTexto ?? null,
