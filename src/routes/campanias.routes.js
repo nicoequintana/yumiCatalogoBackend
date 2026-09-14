@@ -82,6 +82,12 @@ const limitadorEventosComerciales = crearLimitadorDeVelocidad({
 // vencida rompería el logo del catálogo.
 router.get("/activas", limitadorLecturaPublica, authOpcional, campaniasController.contextoActivo);
 
+// También pública y antes de `/:id`: una sección de productos por campaña
+// activa para la home (`Catalogo.jsx`). A diferencia de `/activas`, acá no hay
+// nada que sumar con token —`mapProductoListado` nunca emite `costo`/
+// `coeficiente` para este endpoint—, así que no lleva `authOpcional`.
+router.get("/vitrinas", limitadorLecturaPublica, campaniasController.vitrinasHome);
+
 // También antes de `/:id`: los diccionarios que consume el panel, para que el
 // frontend no tenga copia de las listas de tipos y estados.
 router.get("/opciones", requireAuth, campaniasController.opciones);

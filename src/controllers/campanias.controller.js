@@ -12,7 +12,9 @@ import { claveDiaArgentino, diasHastaClave, inicioDelDiaArgentino } from "../lib
 import { rutaCategoria, rutaProducto } from "../lib/slug.js";
 import {
   condicionPromocionVigente,
+  resolverDescuentos,
 } from "../lib/precioEfectivo.js";
+import { LIST_SELECT, mapProductoListado } from "./products.mapper.js";
 import {
   CTA_TEXTO_POR_DEFECTO,
   ESTADOS_CAMPANIA,
@@ -39,6 +41,23 @@ export const LARGO_MAX_NOMBRE = 120;
  * de 200 productos no es una selección, es el catálogo entero.
  */
 export const MAX_PRODUCTOS_CAMPANIA = 200;
+
+/**
+ * Tope de productos por campaña en `GET /campanias/vitrinas`, la sección "una
+ * vidriera por campaña" de la home pública (`Catalogo.jsx`). De producto, no
+ * técnico: ocho es dos filas completas de la grilla `grid-cols-2 md:grid-cols-4`
+ * que ya usa `MasVendidos`.
+ */
+export const MAX_PRODUCTOS_VITRINA_HOME = 8;
+
+/**
+ * Piso de productos VISIBLES para que una campaña se gane su sección en la
+ * home. Por debajo de esto una fila de una o dos cards se lee como un error de
+ * carga, no como una vidriera. La decisión se toma ACÁ, no en el frontend —
+ * regla 1 de la metodología: el dato derivado ("¿esta campaña tiene vidriera
+ * hoy?") viaja resuelto en la respuesta.
+ */
+export const MIN_PRODUCTOS_VITRINA_HOME = 4;
 
 /** Espejan `@db.NVarChar(...)` de las columnas del modal, mismo criterio. */
 export const LARGO_MAX_MODAL_TITULO = 120;
@@ -967,6 +986,110 @@ export async function contextoActivo(req, res, next) {
     }
 
     res.json(cuerpo);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `GET /campanias/vitrinas` — una sección de productos por campaña ACTIVA,
+ * para la home pública (`Catalogo.jsx`).
+ *
+ * Reusa ENTERO el contrato público de `GET /products?campania=ID`: mismas
+ * guardas (`visibleEnCatalogo: true`, `stock: { gt: 0 }`), mismo `select`
+ * (`LIST_SELECT` + `mapProductoListado`, nunca `costo`/`coeficiente`) y la
+ * misma resolución de descuento (`resolverDescuentos`) — no hay una segunda
+ * copia de ninguna de las tres. A diferencia de `/activas`, este endpoint no
+ * tiene rama admin: `mapProductoListado` se llama SIEMPRE con `esAdmin`
+ * default (`false`), con o sin token.
+ *
+ * **La vigencia la decide `resolverEstadoCampania`, NUNCA el `where`** — mismo
+ * criterio que `resolverVitrina` en `products.controller.js`: la consulta
+ * ACOTA por índice (`estado` + fechas) y la lib DECIDE sobre las filas
+ * devueltas, para que una campaña HABILITADA pero vencida no siga
+ * vidriereando.
+ *
+ * **Una sola consulta de productos para TODAS las campañas activas**, no una
+ * por campaña: se trae lo publicado en cualquiera de sus vitrinas de una vez
+ * (con la relación `campanias` recortada a esos ids) y se reparte en memoria,
+ * respetando el orden con el que llegó de la base. Evita el N+1 de "una
+ * consulta por campaña" a costa de, en el peor caso, traer de más antes de
+ * recortar acá — aceptable: son vidrieras acotadas por `MAX_PRODUCTOS_CAMPANIA`,
+ * no el catálogo entero.
+ *
+ * Orden de los productos DENTRO de cada vidriera: el default del listado
+ * público (`createdAt desc, id desc`) — NO el orden de inserción a la vitrina
+ * (`CampaniaProducto.createdAt`) que usa `DETALLE_INCLUDE` del editor: acá es
+ * una sección de descubrimiento del catálogo, no un repaso de lo que el admin
+ * fue cargando.
+ *
+ * Campañas con menos de `MIN_PRODUCTOS_VITRINA_HOME` productos VISIBLES se
+ * OMITEN acá, no en el frontend — misma razón que arriba.
+ *
+ * Responde un ARRAY PELADO (`[{campaniaId, nombre, productos}]`), no el sobre
+ * `{data,...}` del listado paginado: esto no es una página de UN recurso, es
+ * una lista de VIDRIERAS, cada una con su propia lista adentro.
+ */
+export async function vitrinasHome(req, res, next) {
+  try {
+    const ahora = new Date();
+    const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+
+    const candidatas = await prisma.campania.findMany({
+      where: {
+        estado: "HABILITADA",
+        desde: { lte: ahora },
+        hasta: { gte: medianocheDeHoy },
+      },
+      select: { id: true, nombre: true, estado: true, desde: true, hasta: true, prioridad: true },
+    });
+
+    // La base ACOTA, la lib DECIDE — mismo patrón que `contextoActivo`.
+    const activas = candidatas
+      .filter((c) => resolverEstadoCampania(c, ahora).activa)
+      .sort((a, b) => b.prioridad - a.prioridad || b.id - a.id);
+
+    if (activas.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const activaIds = activas.map((c) => c.id);
+
+    const productos = await prisma.product.findMany({
+      where: {
+        visibleEnCatalogo: true,
+        stock: { gt: 0 },
+        campanias: { some: { campaniaId: { in: activaIds } } },
+      },
+      select: {
+        ...LIST_SELECT,
+        campanias: { where: { campaniaId: { in: activaIds } }, select: { campaniaId: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+
+    // UNA consulta de descuentos para todos los productos de todas las
+    // vidrieras, no una por campaña ni una por producto.
+    const descuentos = await resolverDescuentos(prisma, productos.map((p) => p.id));
+
+    const porCampania = new Map(activaIds.map((id) => [id, []]));
+    for (const producto of productos) {
+      const mapeado = mapProductoListado(producto, { descuento: descuentos.get(producto.id) ?? null });
+      for (const { campaniaId } of producto.campanias) {
+        const lista = porCampania.get(campaniaId);
+        // `get` puede dar `undefined` si algún día el `where` de la relación
+        // dejara pasar un id ajeno a esta tanda — guarda barata para no
+        // escribir en una lista que no existe.
+        if (lista && lista.length < MAX_PRODUCTOS_VITRINA_HOME) lista.push(mapeado);
+      }
+    }
+
+    const vitrinas = activas
+      .filter((c) => (porCampania.get(c.id)?.length ?? 0) >= MIN_PRODUCTOS_VITRINA_HOME)
+      .map((c) => ({ campaniaId: c.id, nombre: c.nombre, productos: porCampania.get(c.id) }));
+
+    res.json(vitrinas);
   } catch (err) {
     next(err);
   }
