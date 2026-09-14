@@ -362,6 +362,15 @@ function exigirSinMarcadorDeDias(texto, campo) {
  * que todavía los traiga —una pestaña vieja del panel— se ACEPTA y se ignora:
  * un 400 por un campo que hoy no significa nada dejaría trabado un guardado que
  * en realidad es válido.
+ *
+ * ⚠️ **`bannerTitulo` YA NO es obligatorio con el banner prendido, desde el
+ * 14/09/2026.** Decisión de usuario: la imagen que sube el admin lleva el
+ * texto adentro, así que el panel dejó de ofrecer el campo (oculto, no
+ * borrado, en `SeccionBanner.jsx`). Exigirlo acá volvería imposible guardar el
+ * interruptor prendido sin un campo que ya no existe en la pantalla. El resto
+ * de las validaciones (largo, marcador `{dias}`) sigue igual, y las columnas
+ * y el mapeo se conservan intactos para poder reactivar el campo más
+ * adelante.
  */
 function parsearBanner(body, actual = null) {
   const enHome = parsearFlagDoodle(body, "bannerEnHome", actual?.bannerEnHome ?? false);
@@ -371,10 +380,6 @@ function parsearBanner(body, actual = null) {
 
   exigirSinMarcadorDeDias(titulo, "bannerTitulo");
   exigirSinMarcadorDeDias(texto, "bannerTexto");
-
-  if (enHome && !titulo) {
-    throw httpError(400, "Un banner activo necesita un título.");
-  }
 
   return {
     bannerEnHome: enHome,
@@ -755,6 +760,11 @@ async function aSlideCampania(campania) {
     // el 07/09/2026 faltaba, y CLAUDE.md lo describía como si estuviera.
     promocionId: null,
     titulo: campania.bannerTitulo,
+    // El nombre de la campaña, SIEMPRE. Desde el 14/09/2026 el título del
+    // banner es opcional (el texto vive en la imagen): sin él, el link
+    // público necesita igual un nombre accesible, y éste es el fallback
+    // (`slide.titulo || slide.nombre` en `SlideCampania.jsx`).
+    nombre: campania.nombre,
     texto: campania.bannerTexto,
     ctaDestino: await resolverDestinoCta(campania),
     // El slide reusa el destino del cartel ("modalCtaTipo sirve a DOS
@@ -797,6 +807,9 @@ export function aSlidePromocion(promocion) {
     campaniaId: null,
     promocionId: promocion.id,
     titulo: promocion.bannerTitulo,
+    // Mismo fallback que `aSlideCampania`: sin título, el nombre accesible
+    // del link lo da la promoción.
+    nombre: promocion.nombre,
     texto: promocion.bannerTexto ?? null,
     ctaDestino: `/coleccion?promocion=${promocion.id}`,
     // Fijo: el slide de una promoción siempre lleva a su vitrina.
@@ -809,25 +822,28 @@ export function aSlidePromocion(promocion) {
 /**
  * Las promociones que hoy aportan un slide, ya ordenadas.
  *
- * CINCO condiciones, y el filtro va ANTES de ordenar y de cortar: filtrar
- * después gastaría el cupo de cinco en candidatas incompletas.
+ * CUATRO condiciones (eran cinco hasta el 13/09/2026, ver el punto 2), y el
+ * filtro va ANTES de ordenar y de cortar: filtrar después gastaría el cupo de
+ * cinco en candidatas incompletas.
  *
  * 1. Vigente según `condicionPromocionVigente`. ⚠️ NO se reescribe la condición
  *    acá: esa función tiene DOS vías —programación propia, o pertenecer a una
  *    campaña habilitada y en fecha— más `activa: true`. Escribirla a mano
  *    dejaría afuera a las promociones que viven dentro de una campaña.
- * 2. `bannerEnHome` prendido.
- * 3. `bannerTitulo` cargado — mismo criterio que el banner de campaña.
- * 4. Al menos un item habilitado: `PromocionItem.habilitado` se apaga cuando la
+ * 2. `bannerEnHome` prendido — ÚNICA condición de completitud del banner
+ *    desde el 14/09/2026. Hasta el 13/09/2026 había una tercera condición acá
+ *    (`bannerTitulo` cargado); se sacó junto con el campo del panel: el texto
+ *    vive en la imagen, así que el interruptor pasó a ser la única decisión.
+ * 3. Al menos un item habilitado: `PromocionItem.habilitado` se apaga cuando la
  *    promoción PIERDE un conflicto sobre un producto y **no se reactiva sola**,
  *    así que una promoción con todos los items apagados sigue vigente en el
  *    calendario mientras no descuenta nada. Anunciarla mandaría al visitante a
  *    una grilla vacía.
- * 5. Sin campaña asociada: si `CampaniaPromocion` la vincula a una campaña, la
+ * 4. Sin campaña asociada: si `CampaniaPromocion` la vincula a una campaña, la
  *    campaña es su vidriera y ya tiene su propio slide. Emitir los dos diría
  *    dos veces lo mismo y gastaría dos de los cinco lugares.
  *
- *    ⚠️ Esta quinta condición deja MUERTA a propósito la segunda vía del `OR`
+ *    ⚠️ Esta cuarta condición deja MUERTA a propósito la segunda vía del `OR`
  *    de `condicionPromocionVigente` (la de "pertenece a una campaña habilitada
  *    y en fecha"): una promoción sin campañas nunca puede satisfacerla. No es
  *    un error ni algo para "simplificar" — es la decisión de que la campaña es
@@ -845,7 +861,6 @@ export async function slidesDePromociones(ahora) {
     where: {
       ...condicionPromocionVigente(ahora),
       bannerEnHome: true,
-      bannerTitulo: { not: null },
       items: { some: { habilitado: true } },
       campanias: { none: {} },
     },
@@ -890,11 +905,15 @@ export async function contextoActivo(req, res, next) {
       ahora,
     );
 
-    // Las campañas con banner completo, de mayor a menor prioridad.
+    // Las campañas con banner prendido, de mayor a menor prioridad.
     //
-    // El filtro por `bannerEnHome` Y `bannerTitulo` va ANTES de ordenar, por el
-    // mismo motivo por el que el modal filtra antes de `elegirPorPrioridad`: un
-    // banner prendido y sin título es una franja rota.
+    // ⚠️ Hasta el 13/09/2026 el filtro exigía `bannerEnHome` Y `bannerTitulo`
+    // (un banner prendido y sin título era una franja rota). Decisión de
+    // usuario 2026-09-14: el texto pasó a vivir DENTRO de la imagen que sube
+    // el admin, y el campo de título se ocultó en el panel — exigirlo acá
+    // habría dejado el carrusel permanentemente vacío para cualquier banner
+    // nuevo, sin ningún error que lo delate. El interruptor es hoy la ÚNICA
+    // condición de completitud.
     //
     // A diferencia del modal, acá NO se usa `elegirPorPrioridad`: el carrusel
     // muestra varias. El desempate por `id` descendente es el mismo criterio y
@@ -902,7 +921,7 @@ export async function contextoActivo(req, res, next) {
     // salir en distinto orden entre dos requests y el carrusel arrancaría en
     // una distinta en cada carga.
     const conBanner = activas
-      .filter((c) => c.bannerEnHome && c.bannerTitulo)
+      .filter((c) => c.bannerEnHome)
       .sort((a, b) => b.prioridad - a.prioridad || b.id - a.id)
       .slice(0, MAX_SLIDES_CAMPANIA);
 

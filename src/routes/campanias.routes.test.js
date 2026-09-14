@@ -586,6 +586,26 @@ describe("GET /campanias/activas — slides", () => {
     expect(res.body.slides[0].tipo).toBe("CAMPANIA");
   });
 
+  it("un banner sin título TAMBIÉN entra al carrusel: el texto vive en la imagen (2026-09-14)", async () => {
+    // Hasta el 13/09/2026 `bannerTitulo` era una de las dos condiciones del
+    // filtro (`bannerEnHome && bannerTitulo`): un banner sin título quedaba
+    // afuera del carrusel aunque el interruptor estuviera prendido. Con el
+    // título oculto en el panel, esa condición dejaba el carrusel
+    // permanentemente vacío para cualquier banner nuevo — el interruptor
+    // pasó a ser la ÚNICA decisión de "se muestra o no".
+    campaniaMock.findMany.mockResolvedValue([
+      fila({ id: 1, bannerEnHome: true, bannerTitulo: null, nombre: "Primavera" }),
+    ]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    expect(res.body.slides).toHaveLength(1);
+    expect(res.body.slides[0].titulo).toBeNull();
+    // Sin título, el nombre accesible del slide lo da la campaña.
+    expect(res.body.slides[0].nombre).toBe("Primavera");
+  });
+
   it("el slide de una campaña trae ctaTipo (la INTENCIÓN) y promocionId null EXPLÍCITO", async () => {
     // Mismo armado que el test vecino de arriba: una campaña con banner. Le
     // suma la intención del CTA (`modalCtaTipo`), que el slide reusa del cartel.
@@ -777,6 +797,21 @@ describe("GET /campanias/activas — slides de campaña y de promoción", () => 
       ...extra,
     };
   }
+
+  it("una promoción con banner sin título TAMBIÉN entra: el texto vive en la imagen (2026-09-14)", async () => {
+    campaniaMock.findMany.mockResolvedValue([]);
+    promocionFindManyMock.mockResolvedValue([
+      promocionParaSlide({ bannerTitulo: null, nombre: "Envío gratis" }),
+    ]);
+    productMock.count.mockResolvedValue(0);
+
+    const res = await request(buildApp()).get("/api/campanias/activas");
+
+    const slide = res.body.slides.find((s) => s.tipo === "PROMOCION");
+    expect(slide).toBeDefined();
+    expect(slide.titulo).toBeNull();
+    expect(slide.nombre).toBe("Envío gratis");
+  });
 
   it("pone las campañas primero y las promociones después", async () => {
     campaniaMock.findMany.mockResolvedValue([
@@ -2331,11 +2366,22 @@ describe("El bloque del banner de la home", () => {
     return request(buildApp()).post("/api/campanias").set("Authorization", authHeader).send(body);
   }
 
-  it("un banner prendido necesita un título", async () => {
+  it("un banner prendido YA NO necesita título: el texto vive en la imagen (decisión 2026-09-14)", async () => {
+    // Hasta el 13/09/2026 esto era un 400 ("Un banner activo necesita un
+    // título."). El admin dejó de escribir título/texto del banner —el input
+    // se ocultó en el panel— así que exigirlo acá volvía imposible guardar el
+    // interruptor prendido. Se conserva el tope de largo (120) y el resto de
+    // las validaciones: se relaja SOLO esta.
+    campaniaMock.create.mockResolvedValue(fila({ bannerEnHome: true, bannerTitulo: null }));
+
     const res = await crear({ ...base, bannerEnHome: true });
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Un banner activo necesita un título.");
+    expect(res.status).toBe(201);
+    expect(campaniaMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ bannerEnHome: true, bannerTitulo: null }),
+      }),
+    );
   });
 
   it("apagado no exige nada: los textos a medio escribir se guardan", async () => {

@@ -155,6 +155,12 @@ function parsearCampoTextoBanner(body, actual, campo, largoMax) {
  * copy es fijo en `SlideCampania` y el molde sin arte va en el color de marca.
  * Un body que todavía los traiga se ACEPTA y se ignora — un 400 por un campo
  * que hoy no significa nada trabaría un guardado que en realidad es válido.
+ *
+ * ⚠️ **`bannerTitulo` YA NO es obligatorio con el banner prendido, desde el
+ * 14/09/2026** — mismo motivo y misma fecha que `parsearBanner` de campañas:
+ * la imagen que sube el admin lleva el texto adentro, el campo se ocultó en
+ * `SeccionBannerPromocion.jsx` (oculto, no borrado) y exigir un título acá
+ * volvería imposible guardar el interruptor prendido.
  */
 function parsearBannerPromocion(body, actual) {
   const enHome =
@@ -172,10 +178,6 @@ function parsearBannerPromocion(body, actual) {
 
   exigirSinMarcadorDeDias(titulo, "bannerTitulo");
   exigirSinMarcadorDeDias(texto, "bannerTexto");
-
-  if (enHome && !titulo) {
-    throw httpError(400, "Un banner activo necesita un título.");
-  }
 
   return {
     bannerEnHome: enHome,

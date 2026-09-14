@@ -381,15 +381,24 @@ describe("PUT /api/promociones/:id — el banner de la home", () => {
     expect(res.body.error).toContain("{dias}");
   });
 
-  it("un banner prendido sin título es 400", async () => {
+  it("un banner prendido YA NO necesita título: el texto vive en la imagen (decisión 2026-09-14)", async () => {
+    // Hasta el 13/09/2026 esto era un 400. El admin dejó de escribir
+    // título/texto del banner —el input se ocultó en el panel—, así que
+    // exigirlo acá volvía imposible guardar el interruptor prendido.
     promocionMock.findUnique.mockResolvedValue(promo());
+    promocionMock.update.mockResolvedValue(promo({ bannerEnHome: true, bannerTitulo: null }));
 
     const res = await request(buildApp())
       .put("/api/promociones/3")
       .set("Authorization", authHeader)
       .send({ nombre: "Hogar", bannerEnHome: true, bannerTitulo: "" });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(promocionMock.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ bannerEnHome: true, bannerTitulo: null }),
+      }),
+    );
   });
 
   it("un body con bannerColor o bannerCtaTexto ya no cambia nada", async () => {

@@ -57,7 +57,12 @@ describe("slides de promoción", () => {
 });
 
 describe("slidesDePromociones — la consulta de candidatas", () => {
-  it("pide las cinco condiciones: vigente, bannerEnHome, bannerTitulo, item habilitado y sin campaña", async () => {
+  it("pide las CUATRO condiciones: vigente, bannerEnHome, item habilitado y sin campaña", async () => {
+    // Hasta el 13/09/2026 eran cinco y `bannerTitulo` era una de ellas: un
+    // banner prendido sin título quedaba afuera del carrusel. Decisión de
+    // usuario 2026-09-14: el texto vive en la imagen, así que el título dejó
+    // de ser una condición de completitud — el interruptor es la única
+    // decisión de "se muestra o no".
     promocionFindManyMock.mockResolvedValue([]);
 
     await slidesDePromociones(new Date("2026-09-06T12:00:00Z"));
@@ -72,7 +77,7 @@ describe("slidesDePromociones — la consulta de candidatas", () => {
     // `bannerEnHome: false` NO puede matchear esta condición: es la guarda que
     // deja afuera una promoción con el banner todavía sin publicar.
     expect(where.bannerEnHome).toBe(true);
-    expect(where.bannerTitulo).toEqual({ not: null });
+    expect(where).not.toHaveProperty("bannerTitulo");
     expect(where.items).toEqual({ some: { habilitado: true } });
     // Sin campaña asociada: si la campaña es su vidriera, ya tiene su propio
     // slide y anunciar los dos sería decir lo mismo dos veces.
