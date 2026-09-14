@@ -23,24 +23,41 @@ import { httpError } from "../lib/httpError.js";
  * permiso a alguien surte efecto en la request siguiente, no cuando expire su
  * token 24 horas después.
  */
-export function requierePermisoDeBorrado(req, _res, next) {
-  // Sin identidad la respuesta correcta es 401 y no 403: "no sé quién sos" es
-  // distinto de "sé quién sos y no podés". Solo pasa si alguien monta este
-  // middleware sin `requireAuth` delante.
-  if (!req.usuario) {
-    return next(httpError(401, "No autorizado."));
-  }
+export const requierePermisoDeBorrado = exigirPuedeEliminar(
+  "Tu usuario no tiene permiso para eliminar. Pedile a otro administrador que lo habilite.",
+);
 
-  // FAIL-CLOSED: se exige `true` explícito. Si un camino nuevo dejara
-  // `req.usuario` sin el campo, la respuesta segura es negar — asumir permiso
-  // ante la duda es justo el agujero que este middleware existe para tapar.
-  if (req.usuario.puedeEliminar !== true) {
-    return next(
-      httpError(403, "Tu usuario no tiene permiso para eliminar. Pedile a otro administrador que lo habilite."),
-    );
-  }
+/**
+ * El mismo flag, con un 403 que habla de lo que se intentó: un usuario que
+ * quiere dar de alta a otro no está intentando eliminar nada.
+ */
+export const requierePermisoDeGestionUsuarios = exigirPuedeEliminar(
+  "Tu usuario no tiene permiso para gestionar usuarios. Pedile a otro administrador que lo habilite.",
+);
 
-  next();
+/**
+ * Un solo chequeo del flag; lo único que cambia entre usos es el mensaje.
+ *
+ * @param {string} mensaje403
+ */
+function exigirPuedeEliminar(mensaje403) {
+  return function (req, _res, next) {
+    // Sin identidad la respuesta correcta es 401 y no 403: "no sé quién sos" es
+    // distinto de "sé quién sos y no podés". Solo pasa si alguien monta este
+    // middleware sin `requireAuth` delante.
+    if (!req.usuario) {
+      return next(httpError(401, "No autorizado."));
+    }
+
+    // FAIL-CLOSED: se exige `true` explícito. Si un camino nuevo dejara
+    // `req.usuario` sin el campo, la respuesta segura es negar — asumir permiso
+    // ante la duda es justo el agujero que este middleware existe para tapar.
+    if (req.usuario.puedeEliminar !== true) {
+      return next(httpError(403, mensaje403));
+    }
+
+    next();
+  };
 }
 
 /**
@@ -58,8 +75,8 @@ export function requierePermisoDeBorrado(req, _res, next) {
  *    email o password NO lo exige: seguir pudiendo actualizar la propia
  *    credencial es edición normal, no una acción destructiva.
  *
- * Reusa `requierePermisoDeBorrado` en vez de repetir el chequeo `=== true`:
- * un solo lugar sabe qué significa "tener el permiso".
+ * Reusa `requierePermisoDeGestionUsuarios` en vez de repetir el chequeo
+ * `=== true`: un solo lugar sabe qué significa "tener el permiso".
  */
 export function requierePermisoParaActualizarUsuario(req, res, next) {
   if (!req.usuario) {
@@ -71,7 +88,7 @@ export function requierePermisoParaActualizarUsuario(req, res, next) {
   const tocaPuedeEliminar = Object.prototype.hasOwnProperty.call(req.body ?? {}, "puedeEliminar");
 
   if (!esPropiaCuenta || tocaPuedeEliminar) {
-    return requierePermisoDeBorrado(req, res, next);
+    return requierePermisoDeGestionUsuarios(req, res, next);
   }
 
   next();

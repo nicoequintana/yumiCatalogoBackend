@@ -491,6 +491,7 @@ describe("H-01: el flag puedeEliminar gatea el alta y la edición de OTROS usuar
       .send({ email: "nuevo@test.com", password: "clave12345" });
 
     expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/gestionar usuarios/);
     expect(createMock).not.toHaveBeenCalled();
   });
 
@@ -503,6 +504,7 @@ describe("H-01: el flag puedeEliminar gatea el alta y la edición de OTROS usuar
       .send({ password: "clave12345678" });
 
     expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/gestionar usuarios/);
     expect(updateMock).not.toHaveBeenCalled();
     // La guarda corre ANTES del lookup del controller: un usuario restringido
     // no puede usar el 404/200 de este endpoint para sondear qué ids existen.
@@ -518,6 +520,7 @@ describe("H-01: el flag puedeEliminar gatea el alta y la edición de OTROS usuar
       .send({ puedeEliminar: true });
 
     expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/gestionar usuarios/);
     expect(updateMock).not.toHaveBeenCalled();
   });
 
