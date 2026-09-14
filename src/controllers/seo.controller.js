@@ -146,8 +146,8 @@ function listaDeProductos(productos, frontendUrl) {
 }
 
 /**
- * Copy y estructura de la home (`frontend/src/pages/Catalogo.jsx` +
- * `frontend/src/constants/hero.js`), reescritos acá a mano.
+ * Copy y estructura de la home (`frontend/src/pages/Catalogo.jsx`, donde vive
+ * el copy del hero), reescritos acá a mano.
  *
  * SYNC MANUAL entre repos, mismo criterio que `seo.cuerpo.js` ↔
  * `FichaProducto.jsx` (regla de cloaking, spec §3 de la feature de SEO): el
