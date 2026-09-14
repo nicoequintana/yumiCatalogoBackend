@@ -375,6 +375,14 @@ describe("esProductoNuevo", () => {
     const vencido = new Date(ahora.getTime() - (VENTANA_NUEVO_DIAS + 1) * 24 * 60 * 60 * 1000);
     expect(esProductoNuevo(vencido, ahora)).toBe(false);
   });
+
+  // Fechas literales, no la constante: los dos tests de arriba pasan con
+  // cualquier valor de VENTANA_NUEVO_DIAS. Este fija la decisión de negocio.
+  it("la ventana es de 10 días: el día 10 es nuevo, el 11 ya no", () => {
+    const ahora = new Date("2026-09-13T12:00:00Z");
+    expect(esProductoNuevo(new Date("2026-09-03T12:00:00Z"), ahora)).toBe(true);
+    expect(esProductoNuevo(new Date("2026-09-02T12:00:00Z"), ahora)).toBe(false);
+  });
 });
 
 describe("mapProductoListado — esNuevo", () => {

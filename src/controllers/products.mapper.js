@@ -83,7 +83,7 @@ export const LIST_SELECT = {
  * para que otros consumidores del mismo criterio (p. ej. `seo.controller.js`)
  * no reinventen el número.
  */
-export const VENTANA_NUEVO_DIAS = 30;
+export const VENTANA_NUEVO_DIAS = 10;
 
 /**
  * `esNuevo` es dato derivado: se calcula acá, nunca en el frontend (regla 1
