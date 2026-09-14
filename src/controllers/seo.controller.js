@@ -164,13 +164,13 @@ function listaDeProductos(productos, frontendUrl) {
  * sido servirle a Googlebot un `<h2>` que ninguna persona ve, exactamente el
  * cloaking que este comentario advierte.
  */
-const HERO_TITULO = "Descubrí cosas que te hacen la vida más fácil.";
+const HERO_TITULO = "Objetos singulares que transforman tu cotidiano.";
 const HERO_PARRAFO =
-  "En YIMA reunimos productos útiles, innovadores y con diseño que simplifican tu rutina y suman estilo a tu hogar, tu trabajo y tus momentos.";
-// Espeja `SENALES_CONFIANZA` de `frontend/src/constants/hero.js` — el
-// `texto` completo de cada señal (nunca `textoCompacto`, que es solo para la
-// tarjeta angosta de móvil).
-const SENALES_CONFIANZA_SEO = ["Productos seleccionados", "Útiles", "Diferentes", "Para vos o para regalar"];
+  "Una selección táctil y funcional para el bienestar de la casa, la pausa y los rituales de todos los días. Cada pieza, elegida una por una.";
+const HERO_CTA = "Ver todo el catálogo";
+// Sin señales de confianza (rediseño 13/09/2026): el hero de `Catalogo.jsx`
+// ya no las muestra — envíos y WhatsApp viven solo en las tarjetas de
+// `Confianza`. Emitirlas acá sería contenido que ninguna persona ve.
 
 /**
  * Techo de destacados que se listan en el HTML de la home. Espeja
@@ -189,21 +189,20 @@ const MAX_DESTACADOS_SEO = 12;
 const MIN_DESTACADOS_SEO = 4;
 
 export function cuerpoHome(destacados, frontendUrl) {
-  const senales = `<ul>${SENALES_CONFIANZA_SEO.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`;
-
   const seccionDestacados =
     destacados.length >= MIN_DESTACADOS_SEO
       ? `<section><h2>Hallazgos del día</h2>${listaDeProductos(destacados, frontendUrl)}</section>`
       : "";
 
   return [
-    // El orden espeja el de la home: primero lo que se puede comprar, y el
-    // relato de marca al final. El <h1> es el MISMO string que `Catalogo.jsx`.
-    seccionDestacados,
+    // El orden espeja el DOM de la home (rediseño 13/09/2026): el hero va
+    // después de las campañas y antes de las secciones de productos. En mobile
+    // se ve al pie, pero eso lo hace CSS `order` sin mover el nodo. El <h1> es
+    // el MISMO string que `Catalogo.jsx`.
     `<h1>${escapeHtml(HERO_TITULO)}</h1>`,
     `<p>${escapeHtml(HERO_PARRAFO)}</p>`,
-    senales,
-    `<p><a href="${frontendUrl}/coleccion">Ver productos</a></p>`,
+    `<p><a href="${frontendUrl}/coleccion">${escapeHtml(HERO_CTA)}</a></p>`,
+    seccionDestacados,
   ]
     .filter(Boolean)
     .join("\n");

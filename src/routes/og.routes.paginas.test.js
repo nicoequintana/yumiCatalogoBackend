@@ -59,14 +59,14 @@ describe("GET /og/home", () => {
   it("emite el MISMO <h1> y el mismo copy que la home real, no un resumen (regla de cloaking)", async () => {
     const res = await request(buildApp()).get("/og/home").set("User-Agent", UA_BOT);
 
-    // Mismo texto que `frontend/src/pages/Catalogo.jsx` y
-    // `frontend/src/constants/hero.js` — antes de este fix el cuerpo emitía
-    // `<h1>YIMA</h1>`, un h1 que la persona nunca ve.
-    expect(res.text).toContain("<h1>Descubrí cosas que te hacen la vida más fácil.</h1>");
+    // Mismo texto que `frontend/src/pages/Catalogo.jsx` — antes de este fix el
+    // cuerpo emitía `<h1>YIMA</h1>`, un h1 que la persona nunca ve.
+    expect(res.text).toContain("<h1>Objetos singulares que transforman tu cotidiano.</h1>");
     expect(res.text).toContain(
-      "En YIMA reunimos productos útiles, innovadores y con diseño que simplifican tu rutina",
+      "Una selección táctil y funcional para el bienestar de la casa, la pausa y los rituales de todos los días.",
     );
-    expect(res.text).toContain("Productos seleccionados");
+    // Las señales de confianza salieron del hero (13/09/2026): acá tampoco.
+    expect(res.text).not.toContain("Productos seleccionados");
     // El manifiesto se dejó de montar en la home (Task 19, 05/09/2026): dejarlo
     // acá sería cloaking, así que ya no puede aparecer en este cuerpo.
     expect(res.text).not.toContain("Manifiesto");
