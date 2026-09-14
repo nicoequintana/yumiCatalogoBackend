@@ -468,3 +468,83 @@ describe("permiso de borrado en el CRUD de usuarios", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 });
+
+// H-01: la superficie de gestión de usuarios (alta y edición de OTROS
+// usuarios, o de la propia bandera `puedeEliminar`) queda detrás del MISMO
+// flag que ya protege el borrado. Sin esto, un usuario con `puedeEliminar:
+// false` podía (a) otorgarse el permiso a sí mismo con un PUT, (b) tomar la
+// cuenta de otro admin cambiándole el email/password, y (c) crear un usuario
+// nuevo con `puedeEliminar: true` — las tres, escalada de privilegios.
+describe("H-01: el flag puedeEliminar gatea el alta y la edición de OTROS usuarios", () => {
+  // El token de la suite sigue siendo el del usuario id 1; acá lo dejamos SIN
+  // permiso de borrado para probar las restricciones.
+  function sinPermisoDeBorrado() {
+    authFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: false });
+  }
+
+  it("POST /api/usuarios responde 403 sin permiso, y no crea nada", async () => {
+    sinPermisoDeBorrado();
+
+    const res = await request(buildApp())
+      .post("/api/usuarios")
+      .set("Authorization", authHeader)
+      .send({ email: "nuevo@test.com", password: "clave12345" });
+
+    expect(res.status).toBe(403);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("PUT /api/usuarios/:id sobre OTRO id responde 403 sin permiso, y no actualiza nada (ni siquiera busca al usuario)", async () => {
+    sinPermisoDeBorrado();
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ password: "clave12345678" });
+
+    expect(res.status).toBe(403);
+    expect(updateMock).not.toHaveBeenCalled();
+    // La guarda corre ANTES del lookup del controller: un usuario restringido
+    // no puede usar el 404/200 de este endpoint para sondear qué ids existen.
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("PUT /api/usuarios/:id sobre el PROPIO id con puedeEliminar en el body responde 403 sin permiso", async () => {
+    sinPermisoDeBorrado();
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/1")
+      .set("Authorization", authHeader)
+      .send({ puedeEliminar: true });
+
+    expect(res.status).toBe(403);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("PUT /api/usuarios/:id sobre el PROPIO id sin tocar puedeEliminar (solo password) responde 200 sin el permiso", async () => {
+    sinPermisoDeBorrado();
+    findUniqueMock.mockResolvedValueOnce({ id: 1, email: "admin@yima.test", passwordHash: "hash-viejo" });
+    updateMock.mockResolvedValue({ id: 1, email: "admin@yima.test", createdAt: new Date("2026-01-01") });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/1")
+      .set("Authorization", authHeader)
+      .send({ password: "clave12345678" });
+
+    expect(res.status).toBe(200);
+    expect(updateMock).toHaveBeenCalled();
+  });
+
+  it("PUT /api/usuarios/:id sobre OTRO id responde 200 con permiso (comportamiento existente, sin regresión)", async () => {
+    // authFindUniqueMock por default (beforeEach) ya tiene puedeEliminar: true.
+    findUniqueMock.mockResolvedValueOnce({ id: 2, email: "otro@test.com", passwordHash: "hash" });
+    updateMock.mockResolvedValue({ id: 2, email: "otro@test.com", createdAt: new Date("2026-01-01") });
+
+    const res = await request(buildApp())
+      .put("/api/usuarios/2")
+      .set("Authorization", authHeader)
+      .send({ password: "clave12345678" });
+
+    expect(res.status).toBe(200);
+  });
+});

@@ -42,3 +42,37 @@ export function requierePermisoDeBorrado(req, _res, next) {
 
   next();
 }
+
+/**
+ * Gatea `PUT /usuarios/:id` con el MISMO flag que `requierePermisoDeBorrado`,
+ * pero solo cuando la request pide algo que ese flag tiene que cubrir (ver
+ * H-01, `docs/reglas/seguridad-y-arranque.md` § "Permiso de borrado por
+ * usuario"):
+ *
+ *  - Editar a OTRO usuario (cualquier campo, incluidos email/password) exige
+ *    el permiso. Sin esto, un usuario sin `puedeEliminar` podía tomar la
+ *    cuenta de otro admin con un `PUT` — no hay borrado de entidad de por
+ *    medio, pero el resultado (control total de otra cuenta) es equivalente.
+ *  - Tocar la PROPIA fila para cambiar `puedeEliminar` exige el permiso —
+ *    otorgárselo a uno mismo es la escalada más directa. Cambiar el propio
+ *    email o password NO lo exige: seguir pudiendo actualizar la propia
+ *    credencial es edición normal, no una acción destructiva.
+ *
+ * Reusa `requierePermisoDeBorrado` en vez de repetir el chequeo `=== true`:
+ * un solo lugar sabe qué significa "tener el permiso".
+ */
+export function requierePermisoParaActualizarUsuario(req, res, next) {
+  if (!req.usuario) {
+    return next(httpError(401, "No autorizado."));
+  }
+
+  const idObjetivo = Number(req.params.id);
+  const esPropiaCuenta = req.usuario.id === idObjetivo;
+  const tocaPuedeEliminar = Object.prototype.hasOwnProperty.call(req.body ?? {}, "puedeEliminar");
+
+  if (!esPropiaCuenta || tocaPuedeEliminar) {
+    return requierePermisoDeBorrado(req, res, next);
+  }
+
+  next();
+}
