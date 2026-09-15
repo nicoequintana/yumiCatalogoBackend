@@ -162,6 +162,8 @@ function mapComboDetalle(combo) {
 
   return {
     id: combo.id,
+    // La URL resultante del editor (spec §8.3): el slug lo arma el backend.
+    ruta: rutaCombo(combo),
     nombre: combo.nombre,
     frase: combo.frase,
     porcentaje: combo.porcentaje,
@@ -188,6 +190,8 @@ function mapComboDetalle(combo) {
       precio: item.product.precio.toString(),
       stock: item.product.stock,
       cantidad: item.cantidad,
+      // La miniatura de la fila del editor (spec §8.3.2).
+      foto: item.product.fotos?.[0] ? urlDeFoto(item.product.fotos[0]) : null,
     })),
   };
 }

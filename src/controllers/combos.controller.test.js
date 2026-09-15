@@ -740,3 +740,36 @@ describe("GET /combos/admin/combos — vigencia resuelta", () => {
     expect(res.body[0].campania).toEqual({ id: 4, nombre: "Navidad", estado: "BORRADOR" });
   });
 });
+
+// Spec §8.3: el editor muestra la URL resultante (`ruta`, sin copiar el slug
+// en el frontend) y una miniatura por fila de producto.
+describe("GET /combos/admin/combos/:id — detalle para el editor", () => {
+  it("trae la ruta pública del combo y la primera foto de cada producto", async () => {
+    comboMock.findUnique.mockResolvedValue(
+      fila({
+        items: [
+          {
+            productId: 1,
+            cantidad: 2,
+            product: {
+              id: 1,
+              sku: "LAM-01",
+              nombre: "Lámpara",
+              precio: 10000,
+              stock: 9,
+              fotos: [{ url: "https://cdn.example.com/lampara.jpg", cloudinaryPublicId: "lampara" }],
+            },
+          },
+          { productId: 2, cantidad: 1, product: { id: 2, sku: "MES-01", nombre: "Mesa", precio: 25000, stock: 4, fotos: [] } },
+        ],
+      }),
+    );
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos/1").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.ruta).toBe("/combos/1-kit-living-calido");
+    expect(res.body.items[0].foto).toBe("https://cdn.example.com/lampara.jpg");
+    expect(res.body.items[1].foto).toBeNull();
+  });
+});
