@@ -11,6 +11,10 @@ import {
   alcanzaCombo,
 } from "../lib/combos.js";
 import { PORCENTAJE_MIN, PORCENTAJE_MAX, esPorcentajeValido } from "../lib/precioEfectivo.js";
+import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
+import { contenidoCoincideConMime } from "../lib/magicBytes.js";
+import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
+import { carpetaCampanias } from "./campanias.controller.js";
 
 /**
  * ADMIN → Combos: conjuntos de productos con descuento condicionado a
@@ -267,7 +271,90 @@ export async function eliminar(req, res, next) {
 
     logAudit(req, { accion: "ELIMINAR", entidad: "Combo", entidadId: id, detalle: { nombre: combo.nombre } });
 
+    // Después del delete, mismo criterio que `eliminar` de promociones: la fila
+    // ya no vuelve, así que un fallo del CDN acá no puede revertir nada — se
+    // traga adentro de `limpiarHeroRemoto`.
+    await limpiarHeroRemoto(combo);
+
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Borra el hero anterior en Cloudinary. NO consulta compartidos, mismo
+ * criterio que `limpiarArtePromocionRemoto`: los combos no tienen
+ * `duplicar`, así que dos combos no pueden apuntar al mismo archivo.
+ */
+async function limpiarHeroRemoto(combo) {
+  const publicId = combo?.heroCloudinaryPublicId;
+  if (!publicId) return;
+  try {
+    await eliminarArchivo(publicId, combo.heroCloudinaryResourceType ?? "image");
+  } catch {
+    // Silencio deliberado, mismo criterio que el resto del proyecto: un
+    // archivo huérfano en el CDN es más barato que romper la operación que
+    // ya se guardó en la base.
+  }
+}
+
+/** `PUT /combos/admin/combos/:id/hero` — la imagen principal del combo. */
+export async function guardarHero(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    if (!req.file) throw httpError(400, "No llegó ninguna imagen.");
+
+    if (
+      !ALLOWED_PHOTO_MIMES.includes(req.file.mimetype) ||
+      !contenidoCoincideConMime(req.file.buffer, req.file.mimetype)
+    ) {
+      throw httpError(400, "El contenido de la imagen no corresponde a un archivo JPG, PNG o WEBP válido.");
+    }
+
+    const actual = await buscarOFallar(id);
+    const subida = await subirArchivo(req.file.buffer, "image", carpetaCampanias());
+
+    const combo = await prisma.combo.update({
+      where: { id },
+      data: {
+        heroUrl: subida.url,
+        heroCloudinaryPublicId: subida.cloudinaryPublicId,
+        heroCloudinaryResourceType: subida.cloudinaryResourceType,
+      },
+      include: DETALLE_INCLUDE,
+    });
+
+    await limpiarHeroRemoto(actual);
+
+    logAudit(req, { accion: "ACTUALIZAR_HERO", entidad: "Combo", entidadId: id, detalle: { nombre: combo.nombre } });
+
+    res.json(mapComboDetalle(combo));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `DELETE /combos/admin/combos/:id/hero` — apaga el combo: sin hero, la página abriría con un hueco. */
+export async function quitarHero(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    const actual = await buscarOFallar(id);
+
+    const combo = await prisma.combo.update({
+      where: { id },
+      data: { heroUrl: null, heroCloudinaryPublicId: null, heroCloudinaryResourceType: null, activo: false },
+      // `activo: false` forzado: sin hero la página abriría con un hueco, así
+      // que quitarlo apaga el combo — mismo criterio que exigirlo para
+      // activar (`exigirHeroSiActivo`).
+      include: DETALLE_INCLUDE,
+    });
+
+    await limpiarHeroRemoto(actual);
+
+    logAudit(req, { accion: "QUITAR_HERO", entidad: "Combo", entidadId: id, detalle: { nombre: combo.nombre } });
+
+    res.json(mapComboDetalle(combo));
   } catch (err) {
     next(err);
   }

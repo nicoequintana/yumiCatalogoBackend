@@ -41,6 +41,13 @@ vi.mock("../lib/prisma.js", () => ({
   },
 }));
 
+const subirArchivoMock = vi.fn();
+const eliminarArchivoMock = vi.fn();
+vi.mock("../services/cloudinary.service.js", () => ({
+  subirArchivo: (...args) => subirArchivoMock(...args),
+  eliminarArchivo: (...args) => eliminarArchivoMock(...args),
+}));
+
 const { default: combosRouter } = await import("../routes/combos.routes.js");
 
 function buildApp() {
@@ -276,5 +283,70 @@ describe("DELETE /combos/admin/combos/:id", () => {
       .delete("/api/combos/admin/combos/1")
       .set("Authorization", authHeader);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("PUT /combos/admin/combos/:id/hero", () => {
+  it("sube el hero y borra el anterior", async () => {
+    comboMock.findUnique.mockResolvedValue(fila({ heroCloudinaryPublicId: "combos/viejo" }));
+    subirArchivoMock.mockResolvedValue({
+      url: "https://res.cloudinary.com/x/combos/nuevo.jpg",
+      cloudinaryPublicId: "combos/nuevo",
+      cloudinaryResourceType: "image",
+    });
+    comboMock.update.mockResolvedValue(fila({ heroUrl: "https://res.cloudinary.com/x/combos/nuevo.jpg" }));
+
+    const res = await request(buildApp())
+      .put("/api/combos/admin/combos/1/hero")
+      .set("Authorization", authHeader)
+      .attach("hero", Buffer.from([0xff, 0xd8, 0xff, 0xe0]), "hero.jpg");
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("combos/viejo", "image");
+  });
+
+  it("400 sin archivo", async () => {
+    const res = await request(buildApp())
+      .put("/api/combos/admin/combos/1/hero")
+      .set("Authorization", authHeader);
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("DELETE /combos/admin/combos/:id — limpia el hero remoto", () => {
+  it("borra el combo y después el archivo del hero en Cloudinary", async () => {
+    comboMock.findUnique.mockResolvedValue(fila({ heroCloudinaryPublicId: "campanias/hero-kit", heroCloudinaryResourceType: "image" }));
+    comboMock.delete.mockResolvedValue({});
+
+    const res = await request(buildApp())
+      .delete("/api/combos/admin/combos/1")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(comboMock.delete).toHaveBeenCalledWith({ where: { id: 1 } });
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("campanias/hero-kit", "image");
+  });
+
+  it("un combo sin hero no llama a Cloudinary", async () => {
+    comboMock.findUnique.mockResolvedValue(fila());
+    comboMock.delete.mockResolvedValue({});
+
+    await request(buildApp()).delete("/api/combos/admin/combos/1").set("Authorization", authHeader);
+
+    expect(eliminarArchivoMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /combos/admin/combos/:id/hero", () => {
+  it("quita el hero y borra el archivo remoto", async () => {
+    comboMock.findUnique.mockResolvedValue(fila({ heroCloudinaryPublicId: "combos/viejo" }));
+    comboMock.update.mockResolvedValue(fila({ heroUrl: null }));
+
+    const res = await request(buildApp())
+      .delete("/api/combos/admin/combos/1/hero")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(eliminarArchivoMock).toHaveBeenCalledWith("combos/viejo", "image");
   });
 });
