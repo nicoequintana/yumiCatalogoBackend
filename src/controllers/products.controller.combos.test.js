@@ -82,3 +82,80 @@ describe("DELETE /products/:id — bloqueado si está en un combo", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("GET /products/:id — suma combos", () => {
+  const PRODUCTO = {
+    id: 5,
+    nombre: "Lámpara",
+    sku: "LAM-01",
+    precio: 10000,
+    visibleEnCatalogo: true,
+    stock: 9,
+    fotos: [],
+    caracteristicas: [],
+    listas: [],
+    especificaciones: [],
+    etiqueta: null,
+    categoria: null,
+    categoriaId: null,
+    etiquetaId: null,
+    video: null,
+    createdAt: new Date("2026-09-01T12:00:00Z"),
+  };
+
+  function enCombo(id, nombre) {
+    return {
+      combo: {
+        id,
+        nombre,
+        frase: "Frase.",
+        activo: true,
+        vigencia: "SIEMPRE",
+        porcentaje: 15,
+        heroUrl: `https://x/${id}.jpg`,
+        campanias: [],
+        items: [
+          { productId: 5, cantidad: 2, product: { id: 5, nombre: "Lámpara", precio: 10000, visibleEnCatalogo: true, stock: 9, categoria: null, fotos: [] } },
+        ],
+      },
+    };
+  }
+
+  beforeEach(() => {
+    productMock.findUnique.mockResolvedValue(PRODUCTO);
+    productMock.update.mockResolvedValue(PRODUCTO);
+  });
+
+  it("trae los combos vigentes que incluyen el producto, con la forma pública", async () => {
+    comboItemMock.findMany.mockResolvedValue([enCombo(1, "Kit Living Cálido")]);
+
+    const res = await request(buildApp()).get("/api/products/5");
+
+    expect(res.status).toBe(200);
+    expect(res.body.combos).toEqual([
+      expect.objectContaining({ id: 1, nombre: "Kit Living Cálido", precioSeparado: "20000", precioCombo: "17000", alcanza: 4, disponible: true }),
+    ]);
+  });
+
+  it("pide solo vigentes, más nuevos primero, con tope de 6", async () => {
+    comboItemMock.findMany.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/products/5");
+
+    expect(comboItemMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ productId: 5, combo: expect.objectContaining({ activo: true }) }),
+        orderBy: { combo: { createdAt: "desc" } },
+        take: 6,
+      }),
+    );
+  });
+
+  it("sin combos, `combos` viaja como [] y no como clave ausente", async () => {
+    comboItemMock.findMany.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/products/5");
+
+    expect(res.body.combos).toEqual([]);
+  });
+});

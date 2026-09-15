@@ -35,6 +35,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => productFindUniqueMock(...args),
     },
     foto: { findFirst: (...args) => fotoFindFirstMock(...args) },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));

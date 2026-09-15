@@ -17,6 +17,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => findUniqueMock(...args),
       update: (...args) => updateMock(...args),
     },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));

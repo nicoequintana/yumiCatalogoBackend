@@ -58,6 +58,8 @@ import {
   sanitizarNombreParaCarpeta,
   subirArchivosNuevos,
 } from "../services/productoMedia.service.js";
+import { mapComboPublico, PUBLIC_INCLUDE as COMBO_PUBLIC_INCLUDE } from "./combos.controller.js";
+import { condicionComboVigente } from "../lib/combos.js";
 
 /**
  * Builds the `where` clause for `listar()` from optional query-string
@@ -883,6 +885,25 @@ export async function salud(req, res, next) {
   }
 }
 
+/** Tope de la sección "Llevalo en combo y ahorrá" de la ficha (spec §6.2). */
+const MAX_COMBOS_EN_FICHA = 6;
+
+/**
+ * Los combos vigentes que incluyen este producto, más nuevos primero, tope 6,
+ * con la MISMA forma que `GET /combos`. Exportada para `seo.controller.js`:
+ * el cuerpo del crawler tiene que listar los mismos combos que la ficha.
+ */
+export async function obtenerCombosDelProducto(productId, ahora = new Date()) {
+  const enCombos = await prisma.comboItem.findMany({
+    where: { productId, combo: condicionComboVigente(ahora) },
+    select: { combo: { include: COMBO_PUBLIC_INCLUDE } },
+    orderBy: { combo: { createdAt: "desc" } },
+    take: MAX_COMBOS_EN_FICHA,
+  });
+
+  return enCombos.map((item) => mapComboPublico(item.combo, { ahora }));
+}
+
 export async function obtenerPorId(req, res, next) {
   try {
     const id = Number(req.params.id);
@@ -960,6 +981,7 @@ export async function obtenerPorId(req, res, next) {
     res.json({
       ...mapeado,
       relacionados,
+      combos: await obtenerCombosDelProducto(producto.id),
       jsonLd: [
         jsonLdProducto(producto, { frontendUrl, imagenes, precioEfectivo: mapeado.precioEfectivo }),
         jsonLdBreadcrumb(producto, { frontendUrl }),

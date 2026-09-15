@@ -30,6 +30,7 @@ vi.mock("../lib/prisma.js", () => ({
       count: vi.fn().mockResolvedValue(0),
     },
     eventoTrafico: { create: vi.fn().mockResolvedValue({ id: 1 }) },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));

@@ -26,6 +26,7 @@ vi.mock("../lib/prisma.js", () => ({
       findMany: (...args) => findManyMock(...args),
     },
     eventoTrafico: { create: (...args) => eventoCreateMock(...args) },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({

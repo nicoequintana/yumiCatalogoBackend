@@ -33,6 +33,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: (...args) => updateMock(...args),
       count: (...args) => countMock(...args),
     },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));
