@@ -348,7 +348,7 @@ export async function servirSeoCategoria(req, res, next) {
 function encabezadoCatalogoCombos({ cantidad, porcentajeMaximo }) {
   const datos =
     cantidad > 0
-      ? `<p>Hasta ${porcentajeMaximo}% off · ${cantidad} ${cantidad === 1 ? "combo disponible" : "combos disponibles"}</p>`
+      ? `<p>Hasta ${porcentajeMaximo}% off</p><p>${cantidad} ${cantidad === 1 ? "combo disponible" : "combos disponibles"}</p>`
       : "";
   return (
     "<p>Combos</p><h1>Llevá el set completo y pagá menos</h1>" +
@@ -360,7 +360,7 @@ function encabezadoCatalogoCombos({ cantidad, porcentajeMaximo }) {
 /**
  * `/combos` para crawlers. REGLA DE CLOAKING: espeja
  * `frontend/src/pages/CatalogoCombos.jsx` — el encabezado (eyebrow, `<h1>`,
- * párrafo y la línea "Hasta N% off · N combos disponibles" de `resumenCombos`,
+ * párrafo y los dos datos "Hasta N% off" y "N combos disponibles" de `resumenCombos`,
  * la misma que sirve `GET /combos/resumen`), las cards
  * (`listaTarjetasCombo`) y, sin combos, el MISMO vacío. Misma consulta y
  * mismo orden que `GET /combos` (`listarPublico`).

@@ -414,7 +414,9 @@ describe("GET /og/combos", () => {
     // El mismo encabezado que `CatalogoCombos.jsx`, con los números de `resumenCombos`.
     expect(res.text).toContain("<p>Combos</p><h1>Llevá el set completo y pagá menos</h1>");
     expect(res.text).toContain("<p>Productos elegidos para usarse juntos, con un descuento que solo tenés comprando el combo.</p>");
-    expect(res.text).toContain("<p>Hasta 15% off · 1 combo disponible</p>");
+    // Dos textos separados, como los dos <span> de la página: sin un "·" que la persona no ve.
+    expect(res.text).toContain("<p>Hasta 15% off</p><p>1 combo disponible</p>");
+    expect(res.text).not.toContain("·");
     expect(res.text).toContain('<h3><a href="https://yima.example.com/combos/3-kit-living-calido">Kit Living Cálido</a></h3>');
     const [args] = comboFindManyMock.mock.calls[0];
     expect(args.where.activo).toBe(true);
