@@ -1,4 +1,5 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
+import { agruparLineasOrden } from "./agruparLineasOrden.js";
 import { subtotalDeItem, totalDeItems } from "./dinero.js";
 import { ETIQUETA_ESTADO } from "./estadosOrden.js";
 // El desfase de -3 vive en `lib/horarioArgentino.js` desde que la analytics del
@@ -165,21 +166,37 @@ function unidadesDe(items) {
   return (items ?? []).reduce((total, item) => total + item.cantidad, 0);
 }
 
-/** Detalle de los items en texto plano, una línea por item. */
+/**
+ * Detalle de los items en texto plano, una línea por item — o, para un
+ * combo, una sola línea agrupada con sus productos entre paréntesis (ver
+ * `agruparLineasOrden.js`, spec §3.6).
+ */
 function itemsComoTexto(items) {
-  return items
-    .map(
-      (item) =>
-        `- ${item.nombreProducto} x${item.cantidad} — ${formatearMonto(subtotalDeItem(item))}`,
-    )
+  return agruparLineasOrden(items)
+    .map((linea) => {
+      if (linea.tipo === "PRODUCTO") {
+        return `- ${linea.item.nombreProducto} x${linea.item.cantidad} — ${formatearMonto(subtotalDeItem(linea.item))}`;
+      }
+      const detalle = linea.productos
+        .map((p) => `${p.cantidad > 1 ? p.cantidad + "x " : ""}${p.nombreProducto}`)
+        .join(", ");
+      return `- ${linea.comboNombre} x${linea.comboCantidad} — ${formatearMonto(new Decimal(linea.total))}\n  (${detalle})`;
+    })
     .join("\n");
 }
 
-/** Detalle de los items como filas de una tabla HTML. */
+/**
+ * Detalle de los items como filas de una tabla HTML — un combo entero entra
+ * en UNA fila, con sus productos listados debajo del nombre y sin precio por
+ * producto (spec §3.6: el cliente ve el precio del combo, no el reparto
+ * interno).
+ */
 function itemsComoFilas(items) {
-  return items
-    .map(
-      (item) => `
+  return agruparLineasOrden(items)
+    .map((linea) => {
+      if (linea.tipo === "PRODUCTO") {
+        const item = linea.item;
+        return `
         <tr>
           <td style="padding:14px 12px 14px 0;border-bottom:1px solid ${COLOR_BORDE_SUAVE};color:${COLOR_TEXTO};font-size:15px;line-height:1.4;">
             ${escaparHtml(item.nombreProducto)}
@@ -191,8 +208,26 @@ function itemsComoFilas(items) {
           <td style="padding:14px 0 14px 12px;border-bottom:1px solid ${COLOR_BORDE_SUAVE};color:${COLOR_TEXTO};font-size:15px;text-align:right;white-space:nowrap;">
             ${formatearMonto(subtotalDeItem(item))}
           </td>
-        </tr>`,
-    )
+        </tr>`;
+      }
+
+      const detalle = linea.productos
+        .map((p) => escaparHtml(`${p.cantidad > 1 ? p.cantidad + "× " : ""}${p.nombreProducto}`))
+        .join(" · ");
+      return `
+        <tr>
+          <td style="padding:14px 12px 14px 0;border-bottom:1px solid ${COLOR_BORDE_SUAVE};color:${COLOR_TEXTO};font-size:15px;line-height:1.4;">
+            ${escaparHtml(linea.comboNombre)}
+            <span style="display:block;color:${COLOR_TEXTO_SUAVE};font-size:13px;padding-top:3px;">${detalle}</span>
+          </td>
+          <td style="padding:14px 0;border-bottom:1px solid ${COLOR_BORDE_SUAVE};color:${COLOR_TEXTO_SUAVE};font-size:15px;text-align:center;">
+            ${linea.comboCantidad}
+          </td>
+          <td style="padding:14px 0 14px 12px;border-bottom:1px solid ${COLOR_BORDE_SUAVE};color:${COLOR_TEXTO};font-size:15px;text-align:right;white-space:nowrap;">
+            ${formatearMonto(new Decimal(linea.total))}
+          </td>
+        </tr>`;
+    })
     .join("");
 }
 

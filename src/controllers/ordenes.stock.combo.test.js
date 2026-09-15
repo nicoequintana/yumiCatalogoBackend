@@ -87,8 +87,8 @@ beforeEach(() => {
     estado: "PENDIENTE",
     stockDescontado: false,
     items: [
-      { id: 101, productId: 9, nombreProducto: "Lámpara", cantidad: 1, comboId: null },
-      { id: 102, productId: 9, nombreProducto: "Lámpara", cantidad: 2, comboId: 5, comboNombre: "Kit Living" },
+      { id: 101, productId: 9, nombreProducto: "Lámpara", precioUnitario: "8500", cantidad: 1, comboId: null },
+      { id: 102, productId: 9, nombreProducto: "Lámpara", precioUnitario: "8500", cantidad: 2, comboId: 5, comboNombre: "Kit Living" },
     ],
   };
 });

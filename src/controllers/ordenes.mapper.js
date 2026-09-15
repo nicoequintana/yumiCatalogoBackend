@@ -1,3 +1,4 @@
+import { agruparLineasOrden } from "../lib/agruparLineasOrden.js";
 import { totalDeItems } from "../lib/dinero.js";
 import { etiquetaDeEstado } from "../lib/estadosOrden.js";
 import { urlDeFoto } from "../lib/fotos.js";
@@ -180,13 +181,12 @@ function mapItemOrden(item, { esAdmin = false } = {}) {
 export function mapOrden(orden, { esAdmin = false } = {}) {
   if (!orden) return orden;
   const { cuentaCliente, ...resto } = orden;
+  const itemsMapeados = orden.items?.map((item) => mapItemOrden(item, { esAdmin }));
   return {
     ...resto,
     ...(orden.cliente !== undefined && { cliente: resolverCliente(orden.cliente, cuentaCliente) }),
     ...(orden.estado !== undefined && { estadoEtiqueta: etiquetaDeEstado(orden.estado) }),
-    ...(orden.items !== undefined && {
-      items: orden.items.map((item) => mapItemOrden(item, { esAdmin })),
-    }),
+    ...(itemsMapeados !== undefined && { items: itemsMapeados, lineas: agruparLineasOrden(itemsMapeados) }),
   };
 }
 
@@ -235,12 +235,11 @@ export function mapOrdenListado(orden) {
 export function mapOrdenCuenta(orden) {
   if (!orden) return orden;
   const { cliente: _cliente, cuentaCliente: _cuentaCliente, clienteId: _clienteId, cuentaClienteId: _cuentaClienteId, items, ...resto } = orden;
+  const itemsMapeados = items?.map((item) => mapItemOrden(item, { esAdmin: false }));
   return {
     ...resto,
     ...(orden.estado !== undefined && { estadoEtiqueta: etiquetaDeEstado(orden.estado) }),
-    ...(items !== undefined && {
-      items: items.map((item) => mapItemOrden(item, { esAdmin: false })),
-    }),
+    ...(itemsMapeados !== undefined && { items: itemsMapeados, lineas: agruparLineasOrden(itemsMapeados) }),
     // `Orden` no tiene columna `total`: sale de los ítems, igual que en
     // `mapOrdenCuentaListado`. Sin join, `null` y no `Decimal(0)` — un "$ 0"
     // inventado es justo el bug que tuvo el detalle de "Mis pedidos".

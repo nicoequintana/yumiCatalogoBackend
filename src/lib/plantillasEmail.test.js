@@ -118,6 +118,25 @@ describe("plantillaOrdenCreadaCliente", () => {
     expect(html).not.toContain("display:grid");
     expect(html).not.toContain("<link");
   });
+
+  it("agrupa las filas de un combo en una línea, con sus productos listados", () => {
+    const orden = {
+      ...ORDEN,
+      items: [
+        { nombreProducto: "Lámpara", precioUnitario: "8500", cantidad: 2, comboId: 3, comboNombre: "Kit Living", comboCantidad: 1 },
+        { nombreProducto: "Mesa", precioUnitario: "21250", cantidad: 1, comboId: 3, comboNombre: "Kit Living", comboCantidad: 1 },
+      ],
+    };
+    const { html, texto } = plantillaOrdenCreadaCliente(orden);
+
+    expect((html.match(/Kit Living/g) ?? []).length).toBe(1); // UNA línea, no una por producto
+    expect(html).toContain("2× Lámpara · Mesa");
+    expect(html).toContain("$38.250");
+    expect(texto).toContain("- Kit Living x1 — $38.250");
+    expect(texto).toContain("(2x Lámpara, Mesa)");
+    // Sin precio por producto dentro del combo (spec §3.6).
+    expect(html).not.toContain("$8.500");
+  });
 });
 
 describe("plantillaOrdenCreadaAdmin", () => {

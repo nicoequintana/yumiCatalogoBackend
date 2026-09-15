@@ -1299,6 +1299,7 @@ describe("obtenerPorId()", () => {
       ...ORDEN_CREADA_MOCK,
       estadoEtiqueta: "Pendiente",
       items: ORDEN_CREADA_MOCK.items.map((item) => ({ costoUnitario: null, ...item })),
+      lineas: ORDEN_CREADA_MOCK.items.map((item) => ({ tipo: "PRODUCTO", item: { costoUnitario: null, ...item } })),
     });
   });
 

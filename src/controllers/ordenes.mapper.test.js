@@ -337,6 +337,46 @@ describe("mapOrdenListado — mismo contacto resuelto que mapOrden", () => {
   });
 });
 
+describe("mapOrden — lineas agrupadas", () => {
+  it("suma `lineas` agrupando las filas de combo", () => {
+    const orden = {
+      id: 1,
+      estado: "PENDIENTE",
+      cliente: { nombre: "Ana" },
+      items: [
+        { productId: 1, nombreProducto: "Silla", precioUnitario: "20000", cantidad: 1, comboId: null, comboNombre: null, comboCantidad: null },
+        { productId: 2, nombreProducto: "Lámpara", precioUnitario: "8500", cantidad: 2, comboId: 3, comboNombre: "Kit Living", comboCantidad: 1 },
+      ],
+    };
+    const mapeada = mapOrden(orden, { esAdmin: true });
+    expect(mapeada.lineas).toEqual([
+      { tipo: "PRODUCTO", item: expect.objectContaining({ nombreProducto: "Silla", costoUnitario: null }) },
+      {
+        tipo: "COMBO",
+        comboId: 3,
+        comboNombre: "Kit Living",
+        comboCantidad: 1,
+        productos: [{ nombreProducto: "Lámpara", cantidad: 2 }],
+        total: "17000",
+      },
+    ]);
+  });
+});
+
+describe("mapOrdenCuenta — lineas agrupadas, sin costo", () => {
+  it("suma `lineas` y la línea suelta NO trae costoUnitario", () => {
+    const mapeada = mapOrdenCuenta({
+      id: 1,
+      estado: "PENDIENTE",
+      items: [
+        { productId: 1, nombreProducto: "Silla", precioUnitario: "20000", costoUnitario: "9000", cantidad: 1, comboId: null, comboNombre: null, comboCantidad: null },
+      ],
+    });
+    expect(mapeada.lineas).toHaveLength(1);
+    expect(mapeada.lineas[0].item).not.toHaveProperty("costoUnitario");
+  });
+});
+
 describe("contactoDeOrden — decisión 8, preferencia de OBJETO completo", () => {
   it("con cuentaCliente, usa la cuenta ENTERA (no mezcla campos)", () => {
     const orden = {
