@@ -1,8 +1,9 @@
 import { Router } from "express";
 import multer from "multer";
 import * as combosController from "../controllers/combos.controller.js";
-import { requireAuth } from "../middlewares/auth.middleware.js";
+import { requireAuth, authOpcional } from "../middlewares/auth.middleware.js";
 import { requierePermisoDeBorrado } from "../middlewares/permisoBorrado.middleware.js";
+import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 import { ALLOWED_PHOTO_MIMES, MAX_FOTO_BYTES } from "../lib/limitesMedios.js";
 
 const router = Router();
@@ -32,5 +33,16 @@ router.delete("/admin/combos/:id", requireAuth, requierePermisoDeBorrado, combos
 // El hero: mismo patrón multipart que el arte de promociones.
 router.put("/admin/combos/:id/hero", requireAuth, uploadHero.single("hero"), combosController.guardarHero);
 router.delete("/admin/combos/:id/hero", requireAuth, combosController.quitarHero);
+
+// Mismo limitador de lectura pública que `campanias.routes.js`/`anuncios.routes.js`.
+const limitadorLecturaPublica = crearLimitadorDeVelocidad({
+  windowMs: 5 * 60 * 1000,
+  max: 600,
+  message: "Demasiadas solicitudes seguidas. Probá de nuevo en unos minutos.",
+});
+
+router.get("/", limitadorLecturaPublica, authOpcional, combosController.listarPublico);
+router.get("/opciones", limitadorLecturaPublica, authOpcional, combosController.opciones);
+router.get("/:idSlug", limitadorLecturaPublica, authOpcional, combosController.obtenerPublico);
 
 export default router;

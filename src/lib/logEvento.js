@@ -43,18 +43,22 @@ export function headersDeEvento(req) {
  * referrer y user-agent, deliberadamente nada que identifique a la persona.
  *
  * @param {object} params
- * @param {string} params.tipo VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO
+ * @param {string} params.tipo VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO | VISTA_COMBO
  * @param {number} [params.productId] producto al que aplica el evento (los eventos de sitio, como ORDEN_CREADA, van sin él)
+ * @param {number} [params.comboId] combo al que aplica (solo VISTA_COMBO)
  * @param {string} [params.referrer] header `Referer` del request que originó el evento
  * @param {string} [params.userAgent] header `User-Agent` del request que originó el evento
  * @returns {Promise<void>}
  */
-export async function logEvento({ tipo, productId, referrer, userAgent }) {
+export async function logEvento({ tipo, productId, comboId, referrer, userAgent }) {
   try {
     await prisma.eventoTrafico.create({
       data: {
         tipo,
         productId: productId ?? null,
+        // Solo si vino: los eventos de producto siguen escribiendo exactamente
+        // las mismas columnas que antes (y sus tests lo fijan).
+        ...(comboId !== undefined && comboId !== null ? { comboId } : {}),
         // Recortados al largo de su columna (NVarChar(1000)): un header más
         // largo produce un P2000 y este insert best-effort perdería el evento
         // en silencio. Ver `lib/limitesTexto.js`.

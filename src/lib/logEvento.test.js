@@ -114,6 +114,16 @@ describe("logEvento", () => {
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it("persiste comboId cuando viene (VISTA_COMBO), sin productId", async () => {
+    createMock.mockResolvedValue({ id: 9 });
+
+    await logEvento({ tipo: "VISTA_COMBO", comboId: 3 });
+
+    expect(createMock).toHaveBeenCalledWith({
+      data: { tipo: "VISTA_COMBO", productId: null, comboId: 3, referrer: null, userAgent: null },
+    });
+  });
 });
 
 describe("headersDeEvento", () => {

@@ -5,11 +5,15 @@ import { exigirIdsExistentes } from "../lib/idsExistentes.js";
 import {
   LARGO_MAX_FRASE,
   LARGO_MAX_NOMBRE,
+  MIN_UNIDADES,
+  MAX_UNIDADES,
   VIGENCIAS,
   validarComposicion,
   cuentasCombo,
   alcanzaCombo,
   disponibilidadCombo,
+  condicionComboVigente,
+  esComboVigente,
 } from "../lib/combos.js";
 import {
   PORCENTAJE_MIN,
@@ -23,6 +27,10 @@ import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { carpetaCampanias } from "./campanias.controller.js";
+import { rutaProducto, parsearIdDeRuta } from "../lib/slug.js";
+import { urlDeFoto } from "../lib/fotos.js";
+import { logEvento, headersDeEvento } from "../lib/logEvento.js";
+import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 
 /**
  * ADMIN → Combos: conjuntos de productos con descuento condicionado a
@@ -115,6 +123,7 @@ function mapComboListado(combo) {
     porcentaje: combo.porcentaje,
     activo: combo.activo,
     vigencia: combo.vigencia,
+    vigente: esComboVigente(combo),
     heroUrl: combo.heroUrl,
     unidades: cuentas.unidades,
     precioSeparado: cuentas.precioSeparado.toString(),
@@ -425,4 +434,129 @@ export async function cotizar(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+/** Provisoria: la Task 16 la reemplaza por `rutaCombo` de `lib/slug.js`. */
+function rutaComboProvisoria(combo) {
+  return `/combos/${combo.id}`;
+}
+
+export const PUBLIC_INCLUDE = {
+  items: {
+    include: {
+      product: {
+        select: {
+          id: true,
+          nombre: true,
+          precio: true,
+          visibleEnCatalogo: true,
+          stock: true,
+          categoria: { select: { nombre: true } },
+          fotos: { select: { url: true, cloudinaryPublicId: true }, orderBy: { orden: "asc" }, take: 1 },
+        },
+      },
+    },
+    orderBy: { id: "asc" },
+  },
+  campanias: { select: { campania: { select: { estado: true, desde: true, hasta: true } } } },
+};
+
+/**
+ * El combo en la forma PÚBLICA (spec §6.2). `incluirVigente` suma el flag para
+ * `?ids=`. Nunca emite costo: `PUBLIC_INCLUDE` ni siquiera lo selecciona.
+ */
+export function mapComboPublico(combo, { incluirVigente = false, ahora = new Date() } = {}) {
+  const cuentas = cuentasCombo(itemsParaCuentas(combo), combo.porcentaje);
+  const { alcanza, disponible, quedanPocos } = disponibilidadCombo(
+    combo.items.map((item) => ({
+      stock: item.product.stock,
+      cantidad: item.cantidad,
+      visibleEnCatalogo: item.product.visibleEnCatalogo,
+    })),
+  );
+
+  return {
+    id: combo.id,
+    ruta: rutaComboProvisoria(combo),
+    nombre: combo.nombre,
+    frase: combo.frase,
+    porcentaje: combo.porcentaje,
+    precioSeparado: cuentas.precioSeparado.toString(),
+    precioCombo: cuentas.precioCombo.toString(),
+    ahorro: cuentas.ahorro.toString(),
+    unidades: cuentas.unidades,
+    alcanza,
+    disponible,
+    quedanPocos,
+    heroUrl: combo.heroUrl,
+    items: combo.items.map((item) => ({
+      productId: item.productId,
+      nombre: item.product.nombre,
+      cantidad: item.cantidad,
+      precioLista: item.product.precio.toString(),
+      foto: item.product.fotos[0] ? urlDeFoto(item.product.fotos[0]) : null,
+      ruta: rutaProducto(item.product),
+      categoria: item.product.categoria?.nombre ?? null,
+    })),
+    ...(incluirVigente ? { vigente: esComboVigente(combo, ahora) } : {}),
+  };
+}
+
+/** `GET /combos` — vigentes, más nuevos primero; con `?ids=` también los no vigentes, con `vigente`. */
+export async function listarPublico(req, res, next) {
+  try {
+    const ahora = new Date();
+
+    if (typeof req.query.ids === "string" && req.query.ids.trim() !== "") {
+      const ids = [...new Set(req.query.ids.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+      if (ids.length === 0) return res.json([]);
+
+      const combos = await prisma.combo.findMany({ where: { id: { in: ids } }, include: PUBLIC_INCLUDE });
+      return res.json(combos.map((combo) => mapComboPublico(combo, { incluirVigente: true, ahora })));
+    }
+
+    const combos = await prisma.combo.findMany({
+      where: condicionComboVigente(ahora),
+      include: PUBLIC_INCLUDE,
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(combos.map((combo) => mapComboPublico(combo, { ahora })));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `GET /combos/:idSlug` — 404 si no existe o no está vigente; agotado es 200. */
+export async function obtenerPublico(req, res, next) {
+  try {
+    const id = parsearIdDeRuta(req.params.idSlug);
+    if (id === null) throw httpError(404, "Combo no encontrado.");
+
+    const ahora = new Date();
+    const combo = await prisma.combo.findUnique({ where: { id }, include: PUBLIC_INCLUDE });
+    if (!combo || !esComboVigente(combo, ahora)) throw httpError(404, "Combo no encontrado.");
+
+    // La vista sale del TOKEN (`esRequestDeAdmin`), nunca de `?admin=1`.
+    if (!esRequestDeAdmin(req)) {
+      await prisma.combo.update({ where: { id }, data: { vistas: { increment: 1 } } });
+      logEvento({ tipo: "VISTA_COMBO", comboId: id, ...headersDeEvento(req) });
+    }
+
+    res.json(mapComboPublico(combo, { ahora }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** `GET /combos/opciones` — PÚBLICA. El formulario del panel lee de acá, sin copia manual. */
+export function opciones(_req, res) {
+  res.json({
+    minUnidades: MIN_UNIDADES,
+    maxUnidades: MAX_UNIDADES,
+    porcentajeMin: PORCENTAJE_MIN,
+    porcentajeMax: PORCENTAJE_MAX,
+    largoMaxNombre: LARGO_MAX_NOMBRE,
+    largoMaxFrase: LARGO_MAX_FRASE,
+    vigencias: VIGENCIAS,
+  });
 }

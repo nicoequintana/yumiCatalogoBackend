@@ -19,6 +19,7 @@ const productMock = { findMany: vi.fn() };
 const promocionItemMock = { findMany: vi.fn() };
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
+const eventoTraficoCreateMock = vi.fn();
 const transactionMock = vi.fn((fn) => fn({ comboItem: comboItemMock, combo: comboMock }));
 
 vi.mock("../lib/prisma.js", () => ({
@@ -39,6 +40,7 @@ vi.mock("../lib/prisma.js", () => ({
     promocionItem: { findMany: (...a) => promocionItemMock.findMany(...a) },
     usuario: { findUnique: (...a) => usuarioFindUniqueMock(...a) },
     auditLog: { create: (...a) => auditCreateMock(...a) },
+    eventoTrafico: { create: (...a) => eventoTraficoCreateMock(...a) },
     $transaction: (...a) => transactionMock(...a),
   },
 }));
@@ -427,5 +429,221 @@ describe("POST /combos/admin/combos/cotizar", () => {
   it("401 sin token", async () => {
     const res = await request(buildApp()).post("/api/combos/admin/combos/cotizar").send(BODY);
     expect(res.status).toBe(401);
+  });
+});
+
+function comboPublico(extra = {}) {
+  return {
+    id: 1,
+    nombre: "Kit Living Cálido",
+    frase: "Luz suave y una mesa de roble.",
+    porcentaje: 15,
+    activo: true,
+    vigencia: "SIEMPRE",
+    heroUrl: "https://res.cloudinary.com/x/combos/1.jpg",
+    vistas: 0,
+    campanias: [],
+    items: [
+      {
+        productId: 1,
+        cantidad: 2,
+        product: {
+          id: 1,
+          nombre: "Lámpara",
+          precio: 10000,
+          visibleEnCatalogo: true,
+          stock: 9,
+          categoria: { nombre: "Iluminación" },
+          fotos: [{ url: "https://res.cloudinary.com/x/lampara.jpg", cloudinaryPublicId: null }],
+        },
+      },
+      {
+        productId: 2,
+        cantidad: 1,
+        product: {
+          id: 2,
+          nombre: "Mesa",
+          precio: 25000,
+          visibleEnCatalogo: true,
+          stock: 4,
+          categoria: { nombre: "Living" },
+          fotos: [{ url: "https://res.cloudinary.com/x/mesa.jpg", cloudinaryPublicId: null }],
+        },
+      },
+    ],
+    ...extra,
+  };
+}
+
+function conProducto(indice, cambios) {
+  const base = comboPublico();
+  return base.items.map((item, i) => (i === indice ? { ...item, product: { ...item.product, ...cambios } } : item));
+}
+
+describe("GET /combos", () => {
+  it("lista los vigentes con la cuenta ya resuelta y sin costo", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico()]);
+
+    const res = await request(buildApp()).get("/api/combos");
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toEqual({
+      id: 1,
+      ruta: "/combos/1",
+      nombre: "Kit Living Cálido",
+      frase: "Luz suave y una mesa de roble.",
+      porcentaje: 15,
+      precioSeparado: "45000",
+      precioCombo: "38250",
+      ahorro: "6750",
+      unidades: 3,
+      alcanza: 4,
+      disponible: true,
+      quedanPocos: false,
+      heroUrl: "https://res.cloudinary.com/x/combos/1.jpg",
+      items: [
+        { productId: 1, nombre: "Lámpara", cantidad: 2, precioLista: "10000", foto: "https://res.cloudinary.com/x/lampara.jpg", ruta: "/producto/1-lampara", categoria: "Iluminación" },
+        { productId: 2, nombre: "Mesa", cantidad: 1, precioLista: "25000", foto: "https://res.cloudinary.com/x/mesa.jpg", ruta: "/producto/2-mesa", categoria: "Living" },
+      ],
+    });
+    expect(comboMock.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ activo: true }), orderBy: { createdAt: "desc" } }),
+    );
+  });
+
+  it("un combo con un producto oculto sale disponible: false, no se oculta", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico({ items: conProducto(1, { visibleEnCatalogo: false }) })]);
+
+    const res = await request(buildApp()).get("/api/combos");
+
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].disponible).toBe(false);
+  });
+
+  it("con alcanza <= 3 marca quedanPocos", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico({ items: conProducto(1, { stock: 2 }) })]);
+
+    const res = await request(buildApp()).get("/api/combos");
+
+    expect(res.body[0]).toMatchObject({ alcanza: 2, disponible: true, quedanPocos: true });
+  });
+});
+
+describe("GET /combos?ids=", () => {
+  it("incluye los NO vigentes con vigente: false, sin filtrar por vigencia en la consulta", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico({ activo: false })]);
+
+    const res = await request(buildApp()).get("/api/combos?ids=1");
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].vigente).toBe(false);
+    expect(comboMock.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: [1] } } }));
+  });
+
+  it("un vigente trae vigente: true", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico()]);
+
+    const res = await request(buildApp()).get("/api/combos?ids=1");
+
+    expect(res.body[0].vigente).toBe(true);
+  });
+
+  it("ids sin ningún entero válido responde [] sin consultar", async () => {
+    const res = await request(buildApp()).get("/api/combos?ids=abc,-1");
+
+    expect(res.body).toEqual([]);
+    expect(comboMock.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /combos/:idSlug", () => {
+  it("404 si no existe", async () => {
+    comboMock.findUnique.mockResolvedValue(null);
+    const res = await request(buildApp()).get("/api/combos/999-inexistente");
+    expect(res.status).toBe(404);
+  });
+
+  it("404 si no está vigente", async () => {
+    comboMock.findUnique.mockResolvedValue(comboPublico({ activo: false }));
+    const res = await request(buildApp()).get("/api/combos/1-kit-living-calido");
+    expect(res.status).toBe(404);
+    expect(comboMock.update).not.toHaveBeenCalled();
+  });
+
+  it("200 con disponible: false si no hay stock, sin ocultarlo", async () => {
+    comboMock.findUnique.mockResolvedValue(comboPublico({ items: conProducto(0, { stock: 0 }) }));
+    comboMock.update.mockResolvedValue({});
+
+    const res = await request(buildApp()).get("/api/combos/1-kit-living-calido");
+
+    expect(res.status).toBe(200);
+    expect(res.body.disponible).toBe(false);
+  });
+
+  it("suma una vista y emite VISTA_COMBO sin token", async () => {
+    comboMock.findUnique.mockResolvedValue(comboPublico());
+    comboMock.update.mockResolvedValue({});
+    eventoTraficoCreateMock.mockResolvedValue({});
+
+    await request(buildApp()).get("/api/combos/1-kit-living-calido");
+
+    expect(comboMock.update).toHaveBeenCalledWith({ where: { id: 1 }, data: { vistas: { increment: 1 } } });
+    expect(eventoTraficoCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ tipo: "VISTA_COMBO", comboId: 1 }) }),
+    );
+  });
+
+  it("NO suma vista con token admin", async () => {
+    comboMock.findUnique.mockResolvedValue(comboPublico());
+
+    const res = await request(buildApp()).get("/api/combos/1-kit-living-calido").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(comboMock.update).not.toHaveBeenCalled();
+    expect(eventoTraficoCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /combos/opciones", () => {
+  it("es pública y expone los límites", async () => {
+    const res = await request(buildApp()).get("/api/combos/opciones");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      minUnidades: 2,
+      maxUnidades: 10,
+      porcentajeMin: 5,
+      porcentajeMax: 50,
+      largoMaxNombre: 120,
+      largoMaxFrase: 140,
+      vigencias: ["SIEMPRE", "CAMPANIA"],
+    });
+  });
+});
+
+describe("GET /combos/admin/combos — vigencia resuelta", () => {
+  it("emite vigente: true para un combo activo SIEMPRE y false para uno apagado", async () => {
+    comboMock.findMany.mockResolvedValue([
+      fila({ id: 1, activo: true }),
+      fila({ id: 2, activo: false }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos").set("Authorization", authHeader);
+
+    expect(res.body.map((c) => c.vigente)).toEqual([true, false]);
+  });
+
+  it("CAMPANIA con una campaña BORRADOR no está vigente aunque esté asociada", async () => {
+    comboMock.findMany.mockResolvedValue([
+      fila({
+        activo: true,
+        vigencia: "CAMPANIA",
+        campanias: [{ campania: { id: 4, nombre: "Navidad", estado: "BORRADOR", desde: new Date("2026-01-01T03:00:00Z"), hasta: new Date("2027-01-01T03:00:00Z") } }],
+      }),
+    ]);
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos").set("Authorization", authHeader);
+
+    expect(res.body[0].vigente).toBe(false);
+    expect(res.body[0].campania).toEqual({ id: 4, nombre: "Navidad", estado: "BORRADOR" });
   });
 });
