@@ -10,6 +10,7 @@ import {
   alcanzaCombo,
   disponibilidadCombo,
   validarComposicion,
+  repartirPrecioCombo,
 } from "./combos.js";
 
 describe("cuentasCombo", () => {
@@ -146,5 +147,104 @@ describe("constantes", () => {
     expect(LARGO_MAX_NOMBRE).toBe(120);
     expect(UMBRAL_QUEDAN_POCOS).toBe(3);
     expect(VIGENCIAS).toEqual(["SIEMPRE", "CAMPANIA"]);
+  });
+});
+
+describe("repartirPrecioCombo", () => {
+  function sumaFilas(filas) {
+    return filas.reduce((total, fila) => total + Number(fila.precioUnitario) * fila.cantidad, 0);
+  }
+
+  it("r = 0: reparte sin ajuste cuando la división es exacta", () => {
+    // separado 15000; T = 13500; u = 4500 c/u; 4500*2 + 4500 = 13500.
+    const filas = repartirPrecioCombo(
+      [
+        { productId: 1, precio: 5000, cantidad: 2 },
+        { productId: 2, precio: 5000, cantidad: 1 },
+      ],
+      10,
+    );
+    expect(filas).toEqual([
+      { productId: 1, precioUnitario: "4500", precioListaUnitario: "5000", cantidad: 2 },
+      { productId: 2, precioUnitario: "4500", precioListaUnitario: "5000", cantidad: 1 },
+    ]);
+  });
+
+  it("r = -1, ejemplo de la spec: lámpara $10.003 x2 + mesa $25.000 al 15 % ajusta la mesa", () => {
+    // separado 45006; T = 38255,1 -> 38255. u_lámpara = 8502,55 -> 8503;
+    // u_mesa = 21250. 8503*2 + 21250 = 38256 -> r = -1.
+    const filas = repartirPrecioCombo(
+      [
+        { productId: 1, precio: 10003, cantidad: 2 },
+        { productId: 2, precio: 25000, cantidad: 1 },
+      ],
+      15,
+    );
+    expect(filas).toEqual([
+      { productId: 1, precioUnitario: "8503", precioListaUnitario: "10003", cantidad: 2 },
+      { productId: 2, precioUnitario: "21249", precioListaUnitario: "25000", cantidad: 1 },
+    ]);
+    expect(sumaFilas(filas)).toBe(38255);
+  });
+
+  it("con varios items de cantidad 1, el ajuste va al de MAYOR precio de lista", () => {
+    // separado 4006; T = 3405,1 -> 3405. u = 853 + 1700 + 853 = 3406 -> r = -1.
+    const filas = repartirPrecioCombo(
+      [
+        { productId: 1, precio: 1003, cantidad: 1 },
+        { productId: 2, precio: 2000, cantidad: 1 },
+        { productId: 3, precio: 1003, cantidad: 1 },
+      ],
+      15,
+    );
+    expect(filas.map((f) => f.precioUnitario)).toEqual(["853", "1699", "853"]);
+    expect(sumaFilas(filas)).toBe(3405);
+  });
+
+  it("r = +1 sin ningún item de cantidad 1: parte en dos filas el de mayor precio de lista", () => {
+    // separado 39995; T = 34795,65 -> 34796. u_1 = 8699,13 -> 8699;
+    // u_2 = 4349,13 -> 4349. 8699*3 + 4349*2 = 34795 -> r = +1.
+    const filas = repartirPrecioCombo(
+      [
+        { productId: 1, precio: 9999, cantidad: 3 },
+        { productId: 2, precio: 4999, cantidad: 2 },
+      ],
+      13,
+    );
+    expect(filas).toEqual([
+      { productId: 1, precioUnitario: "8700", precioListaUnitario: "9999", cantidad: 1 },
+      { productId: 1, precioUnitario: "8699", precioListaUnitario: "9999", cantidad: 2 },
+      { productId: 2, precioUnitario: "4349", precioListaUnitario: "4999", cantidad: 2 },
+    ]);
+    expect(sumaFilas(filas)).toBe(34796);
+  });
+
+  it("comboCantidad multiplica la cantidad de cada fila, sin tocar el precio unitario", () => {
+    const filas = repartirPrecioCombo(
+      [
+        { productId: 1, precio: 10003, cantidad: 2 },
+        { productId: 2, precio: 25000, cantidad: 1 },
+      ],
+      15,
+      3,
+    );
+    expect(filas).toEqual([
+      { productId: 1, precioUnitario: "8503", precioListaUnitario: "10003", cantidad: 6 },
+      { productId: 2, precioUnitario: "21249", precioListaUnitario: "25000", cantidad: 3 },
+    ]);
+    expect(sumaFilas(filas)).toBe(38255 * 3);
+  });
+
+  it("rechaza en vez de dejar una fila en $0: dos productos de $1 al 50 %", () => {
+    // separado 2; T = 1. u = 0,5 -> 1 c/u = 2 -> r = -1; ninguna fila soporta 1 - 1 > 0.
+    expect(() =>
+      repartirPrecioCombo(
+        [
+          { productId: 1, precio: 1, cantidad: 1 },
+          { productId: 2, precio: 1, cantidad: 1 },
+        ],
+        50,
+      ),
+    ).toThrow("No se puede repartir el precio del combo sin dejar una fila en $0.");
   });
 });

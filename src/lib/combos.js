@@ -124,3 +124,70 @@ export function validarComposicion(items) {
 
   return errores;
 }
+
+/**
+ * Reparte el precio del combo entre sus productos, en filas listas para
+ * `ItemOrden` (por UNA unidad de combo, después escaladas por `comboCantidad`).
+ *
+ * Algoritmo (spec §5):
+ *   1. `T` = `cuentasCombo(...).precioCombo` — la MISMA cuenta que se publica.
+ *   2. Cada item: `u_i = redondearAEntero(precio_i × (100 − p) / 100)`.
+ *   3. `r = T − Σ u_i × cantidad_i` (normalmente −1, 0 o +1 peso).
+ *   4. Si `r ≠ 0`: se ajusta el item de mayor precio de lista con `cantidad = 1`;
+ *      si no hay ninguno, el de mayor precio de lista se PARTE en dos filas —
+ *      una unidad a `u_i + r`, `cantidad_i − 1` unidades a `u_i`.
+ *   5. Cada fila se multiplica por `comboCantidad`.
+ *
+ * Solo son candidatas las filas que quedan > 0 después del ajuste; sin
+ * ninguna, se rechaza: una fila en $0 no se persiste nunca.
+ *
+ * @param {Array<{productId: number, precio: Decimal|string|number, cantidad: number}>} items
+ * @param {number} porcentaje
+ * @param {number} [comboCantidad]
+ */
+export function repartirPrecioCombo(items, porcentaje, comboCantidad = 1) {
+  const { precioCombo: total } = cuentasCombo(items, porcentaje);
+
+  const filas = items.map((item) => ({
+    productId: item.productId,
+    precioListaUnitario: aDecimal(item.precio),
+    precioUnitario: redondearAEntero(aDecimal(item.precio).mul(100 - porcentaje).div(100)),
+    cantidad: item.cantidad,
+  }));
+
+  const sumaFilas = filas.reduce(
+    (acumulado, fila) => acumulado.plus(fila.precioUnitario.mul(fila.cantidad)),
+    new Decimal(0),
+  );
+  const resto = total.minus(sumaFilas);
+
+  if (!resto.isZero()) {
+    const mayorPrecio = (a, b) => (b.precioListaUnitario.gt(a.precioListaUnitario) ? b : a);
+    const soportaAjuste = (fila) => fila.precioUnitario.plus(resto).gt(0);
+    const candidatas = filas.filter(soportaAjuste);
+    if (candidatas.length === 0) {
+      throw new Error("No se puede repartir el precio del combo sin dejar una fila en $0.");
+    }
+
+    const unitarias = candidatas.filter((fila) => fila.cantidad === 1);
+    if (unitarias.length > 0) {
+      const elegida = unitarias.reduce(mayorPrecio);
+      elegida.precioUnitario = elegida.precioUnitario.plus(resto);
+    } else {
+      const elegida = candidatas.reduce(mayorPrecio);
+      filas.splice(
+        filas.indexOf(elegida),
+        1,
+        { ...elegida, cantidad: 1, precioUnitario: elegida.precioUnitario.plus(resto) },
+        { ...elegida, cantidad: elegida.cantidad - 1 },
+      );
+    }
+  }
+
+  return filas.map((fila) => ({
+    productId: fila.productId,
+    precioUnitario: fila.precioUnitario.toString(),
+    precioListaUnitario: fila.precioListaUnitario.toString(),
+    cantidad: fila.cantidad * comboCantidad,
+  }));
+}
