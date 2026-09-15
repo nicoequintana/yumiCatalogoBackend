@@ -1541,15 +1541,11 @@ export async function eliminar(req, res, next) {
     // (spec de combos, §4.2). `ComboItem.product` es `onDelete: NoAction`, así
     // que sin este chequeo el `delete` de más abajo explotaría igual, pero
     // como un 500 opaco.
-    const enCombos = await prisma.comboItem.findMany({
-      where: { productId: id },
-      select: { combo: { select: { id: true, nombre: true } } },
-    });
-    if (enCombos.length > 0) {
-      const nombres = enCombos.map((item) => item.combo.nombre).join(", ");
+    const nombresCombos = await nombresDeCombosDelProducto(id);
+    if (nombresCombos) {
       throw httpError(
         409,
-        `Este producto está en el combo "${nombres}". Quitalo del combo antes de borrarlo.`,
+        `Este producto está en el combo "${nombresCombos}". Quitalo del combo antes de borrarlo.`,
       );
     }
 
@@ -1567,6 +1563,27 @@ export async function eliminar(req, res, next) {
 }
 
 /**
+ * Los nombres de los combos que usan este producto, unidos con ", ", o
+ * `null` si no está en ninguno.
+ *
+ * ÚNICO punto que consulta `ComboItem` para decidir si un borrado se
+ * bloquea: lo llaman `eliminar` (corta con 409, antes de tocar la fila) y
+ * `eliminarMasivo` (lo informa como rechazado y sigue con el resto). Antes de
+ * que existiera, `eliminarMasivo` no tenía ningún chequeo — con
+ * `ComboItem.product` en `onDelete: NoAction`, un producto en combo mitad de
+ * lote explotaba como P2003 (500) después de haber borrado ya los ids
+ * anteriores, sin ninguna forma de saber cuáles.
+ */
+async function nombresDeCombosDelProducto(id) {
+  const enCombos = await prisma.comboItem.findMany({
+    where: { productId: id },
+    select: { combo: { select: { id: true, nombre: true } } },
+  });
+  if (enCombos.length === 0) return null;
+  return enCombos.map((item) => item.combo.nombre).join(", ");
+}
+
+/**
  * Borra la fila del producto, la audita y barre su media remota.
  *
  * Extraído para que el borrado individual (`eliminar`) y el masivo
@@ -1575,9 +1592,10 @@ export async function eliminar(req, res, next) {
  * carpeta, la auditoría antes que la limpieza— y tenerla dos veces sería
  * tenerla mal en una de las dos en cuanto alguien toque una.
  *
- * NO valida el historial de ventas: cada llamador decide qué hacer con un
- * producto vendido (el individual tira 400, el masivo lo informa como
- * rechazado y sigue con el resto).
+ * NO valida el historial de ventas ni los combos: cada llamador decide qué
+ * hacer con un producto que no se puede borrar (el individual tira 409/400,
+ * el masivo lo informa como rechazado y sigue con el resto) — esta función
+ * corre DESPUÉS de que esa decisión ya se tomó.
  */
 async function borrarFilaYLimpiarMedia(producto, req) {
   // DB delete first (design D6/ordering): a dangling DB row is worse than an orphaned Drive file.
@@ -1746,6 +1764,20 @@ export async function eliminarMasivo(req, res, next) {
       // las líneas y la orden conserva sus snapshots. `rechazados` sobrevive
       // porque un id inexistente sigue siendo un caso real que hay que
       // informar en vez de tragarse.
+      //
+      // El combo SÍ rechaza, con el mismo chequeo que el borrado individual
+      // (`nombresDeCombosDelProducto`): sin él, un producto en combo mitad de
+      // lote explota como P2003 después de haber borrado ya los anteriores.
+      const nombresCombos = await nombresDeCombosDelProducto(id);
+      if (nombresCombos) {
+        rechazados.push({
+          id,
+          nombre: producto.nombre,
+          motivo: `Está en el combo "${nombresCombos}". Quitalo del combo antes de borrarlo.`,
+        });
+        continue;
+      }
+
       await borrarFilaYLimpiarMedia(producto, req);
       eliminados.push(id);
     }

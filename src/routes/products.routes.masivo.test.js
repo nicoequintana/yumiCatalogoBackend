@@ -32,6 +32,7 @@ const deleteMock = vi.fn();
 const itemOrdenCountMock = vi.fn();
 const auditCreateMock = vi.fn();
 const etiquetaFindUniqueMock = vi.fn();
+const comboItemFindManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
@@ -44,6 +45,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: vi.fn(),
     },
     etiqueta: { findUnique: (...args) => etiquetaFindUniqueMock(...args) },
+    comboItem: { findMany: (...args) => comboItemFindManyMock(...args) },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
     usuario: { findUnique: vi.fn().mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true }) },
@@ -89,6 +91,8 @@ beforeEach(() => {
   itemOrdenCountMock.mockResolvedValue(0);
   auditCreateMock.mockResolvedValue({ id: 1 });
   deleteMock.mockResolvedValue({});
+  // Sin combos por defecto: un test que necesite bloquear uno lo dice explícito.
+  comboItemFindManyMock.mockResolvedValue([]);
 });
 
 describe("PATCH /api/products/visibilidad-masiva", () => {
@@ -319,6 +323,38 @@ describe("POST /api/products/eliminar-masivo", () => {
     expect(res.body.eliminados).toEqual([1, 2]);
     expect(res.body.rechazados).toEqual([]);
     expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("informa como rechazado un producto en combo, sin cortar el lote ni limpiarle la media", async () => {
+    findManyMock.mockResolvedValue([
+      { id: 1, nombre: "Termo", sku: "YIMA-TERMO-1111", fotos: [], video: null },
+      { id: 2, nombre: "Velador", sku: "YIMA-VEL-2222", fotos: [{ id: 20, cloudinaryPublicId: "c20" }], video: null },
+    ]);
+    // Solo el id 2 está en un combo.
+    comboItemFindManyMock.mockImplementation(({ where }) =>
+      Promise.resolve(
+        where.productId === 2 ? [{ combo: { id: 3, nombre: "Kit Living Cálido" } }] : [],
+      ),
+    );
+
+    const res = await conAuth(request(buildApp()).post("/api/products/eliminar-masivo")).send({
+      ids: [1, 2],
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.eliminados).toEqual([1]);
+    expect(res.body.rechazados).toEqual([
+      {
+        id: 2,
+        nombre: "Velador",
+        motivo: 'Está en el combo "Kit Living Cálido". Quitalo del combo antes de borrarlo.',
+      },
+    ]);
+    // El rechazado no se borra ni se le limpia la media: solo el id 1 pasa
+    // por `borrarFilaYLimpiarMedia`.
+    expect(deleteMock).toHaveBeenCalledTimes(1);
+    expect(deleteMock).toHaveBeenCalledWith({ where: { id: 1 } });
+    expect(limpiarMediaRemotaMock).not.toHaveBeenCalled();
   });
 
   it("informa como rechazado un id que no existe, sin cortar el lote", async () => {
