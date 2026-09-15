@@ -135,6 +135,50 @@ describe("validarComposicion", () => {
     expect(errores).toEqual(["Cada producto necesita una cantidad entera de al menos 1 unidad."]);
   });
 
+  it("rechaza un productId no numérico", () => {
+    const errores = validarComposicion([
+      { productId: "abc", cantidad: 1 },
+      { productId: 2, cantidad: 1 },
+    ]);
+    expect(errores).toEqual(["Cada producto necesita un `productId` válido."]);
+  });
+
+  it("rechaza un productId fraccionario", () => {
+    const errores = validarComposicion([
+      { productId: 1.5, cantidad: 1 },
+      { productId: 2, cantidad: 1 },
+    ]);
+    expect(errores).toEqual(["Cada producto necesita un `productId` válido."]);
+  });
+
+  it("rechaza un productId cero o negativo", () => {
+    expect(
+      validarComposicion([
+        { productId: 0, cantidad: 1 },
+        { productId: 2, cantidad: 1 },
+      ]),
+    ).toEqual(["Cada producto necesita un `productId` válido."]);
+    expect(
+      validarComposicion([
+        { productId: -1, cantidad: 1 },
+        { productId: 2, cantidad: 1 },
+      ]),
+    ).toEqual(["Cada producto necesita un `productId` válido."]);
+  });
+
+  it("rechaza un productId ausente", () => {
+    const errores = validarComposicion([{ cantidad: 1 }, { productId: 2, cantidad: 1 }]);
+    expect(errores).toEqual(["Cada producto necesita un `productId` válido."]);
+  });
+
+  it("rechaza un productId fuera del rango entero seguro (mismo gotcha que 1e21 en `?campania=`)", () => {
+    const errores = validarComposicion([
+      { productId: 1e21, cantidad: 1 },
+      { productId: 2, cantidad: 1 },
+    ]);
+    expect(errores).toEqual(["Cada producto necesita un `productId` válido."]);
+  });
+
   it("rechaza algo que no es un array", () => {
     expect(validarComposicion(null)).toEqual(["Enviá la lista de productos del combo."]);
   });

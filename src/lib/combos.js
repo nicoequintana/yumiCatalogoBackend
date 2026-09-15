@@ -1,6 +1,7 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { redondearAEntero } from "./precios.js";
 import { claveDiaArgentino, inicioDelDiaArgentino } from "./horarioArgentino.js";
+import { esEnteroSeguro } from "./enteroSeguro.js";
 
 /**
  * Combos: conjuntos de productos con un descuento que se aplica SOLO si se
@@ -100,6 +101,17 @@ export function validarComposicion(items) {
   if (!Array.isArray(items)) return ["Enviá la lista de productos del combo."];
 
   const errores = [];
+
+  // `esEnteroSeguro` (no `Number.isInteger`) por el mismo gotcha que
+  // `?campania=`/`?categoria=`: un `productId: 1e21` es "entero" para
+  // `Number.isInteger` pero revienta a Prisma con "Unable to fit value
+  // 1e+21 into a 64-bit signed integer" — un 500 en vez de este 400. Un
+  // `productId` no numérico, fraccionario, cero, negativo o ausente
+  // también se rechaza acá, ANTES de llegar a `exigirIdsExistentes`/Prisma.
+  const idsValidos = items.every((item) => esEnteroSeguro(item?.productId) && item.productId > 0);
+  if (!idsValidos) {
+    errores.push("Cada producto necesita un `productId` válido.");
+  }
 
   const cantidadesValidas = items.every(
     (item) => Number.isInteger(item?.cantidad) && item.cantidad >= 1,

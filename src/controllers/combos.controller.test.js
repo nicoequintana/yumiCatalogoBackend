@@ -163,6 +163,21 @@ describe("POST /combos/admin/combos", () => {
       });
     expect(res.status).toBe(400);
   });
+
+  it("400 con un productId inválido, sin llegar a Prisma", async () => {
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos")
+      .set("Authorization", authHeader)
+      .send({
+        nombre: "Kit",
+        frase: "Frase.",
+        porcentaje: 15,
+        items: [{ productId: "abc", cantidad: 1 }, { productId: 2, cantidad: 1 }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Cada producto necesita un `productId` válido.");
+    expect(productMock.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe("PUT /combos/admin/combos/:id", () => {
