@@ -111,6 +111,14 @@ describe("GET /og/coleccion", () => {
     expect(res.text).toContain("Set de cuchillos");
     expect(res.text).toContain("/producto/1-set-de-cuchillos");
   });
+
+  // Mismo texto que `Migas` en `Coleccion.jsx`: en /coleccion plano
+  // "Productos" es la página actual, sin nivel de categoría.
+  it("lleva las migas Inicio › Productos, como la página real", async () => {
+    const res = await request(buildApp()).get("/og/coleccion").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain("<p>Inicio › Productos</p>");
+  });
 });
 
 describe("GET /og/categoria/:slug", () => {
@@ -152,6 +160,16 @@ describe("GET /og/categoria/:slug", () => {
 
     const [args] = productFindManyMock.mock.calls[0];
     expect(args.where).toMatchObject({ visibleEnCatalogo: true, categoriaId: 3 });
+  });
+
+  // Mismo texto que `Migas` en `Coleccion.jsx`: acá la categoría es la
+  // página actual, con "Productos" como nivel intermedio.
+  it("lleva las migas Inicio › Productos › {categoría}, como la página real", async () => {
+    categoriaFindManyMock.mockResolvedValue([{ id: 3, nombre: "Cocina y hogar" }]);
+
+    const res = await request(buildApp()).get("/og/categoria/cocina-y-hogar").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain("<p>Inicio › Productos › Cocina y hogar</p>");
   });
 });
 

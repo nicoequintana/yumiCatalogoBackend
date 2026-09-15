@@ -102,13 +102,20 @@ describe("jsonLdProducto", () => {
 });
 
 describe("jsonLdBreadcrumb", () => {
-  it("arma Inicio > Colección > Categoría > Producto", () => {
+  // El nivel 2 se llama "Productos" y no "Colección": tiene que coincidir con
+  // el texto visible de `Migas` en `ProductoDetalle.jsx` — un breadcrumb
+  // estructurado que dice otra cosa que el visible es la misma familia de
+  // problema que el cloaking del precio.
+  it("arma Inicio > Productos > Categoría > Producto", () => {
     const resultado = jsonLdBreadcrumb(productoDePrueba(), { frontendUrl });
 
     expect(resultado["@type"]).toBe("BreadcrumbList");
     expect(resultado.itemListElement).toHaveLength(4);
     expect(resultado.itemListElement[0]).toEqual({
       "@type": "ListItem", position: 1, name: "Inicio", item: "https://yima.example.com/",
+    });
+    expect(resultado.itemListElement[1]).toEqual({
+      "@type": "ListItem", position: 2, name: "Productos", item: "https://yima.example.com/coleccion",
     });
     expect(resultado.itemListElement[2].name).toBe("Cocina");
     expect(resultado.itemListElement[2].item).toBe("https://yima.example.com/coleccion/categoria/cocina");

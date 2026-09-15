@@ -87,13 +87,20 @@ describe("cuerpoProducto — el precio que ve el crawler", () => {
  * tocar un título de la ficha, este archivo es el que avisa.
  */
 describe("cuerpoProducto — la regla de cloaking sobre el texto", () => {
-  it("NO le sirve al bot la categoría, que la ficha no muestra", () => {
-    // `FichaProducto.jsx` no renderiza la categoría en ningún lado: no hay
-    // migas de pan ni línea de categoría. Emitirla acá es contenido exclusivo
-    // para el crawler, que es la definición de cloaking.
+  it("las migas repiten la categoría, ahora que ProductoDetalle.jsx las muestra", () => {
+    // Desde que `ProductoDetalle.jsx` renderiza `<Migas>` (Inicio › Productos
+    // › Categoría › Producto), la categoría SÍ es contenido visible de la
+    // página — omitirla acá sería quedarse corto contra la regla de cloaking
+    // en la dirección contraria (servirle al bot MENOS que lo que ve una
+    // persona). Nunca lleva el prefijo "Categoría:", que no existe en pantalla.
     const html = cuerpoProducto(producto({ categoria: { nombre: "Cocina" } }));
+    expect(html).toContain("Inicio › Productos › Cocina › Termo mate");
     expect(html).not.toContain("Categoría:");
-    expect(html).not.toContain("Cocina");
+  });
+
+  it("sin categoría, las migas van Inicio › Productos › {producto}", () => {
+    const html = cuerpoProducto(producto({ categoria: null }));
+    expect(html).toContain("Inicio › Productos › Termo mate");
   });
 
   it("emite el NOMBRE de la etiqueta, pelado y sin prefijo", () => {

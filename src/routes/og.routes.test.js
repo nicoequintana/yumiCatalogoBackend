@@ -329,6 +329,15 @@ describe("GET /og/combo/:idSlug", () => {
     expect(comboFindUniqueMock.mock.calls[0][0].where).toEqual({ id: 3 });
   });
 
+  // Mismo texto que `Migas` en `PaginaCombo.jsx`: "Inicio › Combos › {nombre}".
+  it("lleva las migas Inicio › Combos › {nombre}, como la página real", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto());
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain("<p>Inicio › Combos › Kit Living Cálido</p>");
+  });
+
   it("sin hero, og:image cae al PNG por defecto", async () => {
     comboFindUniqueMock.mockResolvedValue(comboCompleto({ heroUrl: null }));
 
@@ -422,6 +431,16 @@ describe("GET /og/combos", () => {
     expect(args.where.activo).toBe(true);
     expect(args.where.OR[0]).toEqual({ vigencia: "SIEMPRE" });
     expect(args.orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  // Mismo texto que `Migas` en `CatalogoCombos.jsx`: "Inicio › Combos", con
+  // combos o sin ellos — la miga no depende de si hay contenido.
+  it("lleva las migas Inicio › Combos, como la página real", async () => {
+    comboFindManyMock.mockResolvedValueOnce([comboCompleto()]);
+
+    const res = await request(buildApp()).get("/og/combos").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain("<p>Inicio › Combos</p>");
   });
 
   it("bot sin combos: el mismo vacío que CatalogoCombos.jsx", async () => {

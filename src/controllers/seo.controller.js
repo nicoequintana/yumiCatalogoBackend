@@ -25,6 +25,17 @@ import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 const DESCRIPCION_MAX_LENGTH = 160;
 const SITE_NAME = "YIMA";
 
+/**
+ * Migas de pan, mismo texto y mismo orden que el `<nav>` de `Migas` que pinta
+ * cada página pública ("Inicio › Productos › {categoría}", "Inicio ›
+ * Combos › {nombre}", etc.) — regla de cloaking aplicada a la navegación
+ * visible, no solo al contenido comercial. `niveles` ya viene resuelto por el
+ * llamador (sin construir rutas acá).
+ */
+function migas(niveles) {
+  return `<p>${niveles.map(escapeHtml).join(" › ")}</p>`;
+}
+
 function urls() {
   return {
     frontendUrl: urlFrontend(),
@@ -284,6 +295,11 @@ async function servirListado(res, { categoria }) {
 
   const canonical = `${frontendUrl}${ruta}`;
 
+  // Mismo texto que `Migas` en `Coleccion.jsx`: sin categoría de ruta,
+  // "Productos" es la página actual; con ella, "Productos" enlaza y la
+  // categoría pasa a ser la actual.
+  const itemsMigas = categoria ? ["Inicio", "Productos", categoria.nombre] : ["Inicio", "Productos"];
+
   const html = renderHtmlSeo({
     titulo,
     descripcion,
@@ -297,7 +313,7 @@ async function servirListado(res, { categoria }) {
         frontendUrl,
       }),
     ],
-    cuerpo: `<h1>${escapeHtml(categoria ? categoria.nombre : "Todos los productos")}</h1>${listaDeProductos(productos, frontendUrl)}`,
+    cuerpo: `${migas(itemsMigas)}<h1>${escapeHtml(categoria ? categoria.nombre : "Todos los productos")}</h1>${listaDeProductos(productos, frontendUrl)}`,
   });
 
   res.status(200).type("html").send(html);
@@ -390,7 +406,9 @@ export async function servirSeoCombos(req, res, next) {
       descripcion: "Conjuntos de productos con un descuento que se aplica solo si los llevás juntos.",
       canonical: `${frontendUrl}/combos`,
       imagen: `${frontendUrl}/og-default.png`,
-      cuerpo: `${encabezadoCatalogoCombos(resumenCombos(combos))}${contenido}`,
+      // Mismo texto que `Migas` en `CatalogoCombos.jsx`: "Inicio › Combos",
+      // con o sin combos vigentes — la miga no depende del contenido.
+      cuerpo: `${migas(["Inicio", "Combos"])}${encabezadoCatalogoCombos(resumenCombos(combos))}${contenido}`,
     });
     res.status(200).type("html").send(html);
   } catch (err) {
@@ -432,7 +450,8 @@ export async function servirSeoCombo(req, res, next) {
       canonical: `${frontendUrl}${combo.ruta}`,
       // El hero es un mapa de bits de Cloudinary; sin hero, el PNG por defecto.
       imagen: combo.heroUrl ?? `${frontendUrl}/og-default.png`,
-      cuerpo: cuerpoCombo(combo),
+      // Mismo texto que `Migas` en `PaginaCombo.jsx`: "Inicio › Combos › {nombre}".
+      cuerpo: `${migas(["Inicio", "Combos", combo.nombre])}${cuerpoCombo(combo)}`,
     });
     res.status(200).type("html").send(html);
   } catch (err) {

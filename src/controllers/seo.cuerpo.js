@@ -1,6 +1,7 @@
 import { escapeHtml } from "../lib/htmlSeo.js";
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { formatearMonto } from "../lib/plantillasEmail.js";
+import { rutaCategoria } from "../lib/slug.js";
 
 /**
  * El cuerpo HTML de la ficha de producto para crawlers.
@@ -53,6 +54,24 @@ function parrafo(texto) {
   return texto ? `<p>${escapeHtml(texto)}</p>` : "";
 }
 
+/**
+ * Migas de pan del producto — mismo texto y mismo orden que `Migas` en
+ * `ProductoDetalle.jsx`: "Inicio", "Productos", la categoría (si tiene una
+ * cuyo nombre deje slug — mismo guard que `rutaCategoria`) y el nombre del
+ * producto. SINCRONIZACIÓN MANUAL nueva: antes la ficha no mostraba
+ * categoría en ningún lado y emitirla acá era contenido EXCLUSIVO del bot;
+ * desde que la página muestra las migas, omitirla sería quedarse corto en la
+ * dirección contraria de la misma regla de cloaking.
+ */
+function migasProducto(producto) {
+  const niveles = ["Inicio", "Productos"];
+  if (producto.categoria?.nombre && rutaCategoria(producto.categoria)) {
+    niveles.push(producto.categoria.nombre);
+  }
+  niveles.push(producto.nombre);
+  return `<p>${niveles.map(escapeHtml).join(" › ")}</p>`;
+}
+
 function lista(items) {
   if (!items || items.length === 0) return "";
   return `<ul>${items.map((i) => `<li>${escapeHtml(i.texto)}</li>`).join("")}</ul>`;
@@ -81,6 +100,13 @@ function aDecimal(valor) {
  */
 export function cuerpoProducto(producto, { descuento = null } = {}) {
   const partes = [
+    // Migas de pan (`ProductoDetalle.jsx` → `Migas`), desde el 15/09/2026:
+    // "Inicio › Productos › {categoría} › {producto}". Hasta esa fecha la
+    // categoría NO iba acá —la ficha no mostraba migas ni línea de
+    // categoría, así que emitirla era contenido EXCLUSIVO del bot— pero
+    // ahora es texto visible de la página, y omitirlo sería quedarse corto
+    // en la dirección contraria de la misma regla de cloaking.
+    migasProducto(producto),
     `<h1>${escapeHtml(producto.nombre)}</h1>`,
     // La etiqueta PELADA: la ficha la muestra con `<Badge>`, que pinta el texto
     // solo. El prefijo "Etiqueta: " no existe en la página. Desde que
@@ -88,11 +114,6 @@ export function cuerpoProducto(producto, { descuento = null } = {}) {
     // NOMBRE — el color no es contenido y no viaja al HTML de crawler.
     producto.etiqueta ? `<p>${escapeHtml(producto.etiqueta.nombre)}</p>` : "",
     parrafo(producto.fraseComercial),
-    // ⚠️ NO va la categoría. La ficha no la muestra en ningún lado —no hay
-    // migas de pan ni línea de categoría—, así que emitirla acá era contenido
-    // EXCLUSIVO del bot: la definición de cloaking. Se sirvió así hasta el
-    // 06/09/2026. La señal de categoría le llega a Google igual, por el
-    // `jsonLdBreadcrumb` del `<head>`, que no es contenido visible.
 
     // `formatearMonto` (`lib/plantillasEmail.js`) — la misma casa de la
     // aritmética con `Decimal` que usan los mails de órdenes — para que el

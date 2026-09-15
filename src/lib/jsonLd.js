@@ -96,7 +96,11 @@ export function jsonLdProducto(producto, { frontendUrl, imagenes, precioEfectivo
 export function jsonLdBreadcrumb(producto, { frontendUrl }) {
   const niveles = [
     { name: "Inicio", item: absoluta(frontendUrl, "/") },
-    { name: "Colección", item: absoluta(frontendUrl, "/coleccion") },
+    // "Productos", no "Colección": tiene que coincidir con el texto visible
+    // de `Migas` en `ProductoDetalle.jsx` — un breadcrumb JSON-LD que dice
+    // otra cosa que el visible es la misma familia de problema que el
+    // cloaking del precio.
+    { name: "Productos", item: absoluta(frontendUrl, "/coleccion") },
   ];
 
   if (producto.categoria?.nombre) {
