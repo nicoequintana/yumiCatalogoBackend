@@ -227,3 +227,26 @@ export function condicionComboVigente(ahora = new Date()) {
     ],
   };
 }
+
+/**
+ * Evalúa en JS puro si un combo YA LEÍDO está vigente ahora — la contraparte
+ * evaluable de `condicionComboVigente` (que arma un `where` de Prisma). Hace
+ * falta para `GET /combos?ids=`, que trae combos por id sin filtrar por
+ * vigencia (a propósito: el carrito necesita saber si un combo agregado antes
+ * dejó de estar vigente) y necesita decidir el flag `vigente` sobre cada uno.
+ *
+ * @param {{activo: boolean, vigencia: string, campanias: Array<{campania: {estado: string, desde: Date, hasta: Date}}>}} combo
+ * @param {Date} [ahora]
+ */
+export function esComboVigente(combo, ahora = new Date()) {
+  if (!combo.activo) return false;
+  if (combo.vigencia === "SIEMPRE") return true;
+
+  const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+  return (combo.campanias ?? []).some(
+    (c) =>
+      c.campania.estado === "HABILITADA" &&
+      c.campania.desde <= ahora &&
+      c.campania.hasta >= medianocheDeHoy,
+  );
+}

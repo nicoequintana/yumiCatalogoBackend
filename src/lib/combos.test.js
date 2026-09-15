@@ -12,6 +12,7 @@ import {
   validarComposicion,
   repartirPrecioCombo,
   condicionComboVigente,
+  esComboVigente,
 } from "./combos.js";
 
 describe("cuentasCombo", () => {
@@ -324,5 +325,72 @@ describe("condicionComboVigente", () => {
     const diaSiguiente = condicionComboVigente(new Date("2026-09-15T15:00:00.000Z"));
     const medianocheDelDiaSiguiente = diaSiguiente.OR[1].campanias.some.campania.hasta.gte;
     expect(medianocheDelDiaSiguiente.getTime()).toBeGreaterThan(hasta.getTime());
+  });
+});
+
+describe("esComboVigente", () => {
+  const ahora = new Date("2026-09-14T15:00:00.000Z");
+
+  it("false si activo es false, aunque vigencia sea SIEMPRE", () => {
+    expect(esComboVigente({ activo: false, vigencia: "SIEMPRE", campanias: [] }, ahora)).toBe(false);
+  });
+
+  it("true si activo y vigencia SIEMPRE", () => {
+    expect(esComboVigente({ activo: true, vigencia: "SIEMPRE", campanias: [] }, ahora)).toBe(true);
+  });
+
+  it("CAMPANIA sin ninguna campaña asociada no está vigente", () => {
+    expect(esComboVigente({ activo: true, vigencia: "CAMPANIA", campanias: [] }, ahora)).toBe(false);
+  });
+
+  it("CAMPANIA con una campaña HABILITADA y en fecha está vigente", () => {
+    const combo = {
+      activo: true,
+      vigencia: "CAMPANIA",
+      campanias: [
+        {
+          campania: {
+            estado: "HABILITADA",
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-30T03:00:00.000Z"),
+          },
+        },
+      ],
+    };
+    expect(esComboVigente(combo, ahora)).toBe(true);
+  });
+
+  it("CAMPANIA con la campaña fuera de fecha no está vigente", () => {
+    const combo = {
+      activo: true,
+      vigencia: "CAMPANIA",
+      campanias: [
+        {
+          campania: {
+            estado: "HABILITADA",
+            desde: new Date("2026-01-01T03:00:00.000Z"),
+            hasta: new Date("2026-01-31T03:00:00.000Z"),
+          },
+        },
+      ],
+    };
+    expect(esComboVigente(combo, ahora)).toBe(false);
+  });
+
+  it("CAMPANIA con la campaña BORRADOR (no HABILITADA) no está vigente", () => {
+    const combo = {
+      activo: true,
+      vigencia: "CAMPANIA",
+      campanias: [
+        {
+          campania: {
+            estado: "BORRADOR",
+            desde: new Date("2026-09-01T03:00:00.000Z"),
+            hasta: new Date("2026-09-30T03:00:00.000Z"),
+          },
+        },
+      ],
+    };
+    expect(esComboVigente(combo, ahora)).toBe(false);
   });
 });
