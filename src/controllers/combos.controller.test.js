@@ -490,7 +490,7 @@ describe("GET /combos", () => {
     expect(res.status).toBe(200);
     expect(res.body[0]).toEqual({
       id: 1,
-      ruta: "/combos/1",
+      ruta: "/combos/1-kit-living-calido",
       nombre: "Kit Living Cálido",
       frase: "Luz suave y una mesa de roble.",
       porcentaje: 15,
@@ -638,6 +638,16 @@ describe("GET /combos/opciones", () => {
       largoMaxFrase: 140,
       vigencias: ["SIEMPRE", "CAMPANIA"],
     });
+  });
+});
+
+describe("GET /combos/admin/combos — ruta pública", () => {
+  it("cada fila del listado trae la ruta pública del combo", async () => {
+    comboMock.findMany.mockResolvedValue([fila()]);
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos").set("Authorization", authHeader);
+
+    expect(res.body[0].ruta).toBe("/combos/1-kit-living-calido");
   });
 });
 

@@ -57,6 +57,12 @@ export function rutaProducto(producto) {
   return slug ? `/producto/${producto.id}-${slug}` : `/producto/${producto.id}`;
 }
 
+/** Mismo patrón que `rutaProducto`: id + slug del nombre, id pelado si no hay slug. */
+export function rutaCombo(combo) {
+  const slug = slugify(combo.nombre);
+  return slug ? `/combos/${combo.id}-${slug}` : `/combos/${combo.id}`;
+}
+
 /**
  * A diferencia de `rutaProducto`, esta ruta NO lleva el `id` como prefijo
  * (`/coleccion/categoria/:slugCategoria`, sin componente numérico) — así que

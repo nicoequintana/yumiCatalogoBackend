@@ -27,7 +27,7 @@ import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { carpetaCampanias } from "./campanias.controller.js";
-import { rutaProducto, parsearIdDeRuta } from "../lib/slug.js";
+import { rutaProducto, parsearIdDeRuta, rutaCombo } from "../lib/slug.js";
 import { urlDeFoto } from "../lib/fotos.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
@@ -119,6 +119,7 @@ function mapComboListado(combo) {
 
   return {
     id: combo.id,
+    ruta: rutaCombo(combo),
     nombre: combo.nombre,
     frase: combo.frase,
     porcentaje: combo.porcentaje,
@@ -437,11 +438,6 @@ export async function cotizar(req, res, next) {
   }
 }
 
-/** Provisoria: la Task 16 la reemplaza por `rutaCombo` de `lib/slug.js`. */
-function rutaComboProvisoria(combo) {
-  return `/combos/${combo.id}`;
-}
-
 export const PUBLIC_INCLUDE = {
   items: {
     include: {
@@ -478,7 +474,7 @@ export function mapComboPublico(combo, { incluirVigente = false, ahora = new Dat
 
   return {
     id: combo.id,
-    ruta: rutaComboProvisoria(combo),
+    ruta: rutaCombo(combo),
     nombre: combo.nombre,
     frase: combo.frase,
     porcentaje: combo.porcentaje,

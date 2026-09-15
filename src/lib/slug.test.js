@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slugify, parsearIdDeRuta, rutaProducto, rutaCategoria } from "./slug.js";
+import { slugify, parsearIdDeRuta, rutaProducto, rutaCategoria, rutaCombo } from "./slug.js";
 
 describe("slugify", () => {
   it("pasa a minúsculas y reemplaza espacios por guiones", () => {
@@ -106,5 +106,15 @@ describe("rutaCategoria", () => {
     expect(rutaCategoria({ id: 5, nombre: "!!!" })).toBe(null);
     expect(rutaCategoria({ id: 6, nombre: "" })).toBe(null);
     expect(rutaCategoria({ id: 7 })).toBe(null);
+  });
+});
+
+describe("rutaCombo", () => {
+  it("arma /combos/:id-:slug", () => {
+    expect(rutaCombo({ id: 3, nombre: "Kit Living Cálido" })).toBe("/combos/3-kit-living-calido");
+  });
+
+  it("sin slug posible, cae al id pelado", () => {
+    expect(rutaCombo({ id: 3, nombre: "!!!" })).toBe("/combos/3");
   });
 });
