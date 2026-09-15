@@ -72,6 +72,8 @@ model Product {
   /// En qué vitrinas de campaña aparece. NO implica descuento: un producto
   /// puede estar en la vitrina de Navidad a precio de lista.
   campanias          CampaniaProducto[]
+  /// En qué combos participa, con su cantidad propia en cada uno.
+  itemsCombo         ComboItem[]
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -288,6 +290,9 @@ model Campania {
   /// Las promociones que esta campaña aplica mientras está activa. Apagar la
   /// campaña las apaga a todas de una.
   promociones CampaniaPromocion[]
+
+  /// Los combos programados por esta campaña (vigencia `CAMPANIA`).
+  combos CampaniaCombo[]
 
   /// La VITRINA: qué productos muestra la campaña. Es una lista explícita y
   /// SEPARADA de las promociones porque son dos preguntas distintas —"qué
@@ -539,6 +544,73 @@ model CampaniaProducto {
   @@index([productId])
 }
 
+/// Combo: un conjunto de productos con un descuento que se aplica SOLO si se
+/// compra el conjunto entero. El precio se deriva SIEMPRE de los precios de
+/// LISTA de sus productos (`lib/combos.js`); las promociones de los productos
+/// NO se tienen en cuenta.
+model Combo {
+  id         Int    @id @default(autoincrement())
+  nombre     String @db.NVarChar(120)
+  /// Comercial, obligatoria. La card muestra 2 líneas; la página, completa.
+  frase      String @db.NVarChar(140)
+  /// Entero 5-50, mismo rango que las promociones (`PORCENTAJE_MIN`/`MAX` de
+  /// `lib/precioEfectivo.js`).
+  porcentaje Int
+
+  /// Nace apagado: activar exige hero cargado (sin él la página abre con un
+  /// hueco).
+  activo   Boolean @default(false)
+  /// SIEMPRE | CAMPANIA — lista ejecutable en `lib/combos.js` (`VIGENCIAS`).
+  vigencia String  @default("SIEMPRE") @db.VarChar(20)
+
+  /// Hero: trío de Cloudinary, mismo patrón que `Promocion.bannerArte*`.
+  heroUrl                    String?
+  heroCloudinaryPublicId     String?
+  heroCloudinaryResourceType String?
+
+  /// Contador de vistas del detalle público, como `Product.vistas`.
+  vistas Int @default(0)
+
+  items     ComboItem[]
+  campanias CampaniaCombo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([activo, vigencia, createdAt])
+}
+
+/// Un producto dentro de un combo, con SU cantidad. Un mismo producto aparece
+/// una sola vez por combo: dos lámparas son una fila con `cantidad = 2`.
+model ComboItem {
+  id        Int     @id @default(autoincrement())
+  comboId   Int
+  combo     Combo   @relation(fields: [comboId], references: [id], onDelete: Cascade)
+  productId Int
+  /// `NoAction`, igual que `Product.etiqueta`: borrar un producto que está en
+  /// un combo se BLOQUEA (409) desde el controller, ANTES de que la FK
+  /// explote con un P2003 que el error handler traduciría a un 500 opaco.
+  product   Product @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cantidad  Int
+
+  @@unique([comboId, productId])
+  @@index([productId])
+}
+
+/// Combo DENTRO de una campaña: vigencia `CAMPANIA`, la campaña define cuándo.
+/// Misma forma que `CampaniaPromocion`.
+model CampaniaCombo {
+  campaniaId Int
+  campania   Campania @relation(fields: [campaniaId], references: [id], onDelete: Cascade)
+  comboId    Int
+  combo      Combo    @relation(fields: [comboId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@id([campaniaId, comboId])
+  @@index([comboId])
+}
+
 model Usuario {
   id            Int      @id @default(autoincrement())
   email         String   @unique
@@ -579,7 +651,7 @@ model Usuario {
 
 model EventoTrafico {
   id        Int      @id @default(autoincrement())
-  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO | IMPRESION_COMERCIAL | CLICK_COMERCIAL
+  tipo      String   @db.VarChar(30) // valores: VISTA_PRODUCTO | CLICK_WHATSAPP | FAVORITO_AGREGADO | AGREGADO_CARRITO | ORDEN_CREADA | COMPARTIDO | IMPRESION_COMERCIAL | CLICK_COMERCIAL | VISTA_COMBO
   // Es VarChar y no un enum de Prisma a propósito: agregar un tipo nuevo es una
   // línea en la constante que lo valida (`TIPOS_VALIDOS` en eventos.controller.js
   // para los públicos por `/eventos`; `TIPOS_COMERCIALES` en lib/eventosComerciales.js
@@ -603,6 +675,10 @@ model EventoTrafico {
   // tienen los `slides` de GET /campanias/activas.
   campaniaId  Int?
   promocionId Int?
+  /// Solo lo llena VISTA_COMBO. Sin FK, mismo criterio que `campaniaId`/
+  /// `promocionId`: una FK abriría un segundo camino de cascada y SQL Server
+  /// la rechaza con el error 1785.
+  comboId     Int?
   origen      String? @db.VarChar(20) // MODAL | BANNER
   destino     String? @db.VarChar(20) // CAMPANIA | CATALOGO | CATEGORIA | PRODUCTO | PROMOCION — solo en CLICK_COMERCIAL
 
@@ -839,8 +915,17 @@ model ItemOrden {
   costoUnitario       Decimal? @db.Decimal(10, 0)
   cantidad            Int
 
+  /// Snapshot del combo, como `nombreProducto`: SIN FK, la línea sobrevive al
+  /// borrado del combo.
+  comboId         Int?
+  comboNombre     String? @db.NVarChar(120)
+  /// Cuántos combos compró (no cuántas unidades de ESTE producto).
+  comboCantidad   Int?
+  comboPorcentaje Int?
+
   @@index([ordenId])
   @@index([productId])
+  @@index([comboId])
 }
 
 model ErrorLog {
