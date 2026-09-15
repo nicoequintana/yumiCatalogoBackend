@@ -338,6 +338,10 @@ export async function resumenVentas(req, res, next) {
             precioUnitario: true,
             costoUnitario: true,
             cantidad: true,
+            precioListaUnitario: true,
+            comboId: true,
+            comboNombre: true,
+            comboCantidad: true,
           },
         },
       },
@@ -355,6 +359,8 @@ export async function resumenVentas(req, res, next) {
 
     // productId -> { productId, nombre, unidades, facturacion }
     const porProducto = new Map();
+    // comboId -> { comboId, nombre, facturacion, ahorro, combosPorOrden: Map<ordenId, comboCantidad> }
+    const porCombo = new Map();
     // "YYYY-MM-DD" -> Decimal de ingresos de ese día
     const porDia = new Map();
 
@@ -435,6 +441,29 @@ export async function resumenVentas(req, res, next) {
 
         const facturacionItem = subtotales[indice];
 
+        if (item.comboId !== null && item.comboId !== undefined) {
+          let combo = porCombo.get(item.comboId);
+          if (!combo) {
+            combo = {
+              comboId: item.comboId,
+              nombre: item.comboNombre,
+              facturacion: new Decimal(0),
+              ahorro: new Decimal(0),
+              combosPorOrden: new Map(),
+            };
+            porCombo.set(item.comboId, combo);
+          }
+          combo.facturacion = combo.facturacion.plus(facturacionItem);
+          // Ahorro = (precioListaUnitario − precioUnitario) × cantidad: en las
+          // filas de combo `precioListaUnitario` siempre está (Task 13).
+          combo.ahorro = combo.ahorro.plus(
+            new Decimal(item.precioListaUnitario).minus(item.precioUnitario).mul(item.cantidad),
+          );
+          // Todas las filas de un combo en una orden comparten `comboCantidad`:
+          // se guarda UNA vez por orden, no se suma por fila.
+          combo.combosPorOrden.set(orden.id, item.comboCantidad);
+        }
+
         // Clave del agrupamiento: el id del producto, y el snapshot del nombre
         // cuando ese id ya no existe.
         //
@@ -479,6 +508,20 @@ export async function resumenVentas(req, res, next) {
         nombre: producto.nombre,
         unidades: producto.unidades,
         facturacion: producto.facturacion.toFixed(0),
+      }));
+
+    // Mismo criterio que `rankingProductos`: ordenado por facturación, tope
+    // `TOP_RANKING`. `combosVendidos` suma `comboCantidad` UNA vez por orden
+    // (no por fila ni por unidad de producto).
+    const rankingCombos = [...porCombo.values()]
+      .sort((a, b) => b.facturacion.comparedTo(a.facturacion))
+      .slice(0, TOP_RANKING)
+      .map((combo) => ({
+        comboId: combo.comboId,
+        nombre: combo.nombre,
+        combosVendidos: [...combo.combosPorOrden.values()].reduce((total, cantidad) => total + cantidad, 0),
+        facturacion: combo.facturacion.toFixed(0),
+        ahorroOtorgado: combo.ahorro.toFixed(0),
       }));
 
     // La serie incluye TODOS los días del rango, también los que no tuvieron
@@ -534,6 +577,7 @@ export async function resumenVentas(req, res, next) {
       ordenesCanceladas,
       tasaCancelacion,
       rankingProductos,
+      rankingCombos,
       serieTemporal,
     });
   } catch (err) {

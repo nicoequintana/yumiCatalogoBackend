@@ -726,6 +726,92 @@ describe("GET /api/admin/ventas?dias=N — el backend calcula el rango", () => {
   });
 });
 
+describe("GET /api/admin/ventas — rankingCombos", () => {
+  function filaDeCombo({ productId, nombreProducto, cantidad, precioUnitario, precioListaUnitario, comboCantidad }) {
+    return {
+      id: productId * 10,
+      productId,
+      nombreProducto,
+      cantidad,
+      precioUnitario: new Decimal(precioUnitario),
+      precioListaUnitario: new Decimal(precioListaUnitario),
+      costoUnitario: null,
+      comboId: 3,
+      comboNombre: "Kit Living",
+      comboCantidad,
+    };
+  }
+
+  it("cuenta combosVendidos UNA vez por orden, suma facturación y ahorro otorgado", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      {
+        id: 1,
+        estado: "ENTREGADA",
+        createdAt: new Date("2026-08-10T12:00:00Z"),
+        items: [
+          filaDeCombo({ productId: 1, nombreProducto: "Lámpara", cantidad: 2, precioUnitario: "8500", precioListaUnitario: "10000", comboCantidad: 1 }),
+          filaDeCombo({ productId: 2, nombreProducto: "Mesa", cantidad: 1, precioUnitario: "21250", precioListaUnitario: "25000", comboCantidad: 1 }),
+        ],
+      },
+    ]);
+
+    const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.rankingCombos).toEqual([
+      // facturación 8500*2 + 21250 = 38250; ahorro (10000-8500)*2 + (25000-21250) = 6750
+      { comboId: 3, nombre: "Kit Living", combosVendidos: 1, facturacion: "38250", ahorroOtorgado: "6750" },
+    ]);
+    // Las unidades del combo cuentan en su producto (spec §10).
+    expect(res.body.rankingProductos.map((p) => p.nombre).sort()).toEqual(["Lámpara", "Mesa"]);
+  });
+
+  it("dos órdenes del mismo combo suman comboCantidad por orden, no unidades", async () => {
+    const ordenDeCombo = (id) => ({
+      id,
+      estado: "EN_PREPARACION",
+      createdAt: new Date("2026-08-10T12:00:00Z"),
+      items: [
+        filaDeCombo({ productId: 1, nombreProducto: "Lámpara", cantidad: 6, precioUnitario: "8500", precioListaUnitario: "10000", comboCantidad: 3 }),
+        filaDeCombo({ productId: 2, nombreProducto: "Mesa", cantidad: 3, precioUnitario: "21250", precioListaUnitario: "25000", comboCantidad: 3 }),
+      ],
+    });
+    ordenFindManyMock.mockResolvedValue([ordenDeCombo(1), ordenDeCombo(2)]);
+
+    const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
+
+    expect(res.body.rankingCombos[0].combosVendidos).toBe(6); // 3 + 3
+  });
+
+  it("una orden CANCELADA no suma al ranking de combos", async () => {
+    ordenFindManyMock.mockResolvedValue([
+      {
+        id: 1,
+        estado: "CANCELADA",
+        createdAt: new Date("2026-08-10T12:00:00Z"),
+        items: [filaDeCombo({ productId: 1, nombreProducto: "Lámpara", cantidad: 2, precioUnitario: "8500", precioListaUnitario: "10000", comboCantidad: 1 })],
+      },
+    ]);
+
+    const res = await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
+
+    expect(res.body.rankingCombos).toEqual([]);
+  });
+
+  it("pide a Prisma las columnas de combo de cada item", async () => {
+    ordenFindManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/admin/ventas").set("Authorization", authHeader);
+
+    expect(ordenFindManyMock.mock.calls[0][0].select.items.select).toMatchObject({
+      precioListaUnitario: true,
+      comboId: true,
+      comboNombre: true,
+      comboCantidad: true,
+    });
+  });
+});
+
 describe("GET /api/admin/ventas — etiquetas en porEstado", () => {
   // La etiqueta viaja EN el dato para que la pantalla no tenga su propia copia
   // del diccionario de estados. El valor crudo sigue viajando: es la clave de
