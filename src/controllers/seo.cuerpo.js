@@ -152,7 +152,105 @@ export function cuerpoProducto(producto, { descuento = null } = {}) {
     seccion("También te puede interesar", lista((producto.relacionados ?? []).map(
       (r) => ({ texto: r.nombre }),
     ))),
+    // "Llevalo en combo y ahorrá" cierra la ficha, debajo de los relacionados
+    // (`FichaProducto.jsx` → `FilaCombos`): el eyebrow "Combos", el `<h2>` y
+    // cada `TarjetaCombo` en texto. Los combos son los MISMOS que recibe la
+    // ficha (`obtenerCombosDelProducto`).
+    seccionConEyebrow("Combos", "Llevalo en combo y ahorrá", listaTarjetasCombo(producto.combos ?? [])),
   ];
 
   return partes.filter(Boolean).join("\n");
+}
+
+/**
+ * Una sección cuyo `<h2>` lleva un rótulo chico arriba (eyebrow), como
+ * `CabezaSeccion` o los rótulos de `PaginaCombo.jsx`. El rótulo va como
+ * `<p>`: en la página es un `<span>`, no un encabezado.
+ */
+function seccionConEyebrow(eyebrow, titulo, contenidoHtml) {
+  if (!contenidoHtml) return "";
+  return `<section>${parrafo(eyebrow)}<h2>${escapeHtml(titulo)}</h2>${contenidoHtml}</section>`;
+}
+
+function monto(valor) {
+  return escapeHtml(formatearMonto(aDecimal(valor)));
+}
+
+/** El chip de stock del combo: "Agotado" o "Quedan N", resueltos por el backend (`mapComboPublico`). */
+function chipStockCombo(combo) {
+  if (!combo.disponible) return "<p>Agotado</p>";
+  if (combo.quedanPocos) return `<p>Quedan ${combo.alcanza}</p>`;
+  return "";
+}
+
+/** El talón compartido por la card y la página: sello, tachado, precio combo y ahorro. */
+function talonCombo(combo) {
+  return (
+    `<p>-${combo.porcentaje}% Combo</p>` +
+    `<p>Por separado <s>${monto(combo.precioSeparado)}</s></p>` +
+    `<p>Precio combo ${monto(combo.precioCombo)}</p>` +
+    `<p>Ahorrás ${monto(combo.ahorro)}</p>`
+  );
+}
+
+/**
+ * Las cards de combo (`frontend/src/components/TarjetaCombo.jsx`) en texto,
+ * en el orden del DOM. REGLA DE CLOAKING: si la card cambia un texto, cambia
+ * acá. Recibe combos en la forma PÚBLICA (`mapComboPublico`). Con
+ * `frontendUrl`, el nombre enlaza a la página del combo (`combo.ruta`, que
+ * sale de `rutaCombo`); sin él, texto pelado, como los relacionados.
+ *
+ * @param {Array<object>} combos
+ * @param {{frontendUrl?: string}} [opciones]
+ */
+export function listaTarjetasCombo(combos, { frontendUrl = null } = {}) {
+  if (!combos || combos.length === 0) return "";
+  const tarjetas = combos.map((combo) => {
+    const nombre = escapeHtml(combo.nombre);
+    const titulo = frontendUrl ? `<a href="${escapeHtml(`${frontendUrl}${combo.ruta}`)}">${nombre}</a>` : nombre;
+    const productos = combo.items
+      .map((item) => `${item.cantidad > 1 ? `${item.cantidad}× ` : ""}${item.nombre}`)
+      .join(" · ");
+    return (
+      `<li><p>${combo.unidades} productos</p><h3>${titulo}</h3>${parrafo(combo.frase)}` +
+      `${parrafo(productos)}${chipStockCombo(combo)}${talonCombo(combo)}</li>`
+    );
+  });
+  return `<ul>${tarjetas.join("")}</ul>`;
+}
+
+/**
+ * El cuerpo HTML de la página del combo para crawlers.
+ *
+ * REGLA DE CLOAKING: los mismos textos, en el mismo orden, que
+ * `frontend/src/pages/PaginaCombo.jsx` — ticket (chips, título, frase,
+ * talón), "Qué incluye" y "La cuenta". Si cambia uno, cambia el otro. Los
+ * controles (cantidad, "Agregar combo", WhatsApp, "Ver producto") no son
+ * contenido y no viajan, igual que en `cuerpoProducto`.
+ *
+ * @param {object} combo en la forma PÚBLICA (`mapComboPublico`)
+ */
+export function cuerpoCombo(combo) {
+  const items = combo.items.map(
+    (item) =>
+      `<li>${parrafo(item.categoria)}` +
+      `${parrafo(item.cantidad > 1 ? `${item.cantidad} × ${item.nombre}` : item.nombre)}` +
+      `<p>Precio de lista ${monto(item.precioLista)}${item.cantidad > 1 ? " c/u" : ""}</p></li>`,
+  );
+
+  return [
+    `<p>${combo.unidades} productos</p>${chipStockCombo(combo)}`,
+    `<h1>${escapeHtml(combo.nombre)}</h1>`,
+    parrafo(combo.frase),
+    talonCombo(combo),
+    seccionConEyebrow("Qué incluye", `${combo.unidades} productos, un solo precio`, `<ul>${items.join("")}</ul>`),
+    seccionConEyebrow(
+      "La cuenta",
+      `Juntos te salen ${formatearMonto(aDecimal(combo.ahorro))} menos`,
+      parrafo("Llevándolos en combo pagás menos que comprando cada producto a su precio de lista.") +
+        `<dl><dt>Por separado (${combo.unidades} productos)</dt><dd>${monto(combo.precioSeparado)}</dd>` +
+        `<dt>Descuento combo ${combo.porcentaje}%</dt><dd>− ${monto(combo.ahorro)}</dd>` +
+        `<dt>Precio combo</dt><dd>${monto(combo.precioCombo)}</dd></dl>`,
+    ),
+  ].join("\n");
 }

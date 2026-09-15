@@ -4,11 +4,13 @@ import express from "express";
 
 const findManyMock = vi.fn();
 const categoriaFindManyMock = vi.fn();
+const comboFindManyMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {
     product: { findMany: (...args) => findManyMock(...args) },
     categoria: { findMany: (...args) => categoriaFindManyMock(...args) },
+    combo: { findMany: (...args) => comboFindManyMock(...args) },
   },
 }));
 
@@ -27,6 +29,8 @@ beforeEach(() => {
   // `findManyMock`: sin este default, `categorias` llegaría `undefined` y
   // `.map` explotaría con un TypeError ajeno a lo que esos tests afirman.
   categoriaFindManyMock.mockResolvedValue([]);
+  comboFindManyMock.mockReset();
+  comboFindManyMock.mockResolvedValue([]);
   process.env.FRONTEND_URL = "https://aura.example.com";
 });
 
@@ -185,5 +189,44 @@ describe("GET /sitemap.xml — rutas y slugs", () => {
     // sobre la URL completa.
     expect(res.text).toContain("bano-cocina");
     expect(res.text).not.toContain("& ");
+  });
+});
+
+describe("GET /sitemap.xml — combos", () => {
+  it("incluye /combos y cada combo vigente con la URL de rutaCombo y su lastmod", async () => {
+    findManyMock.mockResolvedValue([]);
+    comboFindManyMock.mockResolvedValue([
+      { id: 7, nombre: "Kit Living Cálido", updatedAt: new Date("2026-09-14T12:00:00.000Z") },
+    ]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("<loc>https://aura.example.com/combos</loc>");
+    expect(res.text).toContain(
+      "<loc>https://aura.example.com/combos/7-kit-living-calido</loc>\n    <lastmod>2026-09-14T12:00:00.000Z</lastmod>",
+    );
+  });
+
+  it("sin combos vigentes igual lista /combos, que responde 200 con su vacío", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/sitemap.xml");
+
+    expect(res.text).toContain("<loc>https://aura.example.com/combos</loc>");
+    expect(res.text).not.toContain("/combos/");
+  });
+
+  it("pide solo combos vigentes (un no vigente da 404 y no puede ir al sitemap), con tope", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await request(buildApp()).get("/sitemap.xml");
+
+    const [args] = comboFindManyMock.mock.calls[0];
+    expect(args.where.activo).toBe(true);
+    expect(args.where.OR[0]).toEqual({ vigencia: "SIEMPRE" });
+    expect(args.select).toEqual({ id: true, nombre: true, updatedAt: true });
+    expect(args.orderBy).toEqual({ updatedAt: "desc" });
+    expect(args.take).toBeGreaterThan(0);
   });
 });

@@ -4,6 +4,9 @@ import express from "express";
 
 const findUniqueMock = vi.fn();
 const findManyMock = vi.fn(async () => []);
+const comboItemFindManyMock = vi.fn(async () => []);
+const comboFindManyMock = vi.fn(async () => []);
+const comboFindUniqueMock = vi.fn();
 
 vi.mock("../lib/prisma.js", () => ({
   prisma: {     // Sin promociones vigentes, que es el caso normal y el que deja el precio
@@ -16,6 +19,14 @@ vi.mock("../lib/prisma.js", () => ({
       // ficha. Sin esta línea el endpoint tira 500 — lo atraparon estos tests,
       // no los unitarios de `seo.cuerpo.js`.
       findMany: (...args) => findManyMock(...args),
+    },
+    // `servirSeoProducto` lista los combos del producto
+    // (`obtenerCombosDelProducto`) y las rutas de combos leen `combo`. Sin
+    // combos por defecto.
+    comboItem: { findMany: (...args) => comboItemFindManyMock(...args) },
+    combo: {
+      findMany: (...args) => comboFindManyMock(...args),
+      findUnique: (...args) => comboFindUniqueMock(...args),
     },
   },
 }));
@@ -69,6 +80,11 @@ const UA_NAVEGADOR = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0
 
 beforeEach(() => {
   findUniqueMock.mockReset();
+  comboFindUniqueMock.mockReset();
+  comboFindManyMock.mockReset();
+  comboFindManyMock.mockResolvedValue([]);
+  comboItemFindManyMock.mockReset();
+  comboItemFindManyMock.mockResolvedValue([]);
   process.env.FRONTEND_URL = "https://yima.example.com";
   process.env.BACKEND_PUBLIC_URL = "https://api.yima.example.com";
 });
@@ -244,5 +260,178 @@ describe("GET /og/producto/:idSlug — escape", () => {
     // Solo pueden existir los dos cierres de los dos bloques JSON-LD.
     expect(res.text.match(/<\/script>/g)).toHaveLength(2);
     expect(res.text).not.toContain("<script>alert(1)</script>");
+  });
+});
+
+/** Una fila de `combo` como la trae Prisma con `PUBLIC_INCLUDE`. */
+function comboCompleto(extra = {}) {
+  const precio = (valor) => ({ toString: () => valor });
+  return {
+    id: 3,
+    nombre: "Kit Living Cálido",
+    frase: "Luz suave y una mesa de roble.",
+    porcentaje: 15,
+    activo: true,
+    vigencia: "SIEMPRE",
+    heroUrl: "https://res.cloudinary.com/demo/hero-kit.jpg",
+    campanias: [],
+    items: [
+      {
+        productId: 1,
+        cantidad: 2,
+        product: { id: 1, nombre: "Lámpara", precio: precio("10000"), stock: 9, visibleEnCatalogo: true, categoria: null, fotos: [] },
+      },
+      {
+        productId: 2,
+        cantidad: 1,
+        product: { id: 2, nombre: "Mesa", precio: precio("25000"), stock: 4, visibleEnCatalogo: true, categoria: null, fotos: [] },
+      },
+    ],
+    ...extra,
+  };
+}
+
+function conStock(combo, stock) {
+  return { ...combo, items: combo.items.map((i) => ({ ...i, product: { ...i.product, stock } })) };
+}
+
+describe("GET /og/producto/:idSlug — combos del producto en el cuerpo", () => {
+  it("lista los combos vigentes del producto, como la ficha", async () => {
+    findUniqueMock.mockResolvedValue(productoCompleto());
+    comboItemFindManyMock.mockResolvedValueOnce([{ combo: comboCompleto() }]);
+
+    const res = await request(buildApp()).get("/og/producto/5").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("<h2>Llevalo en combo y ahorrá</h2>");
+    expect(res.text).toContain("<h3>Kit Living Cálido</h3>");
+    expect(res.text).toContain("<p>Precio combo $38.250</p>");
+    // La consulta es la de la ficha: los combos que incluyen ESTE producto.
+    expect(comboItemFindManyMock.mock.calls[0][0].where.productId).toBe(5);
+  });
+});
+
+describe("GET /og/combo/:idSlug", () => {
+  it("bot + combo vigente: 200 indexable, canonical con rutaCombo, hero como og:image y el cuerpo de la página", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto());
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/html/);
+    expect(res.text).not.toContain("noindex");
+    expect(res.text).toContain("<title>Kit Living Cálido — YIMA</title>");
+    expect(res.text).toContain('<link rel="canonical" href="https://yima.example.com/combos/3-kit-living-calido" />');
+    expect(res.text).toContain('content="https://res.cloudinary.com/demo/hero-kit.jpg"');
+    expect(res.text).toContain('name="description" content="Luz suave y una mesa de roble."');
+    expect(res.text).toContain("<h1>Kit Living Cálido</h1>");
+    expect(res.text).toContain("<h2>Juntos te salen $6.750 menos</h2>");
+    expect(comboFindUniqueMock.mock.calls[0][0].where).toEqual({ id: 3 });
+  });
+
+  it("sin hero, og:image cae al PNG por defecto", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto({ heroUrl: null }));
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_BOT);
+
+    expect(res.text).toContain('content="https://yima.example.com/og-default.png"');
+  });
+
+  it("agotado sigue siendo 200 indexable, con el chip Agotado", async () => {
+    comboFindUniqueMock.mockResolvedValue(conStock(comboCompleto(), 0));
+
+    const res = await request(buildApp()).get("/og/combo/3-kit-living-calido").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("noindex");
+    expect(res.text).toContain("<p>Agotado</p>");
+  });
+
+  it("apagado: 404 + noindex", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto({ activo: false }));
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('content="noindex, follow"');
+    expect(res.text).not.toContain("Kit Living Cálido");
+  });
+
+  it("de campaña sin campaña en fecha: 404 + noindex", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto({ vigencia: "CAMPANIA", campanias: [] }));
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('content="noindex, follow"');
+  });
+
+  it("inexistente: 404 + noindex", async () => {
+    comboFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/og/combo/999").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('content="noindex, follow"');
+  });
+
+  it("id no numérico: 404 sin tocar la base", async () => {
+    const res = await request(buildApp()).get("/og/combo/kit").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(404);
+    expect(comboFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("una persona va a la página real con slug", async () => {
+    comboFindUniqueMock.mockResolvedValue(comboCompleto());
+
+    const res = await request(buildApp()).get("/og/combo/3").set("User-Agent", UA_NAVEGADOR);
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe("https://yima.example.com/combos/3-kit-living-calido");
+  });
+
+  it("una persona con un combo no vigente va a /combos", async () => {
+    comboFindUniqueMock.mockResolvedValue(null);
+
+    const res = await request(buildApp()).get("/og/combo/999").set("User-Agent", UA_NAVEGADOR);
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe("https://yima.example.com/combos");
+  });
+});
+
+describe("GET /og/combos", () => {
+  it("bot: 200 con las cards de los combos vigentes enlazadas con rutaCombo", async () => {
+    comboFindManyMock.mockResolvedValueOnce([comboCompleto()]);
+
+    const res = await request(buildApp()).get("/og/combos").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("noindex");
+    expect(res.text).toContain("<title>Combos — YIMA</title>");
+    expect(res.text).toContain('<link rel="canonical" href="https://yima.example.com/combos" />');
+    expect(res.text).toContain("<h1>Combos</h1>");
+    expect(res.text).toContain('<h3><a href="https://yima.example.com/combos/3-kit-living-calido">Kit Living Cálido</a></h3>');
+    const [args] = comboFindManyMock.mock.calls[0];
+    expect(args.where.activo).toBe(true);
+    expect(args.where.OR[0]).toEqual({ vigencia: "SIEMPRE" });
+    expect(args.orderBy).toEqual({ createdAt: "desc" });
+  });
+
+  it("bot sin combos: el mismo vacío que CatalogoCombos.jsx", async () => {
+    const res = await request(buildApp()).get("/og/combos").set("User-Agent", UA_BOT);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("<h2>Upss, nos agarraste, estamos preparando nuevos combos para vos!</h2>");
+    expect(res.text).toContain("<p>Muy pronto los vas a ver acá!</p>");
+    expect(res.text).toContain('<a href="https://yima.example.com/coleccion">Mientras tanto, mirá los productos</a>');
+  });
+
+  it("una persona va a /combos", async () => {
+    const res = await request(buildApp()).get("/og/combos").set("User-Agent", UA_NAVEGADOR);
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe("https://yima.example.com/combos");
   });
 });

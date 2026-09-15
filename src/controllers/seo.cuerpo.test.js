@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "@prisma/client/runtime/client.js";
-import { cuerpoProducto } from "./seo.cuerpo.js";
+import { cuerpoCombo, cuerpoProducto, listaTarjetasCombo } from "./seo.cuerpo.js";
 
 /**
  * Guard de la regla de cloaking sobre el PRECIO.
@@ -213,5 +213,147 @@ describe("cuerpoProducto — la regla de cloaking sobre el texto", () => {
     );
     expect(html).toContain("<h2>También te puede interesar</h2>");
     expect(html).toContain("Bombilla de acero");
+  });
+});
+
+/**
+ * Combo en la forma PÚBLICA (`mapComboPublico`): la misma que pintan
+ * `PaginaCombo.jsx` y `TarjetaCombo.jsx`, y la que recibe el cuerpo del bot.
+ */
+function comboPublico(extra = {}) {
+  return {
+    id: 3,
+    ruta: "/combos/3-kit-living-calido",
+    nombre: "Kit Living Cálido",
+    frase: "Luz suave y una mesa de roble.",
+    porcentaje: 15,
+    unidades: 3,
+    precioSeparado: "45000",
+    precioCombo: "38250",
+    ahorro: "6750",
+    alcanza: 4,
+    disponible: true,
+    quedanPocos: false,
+    heroUrl: null,
+    items: [
+      { productId: 1, nombre: "Lámpara", cantidad: 2, precioLista: "10000", categoria: "Iluminación" },
+      { productId: 2, nombre: "Mesa", cantidad: 1, precioLista: "25000", categoria: null },
+    ],
+    ...extra,
+  };
+}
+
+/**
+ * Guard de la regla de cloaking de la página del combo: cada texto afirmado
+ * es un texto VISIBLE de `PaginaCombo.jsx`, con su misma jerarquía (los
+ * rótulos "Qué incluye" y "La cuenta" son eyebrows sobre el `<h2>`, no el
+ * `<h2>`). Los controles (cantidad, "Agregar combo", WhatsApp) no son
+ * contenido, igual que en `cuerpoProducto`.
+ */
+describe("cuerpoCombo — el mismo texto que PaginaCombo.jsx", () => {
+  it("ticket: título, frase y el talón con Por separado, Precio combo y Ahorrás", () => {
+    const html = cuerpoCombo(comboPublico());
+
+    expect(html).toContain("<h1>Kit Living Cálido</h1>");
+    expect(html).toContain("<p>Luz suave y una mesa de roble.</p>");
+    expect(html).toContain("<p>3 productos</p>");
+    expect(html).toContain("<p>-15% Combo</p>");
+    expect(html).toContain("<p>Por separado <s>$45.000</s></p>");
+    expect(html).toContain("<p>Precio combo $38.250</p>");
+    expect(html).toContain("<p>Ahorrás $6.750</p>");
+  });
+
+  it("Qué incluye: rótulo, título y cada producto con categoría, cantidad y precio de lista", () => {
+    const html = cuerpoCombo(comboPublico());
+
+    expect(html).toContain(
+      "<section><p>Qué incluye</p><h2>3 productos, un solo precio</h2><ul>" +
+        "<li><p>Iluminación</p><p>2 × Lámpara</p><p>Precio de lista $10.000 c/u</p></li>" +
+        "<li><p>Mesa</p><p>Precio de lista $25.000</p></li>" +
+        "</ul></section>",
+    );
+  });
+
+  it("La cuenta: rótulo, título, bajada y el recibo", () => {
+    const html = cuerpoCombo(comboPublico());
+
+    expect(html).toContain(
+      "<section><p>La cuenta</p><h2>Juntos te salen $6.750 menos</h2>" +
+        "<p>Llevándolos en combo pagás menos que comprando cada producto a su precio de lista.</p>" +
+        "<dl><dt>Por separado (3 productos)</dt><dd>$45.000</dd>" +
+        "<dt>Descuento combo 15%</dt><dd>− $6.750</dd>" +
+        "<dt>Precio combo</dt><dd>$38.250</dd></dl></section>",
+    );
+  });
+
+  it("agotado dice 'Agotado' y con pocos 'Quedan N', como el chip de la página", () => {
+    expect(cuerpoCombo(comboPublico({ disponible: false, alcanza: 0 }))).toContain("<p>Agotado</p>");
+    expect(cuerpoCombo(comboPublico({ quedanPocos: true, alcanza: 2 }))).toContain("<p>Quedan 2</p>");
+    const normal = cuerpoCombo(comboPublico());
+    expect(normal).not.toContain("Agotado");
+    expect(normal).not.toContain("Quedan");
+  });
+
+  it("no inventa textos que la página no tiene", () => {
+    const html = cuerpoCombo(comboPublico());
+    expect(html).not.toContain("Agregar combo");
+    expect(html).not.toContain(":");
+  });
+
+  it("escapa el nombre, la frase y los productos", () => {
+    const html = cuerpoCombo(
+      comboPublico({
+        nombre: "<b>Kit</b>",
+        frase: "<i>x</i>",
+        items: [{ productId: 1, nombre: "<script>", cantidad: 2, precioLista: "1", categoria: null }],
+      }),
+    );
+    expect(html).toContain("<h1>&lt;b&gt;Kit&lt;/b&gt;</h1>");
+    expect(html).toContain("&lt;i&gt;x&lt;/i&gt;");
+    expect(html).not.toContain("<script>");
+  });
+});
+
+/**
+ * La card (`TarjetaCombo.jsx`) repetida en texto: la usan la sección de la
+ * ficha y `/og/combos`.
+ */
+describe("listaTarjetasCombo — el mismo texto que TarjetaCombo.jsx", () => {
+  it("cada card con nombre, frase, productos y el talón", () => {
+    const html = listaTarjetasCombo([comboPublico()]);
+
+    expect(html).toBe(
+      "<ul><li>" +
+        "<p>3 productos</p><h3>Kit Living Cálido</h3><p>Luz suave y una mesa de roble.</p>" +
+        "<p>2× Lámpara · Mesa</p>" +
+        "<p>-15% Combo</p><p>Por separado <s>$45.000</s></p><p>Precio combo $38.250</p><p>Ahorrás $6.750</p>" +
+        "</li></ul>",
+    );
+  });
+
+  it("con href enlaza el nombre a la página del combo", () => {
+    const html = listaTarjetasCombo([comboPublico()], { frontendUrl: "https://yima.example.com" });
+    expect(html).toContain('<h3><a href="https://yima.example.com/combos/3-kit-living-calido">Kit Living Cálido</a></h3>');
+  });
+
+  it("sin combos no emite nada", () => {
+    expect(listaTarjetasCombo([])).toBe("");
+  });
+});
+
+describe("cuerpoProducto — Llevalo en combo y ahorrá", () => {
+  it("con combos suma la sección al pie, con el eyebrow y las cards", () => {
+    const html = cuerpoProducto(producto({ relacionados: [{ nombre: "Bombilla" }], combos: [comboPublico()] }));
+
+    expect(html).toContain("<section><p>Combos</p><h2>Llevalo en combo y ahorrá</h2><ul><li>");
+    expect(html).toContain("<h3>Kit Living Cálido</h3>");
+    expect(html).toContain("<p>Precio combo $38.250</p>");
+    // Debajo de los relacionados, como en `FichaProducto.jsx`.
+    expect(html.indexOf("Llevalo en combo")).toBeGreaterThan(html.indexOf("También te puede interesar"));
+  });
+
+  it("sin combos no aparece la sección", () => {
+    expect(cuerpoProducto(producto({ combos: [] }))).not.toContain("Llevalo en combo y ahorrá");
+    expect(cuerpoProducto(producto())).not.toContain("Llevalo en combo y ahorrá");
   });
 });

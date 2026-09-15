@@ -5,8 +5,10 @@ import { renderHtmlSeo, escapeHtml } from "../lib/htmlSeo.js";
 import { jsonLdProducto, jsonLdBreadcrumb, jsonLdOrganizacion, jsonLdColeccion } from "../lib/jsonLd.js";
 import { parsearIdDeRuta, rutaProducto, rutaCategoria, slugify } from "../lib/slug.js";
 import { PRODUCT_INCLUDE } from "./products.mapper.js";
-import { cuerpoProducto } from "./seo.cuerpo.js";
-import { obtenerRelacionados } from "./products.controller.js";
+import { cuerpoProducto, cuerpoCombo, listaTarjetasCombo } from "./seo.cuerpo.js";
+import { obtenerRelacionados, obtenerCombosDelProducto } from "./products.controller.js";
+import { PUBLIC_INCLUDE as COMBO_PUBLIC_INCLUDE, mapComboPublico } from "./combos.controller.js";
+import { condicionComboVigente, esComboVigente } from "../lib/combos.js";
 import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 
@@ -99,6 +101,9 @@ export async function servirSeoProducto(req, res, next) {
     // producto se parece a cuál" divergirían sin que nada falle. Siempre en
     // vista pública — este HTML se le sirve a un bot anónimo.
     const relacionados = await obtenerRelacionados(producto, { esAdmin: false });
+    // Tercera punta, "Llevalo en combo y ahorrá": los MISMOS combos que
+    // `GET /products/:id` le da a la ficha, con la misma función.
+    const combos = await obtenerCombosDelProducto(producto.id);
 
     const descuentos = await resolverDescuentos(prisma, [producto.id]);
     const vigente = descuentos.get(producto.id) ?? null;
@@ -121,7 +126,7 @@ export async function servirSeoProducto(req, res, next) {
         }),
         jsonLdBreadcrumb(producto, { frontendUrl }),
       ],
-      cuerpo: cuerpoProducto({ ...producto, relacionados }, { descuento }),
+      cuerpo: cuerpoProducto({ ...producto, relacionados, combos }, { descuento }),
     });
 
     res.status(200).type("html").send(html);
@@ -331,6 +336,87 @@ export async function servirSeoCategoria(req, res, next) {
     if (!categoria) return responderNoEncontrado(res, frontendUrl);
 
     await servirListado(res, { categoria });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `/combos` para crawlers. REGLA DE CLOAKING: espeja
+ * `frontend/src/pages/CatalogoCombos.jsx` — el `<h1>`, las cards
+ * (`listaTarjetasCombo`) y, sin combos, el MISMO vacío. Misma consulta y
+ * mismo orden que `GET /combos` (`listarPublico`).
+ */
+export async function servirSeoCombos(req, res, next) {
+  try {
+    const { frontendUrl } = urls();
+    if (!esBot(req.headers["user-agent"])) return res.redirect(302, `${frontendUrl}/combos`);
+
+    const ahora = new Date();
+    const filas = await prisma.combo.findMany({
+      where: condicionComboVigente(ahora),
+      include: COMBO_PUBLIC_INCLUDE,
+      orderBy: { createdAt: "desc" },
+    });
+    const combos = filas.map((combo) => mapComboPublico(combo, { ahora }));
+
+    const contenido =
+      combos.length === 0
+        ? "<h2>Upss, nos agarraste, estamos preparando nuevos combos para vos!</h2>" +
+          "<p>Muy pronto los vas a ver acá!</p>" +
+          `<p><a href="${frontendUrl}/coleccion">Mientras tanto, mirá los productos</a></p>`
+        : listaTarjetasCombo(combos, { frontendUrl });
+
+    const html = renderHtmlSeo({
+      titulo: `Combos — ${SITE_NAME}`,
+      descripcion: "Conjuntos de productos con un descuento que se aplica solo si los llevás juntos.",
+      canonical: `${frontendUrl}/combos`,
+      imagen: `${frontendUrl}/og-default.png`,
+      cuerpo: `<h1>Combos</h1>${contenido}`,
+    });
+    res.status(200).type("html").send(html);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `/combos/:idSlug` para crawlers (el endpoint es singular, la URL pública
+ * plural). Mismo criterio que `GET /combos/:idSlug` (`obtenerPublico`): solo
+ * la VIGENCIA decide el 404 — agotado sigue siendo 200 indexable (spec §9).
+ * El cuerpo sale de la misma forma pública (`mapComboPublico`) que pinta
+ * `PaginaCombo.jsx`, así que precios y chips no se recalculan acá.
+ */
+export async function servirSeoCombo(req, res, next) {
+  try {
+    const { frontendUrl } = urls();
+    const id = parsearIdDeRuta(req.params.idSlug);
+
+    if (id === null) {
+      if (!esBot(req.headers["user-agent"])) return res.redirect(302, `${frontendUrl}/combos`);
+      return responderNoEncontrado(res, frontendUrl);
+    }
+
+    const ahora = new Date();
+    const fila = await prisma.combo.findUnique({ where: { id }, include: COMBO_PUBLIC_INCLUDE });
+    const combo = fila && esComboVigente(fila, ahora) ? mapComboPublico(fila, { ahora }) : null;
+
+    if (!esBot(req.headers["user-agent"])) {
+      return res.redirect(302, combo ? `${frontendUrl}${combo.ruta}` : `${frontendUrl}/combos`);
+    }
+    if (!combo) return responderNoEncontrado(res, frontendUrl);
+
+    const html = renderHtmlSeo({
+      titulo: `${combo.nombre} — ${SITE_NAME}`,
+      descripcion: truncarDescripcion(combo.frase, DESCRIPCION_MAX_LENGTH),
+      // `combo.ruta` sale de `rutaCombo`: el mismo string que el sitemap y
+      // que el `MetaSeo` de la página.
+      canonical: `${frontendUrl}${combo.ruta}`,
+      // El hero es un mapa de bits de Cloudinary; sin hero, el PNG por defecto.
+      imagen: combo.heroUrl ?? `${frontendUrl}/og-default.png`,
+      cuerpo: cuerpoCombo(combo),
+    });
+    res.status(200).type("html").send(html);
   } catch (err) {
     next(err);
   }

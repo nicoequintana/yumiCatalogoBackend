@@ -4,6 +4,8 @@ import {
   servirSeoHome,
   servirSeoColeccion,
   servirSeoCategoria,
+  servirSeoCombos,
+  servirSeoCombo,
 } from "../controllers/seo.controller.js";
 import { crearLimitadorDeVelocidad } from "../middlewares/rateLimit.middleware.js";
 
@@ -32,5 +34,9 @@ router.get("/home", limitadorOg, servirSeoHome);
 router.get("/coleccion", limitadorOg, servirSeoColeccion);
 router.get("/categoria/:slug", limitadorOg, servirSeoCategoria);
 router.get("/producto/:idSlug", limitadorOg, servirSeoProducto);
+// La URL pública del combo es `/combos/:idSlug` (plural, `rutaCombo`); acá el
+// detalle va en singular para no compartir segmento con el listado.
+router.get("/combos", limitadorOg, servirSeoCombos);
+router.get("/combo/:idSlug", limitadorOg, servirSeoCombo);
 
 export default router;
