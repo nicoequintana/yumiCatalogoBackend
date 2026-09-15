@@ -91,7 +91,20 @@ function parsearItems(body) {
 
 const DETALLE_INCLUDE = {
   items: {
-    include: { product: { select: { id: true, sku: true, nombre: true, precio: true, stock: true } } },
+    include: {
+      product: {
+        select: {
+          id: true,
+          sku: true,
+          nombre: true,
+          precio: true,
+          stock: true,
+          // Spec §8.2: la columna "Productos" del listado admin son mini
+          // fichas con foto, no solo texto — misma forma que `PUBLIC_INCLUDE`.
+          fotos: { select: { url: true, cloudinaryPublicId: true }, orderBy: { orden: "asc" }, take: 1 },
+        },
+      },
+    },
     orderBy: { id: "asc" },
   },
   campanias: { select: { campania: { select: { id: true, nombre: true, estado: true, desde: true, hasta: true } } } },
@@ -137,6 +150,7 @@ function mapComboListado(combo) {
       productId: item.productId,
       nombre: item.product.nombre,
       cantidad: item.cantidad,
+      foto: item.product.fotos?.[0] ? urlDeFoto(item.product.fotos[0]) : null,
     })),
   };
 }

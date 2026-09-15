@@ -111,6 +111,41 @@ describe("GET /combos/admin/combos", () => {
     expect(res.body[0].nombre).toBe("Kit Living Cálido");
     expect(res.body[0].precioCombo).toBe("38250");
   });
+
+  // Spec §8.2: la columna "Productos" del listado del admin son mini fichas
+  // con foto, no solo texto — mismo criterio que `mapComboPublico`, que ya
+  // resuelve `foto` con la primera de `product.fotos`.
+  it("cada producto trae su primera foto para las mini fichas del listado", async () => {
+    comboMock.findMany.mockResolvedValue([
+      fila({
+        items: [
+          {
+            productId: 1,
+            cantidad: 2,
+            product: {
+              id: 1,
+              sku: "LAM-01",
+              nombre: "Lámpara",
+              precio: 10000,
+              stock: 9,
+              fotos: [{ url: "https://cdn.example.com/lampara.jpg", cloudinaryPublicId: "lampara" }],
+            },
+          },
+          {
+            productId: 2,
+            cantidad: 1,
+            product: { id: 2, sku: "MES-01", nombre: "Mesa", precio: 25000, stock: 4, fotos: [] },
+          },
+        ],
+      }),
+    ]);
+    const res = await request(buildApp())
+      .get("/api/combos/admin/combos")
+      .set("Authorization", authHeader);
+    expect(res.status).toBe(200);
+    expect(res.body[0].items[0].foto).toBe("https://cdn.example.com/lampara.jpg");
+    expect(res.body[0].items[1].foto).toBeNull();
+  });
 });
 
 describe("POST /combos/admin/combos", () => {
