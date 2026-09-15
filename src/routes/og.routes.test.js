@@ -411,7 +411,10 @@ describe("GET /og/combos", () => {
     expect(res.text).not.toContain("noindex");
     expect(res.text).toContain("<title>Combos — YIMA</title>");
     expect(res.text).toContain('<link rel="canonical" href="https://yima.example.com/combos" />');
-    expect(res.text).toContain("<h1>Combos</h1>");
+    // El mismo encabezado que `CatalogoCombos.jsx`, con los números de `resumenCombos`.
+    expect(res.text).toContain("<p>Combos</p><h1>Llevá el set completo y pagá menos</h1>");
+    expect(res.text).toContain("<p>Productos elegidos para usarse juntos, con un descuento que solo tenés comprando el combo.</p>");
+    expect(res.text).toContain("<p>Hasta 15% off · 1 combo disponible</p>");
     expect(res.text).toContain('<h3><a href="https://yima.example.com/combos/3-kit-living-calido">Kit Living Cálido</a></h3>');
     const [args] = comboFindManyMock.mock.calls[0];
     expect(args.where.activo).toBe(true);
@@ -425,6 +428,9 @@ describe("GET /og/combos", () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain("<h2>Upss, nos agarraste, estamos preparando nuevos combos para vos!</h2>");
     expect(res.text).toContain("<p>Muy pronto los vas a ver acá!</p>");
+    // Sin combos, el encabezado va sin la línea de datos, igual que en la página.
+    expect(res.text).toContain("<h1>Llevá el set completo y pagá menos</h1>");
+    expect(res.text).not.toContain("Hasta ");
     expect(res.text).toContain('<a href="https://yima.example.com/coleccion">Mientras tanto, mirá los productos</a>');
   });
 

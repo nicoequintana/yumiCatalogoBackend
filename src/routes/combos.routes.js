@@ -42,6 +42,7 @@ const limitadorLecturaPublica = crearLimitadorDeVelocidad({
 });
 
 router.get("/", limitadorLecturaPublica, authOpcional, combosController.listarPublico);
+router.get("/resumen", limitadorLecturaPublica, authOpcional, combosController.resumen);
 router.get("/opciones", limitadorLecturaPublica, authOpcional, combosController.opciones);
 router.get("/:idSlug", limitadorLecturaPublica, authOpcional, combosController.obtenerPublico);
 

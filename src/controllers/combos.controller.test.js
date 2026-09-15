@@ -753,6 +753,30 @@ describe("GET /combos/opciones", () => {
   });
 });
 
+describe("GET /combos/resumen", () => {
+  it("cuenta los vigentes y devuelve el mayor porcentaje, con la misma condición de vigencia que GET /combos", async () => {
+    comboMock.findMany.mockResolvedValue([{ porcentaje: 10 }, { porcentaje: 25 }, { porcentaje: 15 }]);
+
+    const res = await request(buildApp()).get("/api/combos/resumen");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cantidad: 3, porcentajeMaximo: 25 });
+    const [args] = comboMock.findMany.mock.calls[0];
+    expect(args.where.activo).toBe(true);
+    expect(args.where.OR[0]).toEqual({ vigencia: "SIEMPRE" });
+    expect(args.select).toEqual({ porcentaje: true });
+  });
+
+  it("sin vigentes: cantidad 0 y porcentajeMaximo null", async () => {
+    comboMock.findMany.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get("/api/combos/resumen");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ cantidad: 0, porcentajeMaximo: null });
+  });
+});
+
 describe("GET /combos/admin/combos — ruta pública", () => {
   it("cada fila del listado trae la ruta pública del combo", async () => {
     comboMock.findMany.mockResolvedValue([fila()]);

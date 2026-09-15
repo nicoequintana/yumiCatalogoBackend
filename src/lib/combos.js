@@ -274,3 +274,17 @@ export function esComboVigente(combo, ahora = new Date()) {
       c.campania.hasta >= medianocheDeHoy,
   );
 }
+
+/**
+ * El encabezado de `/combos` ("Hasta N% off", "N combos disponibles"): cuántos
+ * combos vigentes hay y el mayor porcentaje entre ellos. Lo resuelve el
+ * backend (regla 1 de la metodología) y lo comparten `GET /combos/resumen` y
+ * `/og/combos`, así el crawler y la persona leen el mismo número.
+ *
+ * @param {Array<{porcentaje: number}>} combos los VIGENTES, ya filtrados
+ * @returns {{cantidad: number, porcentajeMaximo: number | null}}
+ */
+export function resumenCombos(combos) {
+  if (!combos || combos.length === 0) return { cantidad: 0, porcentajeMaximo: null };
+  return { cantidad: combos.length, porcentajeMaximo: Math.max(...combos.map((c) => c.porcentaje)) };
+}

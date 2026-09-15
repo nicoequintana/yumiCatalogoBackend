@@ -208,12 +208,11 @@ export function listaTarjetasCombo(combos, { frontendUrl = null } = {}) {
   const tarjetas = combos.map((combo) => {
     const nombre = escapeHtml(combo.nombre);
     const titulo = frontendUrl ? `<a href="${escapeHtml(`${frontendUrl}${combo.ruta}`)}">${nombre}</a>` : nombre;
-    const productos = combo.items
-      .map((item) => `${item.cantidad > 1 ? `${item.cantidad}× ` : ""}${item.nombre}`)
-      .join(" · ");
+    // Sin la lista de nombres de productos: la card ya no la muestra (rediseño
+    // del 15/09/2026, los nombres viven en la página del combo).
     return (
       `<li><p>${combo.unidades} productos</p><h3>${titulo}</h3>${parrafo(combo.frase)}` +
-      `${parrafo(productos)}${chipStockCombo(combo)}${talonCombo(combo)}</li>`
+      `${chipStockCombo(combo)}${talonCombo(combo)}</li>`
     );
   });
   return `<ul>${tarjetas.join("")}</ul>`;

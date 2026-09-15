@@ -15,6 +15,7 @@ import {
   productoLimitanteCombo,
   condicionComboVigente,
   esComboVigente,
+  resumenCombos,
 } from "../lib/combos.js";
 import {
   PORCENTAJE_MIN,
@@ -609,6 +610,20 @@ export async function obtenerPublico(req, res, next) {
     }
 
     res.json(mapComboPublico(combo, { ahora }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `GET /combos/resumen` — PÚBLICA. Los dos números del encabezado de `/combos`
+ * (`{cantidad, porcentajeMaximo}`), sobre los MISMOS vigentes que `GET /combos`.
+ * Solo lee `porcentaje`: no hace falta traer productos para contar.
+ */
+export async function resumen(_req, res, next) {
+  try {
+    const combos = await prisma.combo.findMany({ where: condicionComboVigente(new Date()), select: { porcentaje: true } });
+    res.json(resumenCombos(combos));
   } catch (err) {
     next(err);
   }

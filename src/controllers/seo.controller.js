@@ -8,7 +8,7 @@ import { PRODUCT_INCLUDE } from "./products.mapper.js";
 import { cuerpoProducto, cuerpoCombo, listaTarjetasCombo } from "./seo.cuerpo.js";
 import { obtenerRelacionados, obtenerCombosDelProducto } from "./products.controller.js";
 import { PUBLIC_INCLUDE as COMBO_PUBLIC_INCLUDE, mapComboPublico } from "./combos.controller.js";
-import { condicionComboVigente, esComboVigente } from "../lib/combos.js";
+import { condicionComboVigente, esComboVigente, resumenCombos } from "../lib/combos.js";
 import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { urlFrontend, urlBackend } from "../lib/urlsPublicas.js";
 
@@ -342,8 +342,26 @@ export async function servirSeoCategoria(req, res, next) {
 }
 
 /**
+ * El encabezado teal de `CatalogoCombos.jsx` en texto. Sin combos vigentes la
+ * línea de datos no se muestra, igual que en la página.
+ */
+function encabezadoCatalogoCombos({ cantidad, porcentajeMaximo }) {
+  const datos =
+    cantidad > 0
+      ? `<p>Hasta ${porcentajeMaximo}% off · ${cantidad} ${cantidad === 1 ? "combo disponible" : "combos disponibles"}</p>`
+      : "";
+  return (
+    "<p>Combos</p><h1>Llevá el set completo y pagá menos</h1>" +
+    "<p>Productos elegidos para usarse juntos, con un descuento que solo tenés comprando el combo.</p>" +
+    datos
+  );
+}
+
+/**
  * `/combos` para crawlers. REGLA DE CLOAKING: espeja
- * `frontend/src/pages/CatalogoCombos.jsx` — el `<h1>`, las cards
+ * `frontend/src/pages/CatalogoCombos.jsx` — el encabezado (eyebrow, `<h1>`,
+ * párrafo y la línea "Hasta N% off · N combos disponibles" de `resumenCombos`,
+ * la misma que sirve `GET /combos/resumen`), las cards
  * (`listaTarjetasCombo`) y, sin combos, el MISMO vacío. Misma consulta y
  * mismo orden que `GET /combos` (`listarPublico`).
  */
@@ -372,7 +390,7 @@ export async function servirSeoCombos(req, res, next) {
       descripcion: "Conjuntos de productos con un descuento que se aplica solo si los llevás juntos.",
       canonical: `${frontendUrl}/combos`,
       imagen: `${frontendUrl}/og-default.png`,
-      cuerpo: `<h1>Combos</h1>${contenido}`,
+      cuerpo: `${encabezadoCatalogoCombos(resumenCombos(combos))}${contenido}`,
     });
     res.status(200).type("html").send(html);
   } catch (err) {

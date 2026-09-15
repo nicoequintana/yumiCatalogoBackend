@@ -319,16 +319,21 @@ describe("cuerpoCombo — el mismo texto que PaginaCombo.jsx", () => {
  * ficha y `/og/combos`.
  */
 describe("listaTarjetasCombo — el mismo texto que TarjetaCombo.jsx", () => {
-  it("cada card con nombre, frase, productos y el talón", () => {
+  it("cada card con nombre, frase y el talón, SIN la lista de nombres de productos (vive en la página del combo)", () => {
     const html = listaTarjetasCombo([comboPublico()]);
 
     expect(html).toBe(
       "<ul><li>" +
         "<p>3 productos</p><h3>Kit Living Cálido</h3><p>Luz suave y una mesa de roble.</p>" +
-        "<p>2× Lámpara · Mesa</p>" +
         "<p>-15% Combo</p><p>Por separado <s>$45.000</s></p><p>Precio combo $38.250</p><p>Ahorrás $6.750</p>" +
         "</li></ul>",
     );
+  });
+
+  it("no emite los nombres de los productos", () => {
+    const html = listaTarjetasCombo([comboPublico()]);
+    expect(html).not.toContain("Lámpara");
+    expect(html).not.toContain("Mesa");
   });
 
   it("con href enlaza el nombre a la página del combo", () => {
