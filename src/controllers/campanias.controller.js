@@ -597,6 +597,7 @@ async function buscarOFallar(id) {
  */
 const DETALLE_INCLUDE = {
   promociones: { select: { promocion: { select: { id: true, nombre: true } } } },
+  combos: { select: { combo: { select: { id: true, nombre: true } } } },
   productos: {
     select: {
       product: {
@@ -644,6 +645,7 @@ async function mapDetalle(campania, ahora) {
     // referencia quedó colgada".
     modalCtaReferencia: (await leerReferenciaCta(campania)) ?? null,
     promociones: campania.promociones.map((a) => a.promocion),
+    combos: campania.combos.map((a) => a.combo),
     productos: campania.productos.map(({ product }) => ({
       id: product.id,
       nombre: product.nombre,
@@ -1675,6 +1677,51 @@ export async function guardarPromociones(req, res, next) {
       select: { promocionId: true },
     });
     res.json({ promocionIds: asociadas.map((a) => a.promocionId) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `PUT /api/campanias/:id/combos` — qué combos programa esta campaña
+ * (vigencia `CAMPANIA`). Mismo criterio que `guardarPromociones`: REEMPLAZO
+ * de la lista completa, en transacción.
+ *
+ * Desasociar NO borra el combo: sigue existiendo, con sus productos y su
+ * vigencia — si era `CAMPANIA` y se queda sin ninguna campaña, deja de estar
+ * vigente (lo resuelve `condicionComboVigente`), no se borra nada.
+ */
+export async function guardarCombos(req, res, next) {
+  try {
+    const id = idDeParams(req);
+    await buscarOFallar(id);
+
+    const comboIds = req.body?.comboIds;
+    if (!Array.isArray(comboIds)) {
+      throw httpError(400, "Enviá la lista de combos en `comboIds`.");
+    }
+    if (!comboIds.every((valor) => Number.isInteger(valor) && valor > 0)) {
+      throw httpError(400, "Los ids de combo deben ser números enteros.");
+    }
+    if (new Set(comboIds).size !== comboIds.length) {
+      throw httpError(400, "Hay un combo repetido en la lista.");
+    }
+
+    await exigirIdsExistentes(prisma.combo, comboIds, { entidad: "Estos combos" });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.campaniaCombo.deleteMany({ where: { campaniaId: id } });
+      if (comboIds.length > 0) {
+        await tx.campaniaCombo.createMany({
+          data: comboIds.map((comboId) => ({ campaniaId: id, comboId })),
+        });
+      }
+    });
+
+    logAudit(req, { accion: "ACTUALIZAR_COMBOS", entidad: "Campania", entidadId: id, detalle: { comboIds } });
+
+    const asociados = await prisma.campaniaCombo.findMany({ where: { campaniaId: id }, select: { comboId: true } });
+    res.json({ comboIds: asociados.map((a) => a.comboId) });
   } catch (err) {
     next(err);
   }

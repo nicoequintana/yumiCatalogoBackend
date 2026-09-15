@@ -20,6 +20,7 @@ vi.mock("../lib/prisma.js", () => ({
       delete: (...args) => productDeleteMock(...args),
       findMany: vi.fn().mockResolvedValue([]),
     },
+    comboItem: { findMany: async () => [] },
     categoria: {
       findUnique: vi.fn().mockResolvedValue({ id: 1, nombre: "X", productos: [] }),
       delete: (...args) => categoriaDeleteMock(...args),

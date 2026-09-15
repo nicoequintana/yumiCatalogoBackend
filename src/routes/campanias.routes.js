@@ -109,6 +109,9 @@ router.patch("/:id/estado", requireAuth, campaniasController.cambiarEstado);
 // Qué promociones aplica la campaña mientras está activa. Apagar la campaña las
 // apaga a todas de una: la vigencia la heredan de acá, no la guardan.
 router.put("/:id/promociones", requireAuth, campaniasController.guardarPromociones);
+// Qué combos PROGRAMA la campaña (vigencia `CAMPANIA`): mismo criterio de
+// reemplazo total que `/promociones` y `/productos`.
+router.put("/:id/combos", requireAuth, campaniasController.guardarCombos);
 // La VITRINA: qué productos MUESTRA la campaña. Es una lista distinta de la de
 // promociones y no un subconjunto suyo — un producto puede estar en la vitrina
 // de Navidad a precio de lista.

@@ -20,6 +20,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUnique: (...args) => findUniqueMock(...args),
       delete: (...args) => deleteMock(...args),
     },
+    comboItem: { findMany: async () => [] },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: vi.fn().mockResolvedValue({ id: 1 }) },
   },

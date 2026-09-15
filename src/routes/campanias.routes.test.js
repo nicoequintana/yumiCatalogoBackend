@@ -183,9 +183,9 @@ function enVitrina(producto = {}) {
   };
 }
 
-/** La campaña como la devuelve el detalle: con sus dos relaciones cargadas. */
-function conDetalle({ productos = [], promociones = [], ...extra } = {}) {
-  return fila({ productos, promociones, ...extra });
+/** La campaña como la devuelve el detalle: con sus tres relaciones cargadas. */
+function conDetalle({ productos = [], promociones = [], combos = [], ...extra } = {}) {
+  return fila({ productos, promociones, combos, ...extra });
 }
 
 beforeEach(() => {
@@ -2203,6 +2203,19 @@ describe("GET /api/campanias/:id — el detalle trae la vitrina", () => {
       .set("Authorization", authHeader);
 
     expect(res.body.productos).toEqual([]);
+  });
+
+  it("emite combos[] con id y nombre, como promociones[]", async () => {
+    campaniaMock.findUnique.mockResolvedValue(
+      conDetalle({ combos: [{ combo: { id: 4, nombre: "Kit Living" } }] }),
+    );
+
+    const res = await request(buildApp())
+      .get("/api/campanias/1")
+      .set("Authorization", authHeader);
+
+    expect(res.status).toBe(200);
+    expect(res.body.combos).toEqual([{ id: 4, nombre: "Kit Living" }]);
   });
 
   it("una campaña inexistente da 404", async () => {

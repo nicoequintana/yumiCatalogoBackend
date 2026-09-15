@@ -1536,6 +1536,23 @@ export async function eliminar(req, res, next) {
     const producto = await prisma.product.findUnique({ where: { id }, include: PRODUCT_INCLUDE });
     if (!producto) throw httpError(404, "Producto no encontrado.");
 
+    // Bloqueo previo, ANTES del P2003: sacar el producto del combo en
+    // silencio cambiaría su contenido y su precio sin que nadie lo decida
+    // (spec de combos, §4.2). `ComboItem.product` es `onDelete: NoAction`, así
+    // que sin este chequeo el `delete` de más abajo explotaría igual, pero
+    // como un 500 opaco.
+    const enCombos = await prisma.comboItem.findMany({
+      where: { productId: id },
+      select: { combo: { select: { id: true, nombre: true } } },
+    });
+    if (enCombos.length > 0) {
+      const nombres = enCombos.map((item) => item.combo.nombre).join(", ");
+      throw httpError(
+        409,
+        `Este producto está en el combo "${nombres}". Quitalo del combo antes de borrarlo.`,
+      );
+    }
+
     // Sin pre-chequeo de ventas: `ItemOrden.productId` es nullable con
     // `onDelete: SetNull`, así que la base desliga las líneas históricas sola
     // y ya no hay P2003 que anticipar. Antes se contaba `ItemOrden` para

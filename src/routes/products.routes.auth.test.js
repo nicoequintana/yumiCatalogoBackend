@@ -18,6 +18,7 @@ vi.mock("../lib/prisma.js", () => ({
       update: vi.fn(),
       delete: vi.fn(),
     },
+    comboItem: { findMany: async () => [] },
   },
 }));
 vi.mock("../services/cloudinary.service.js", () => ({}));

@@ -49,6 +49,7 @@ vi.mock("../lib/prisma.js", () => ({
       findUniqueOrThrow: (...args) => findUniqueOrThrowMock(...args),
       delete: (...args) => productDeleteMock(...args),
     },
+    comboItem: { findMany: async () => [] },
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: vi.fn().mockResolvedValue({ id: 1 }) },
     errorLog: { create: vi.fn().mockResolvedValue({ id: 1 }) },

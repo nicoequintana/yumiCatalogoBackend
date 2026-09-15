@@ -31,6 +31,7 @@ vi.mock("../lib/prisma.js", () => ({
       delete: (...args) => deleteMock(...args),
     },
     foto: { findUnique: (...args) => fotoFindUniqueMock(...args) },
+    comboItem: { findMany: async () => [] },
     // `eliminar` pre-chequea el historial de ventas antes de borrar.
     itemOrden: { count: (...args) => itemOrdenCountMock(...args) },
     auditLog: { create: (...args) => auditCreateMock(...args) },
