@@ -773,3 +773,24 @@ describe("GET /combos/admin/combos/:id — detalle para el editor", () => {
     expect(res.body.items[1].foto).toBeNull();
   });
 });
+
+// Spec §8.3.5: la vigencia lista las campañas con su estado LEGIBLE. La
+// etiqueta la resuelve `resolverEstadoCampania`, nunca un diccionario del panel.
+describe("GET /combos/admin/combos/:id — estado de las campañas", () => {
+  it("cada campaña trae etiquetaEstado y etiquetaTemporal resueltas", async () => {
+    comboMock.findUnique.mockResolvedValue(
+      fila({
+        vigencia: "CAMPANIA",
+        campanias: [
+          { campania: { id: 4, nombre: "Navidad", estado: "HABILITADA", desde: new Date("2099-12-01T03:00:00Z"), hasta: new Date("2099-12-25T03:00:00Z") } },
+          { campania: { id: 5, nombre: "Verano", estado: "BORRADOR", desde: new Date("2020-01-01T03:00:00Z"), hasta: new Date("2020-02-01T03:00:00Z") } },
+        ],
+      }),
+    );
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos/1").set("Authorization", authHeader);
+
+    expect(res.body.campanias[0]).toMatchObject({ id: 4, etiquetaEstado: "Habilitada", etiquetaTemporal: "Programada", activa: false });
+    expect(res.body.campanias[1]).toMatchObject({ id: 5, etiquetaEstado: "Borrador", etiquetaTemporal: "Finalizada", activa: false });
+  });
+});

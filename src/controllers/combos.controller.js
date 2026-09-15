@@ -29,6 +29,7 @@ import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
 import { carpetaCampanias } from "./campanias.controller.js";
 import { rutaProducto, parsearIdDeRuta, rutaCombo } from "../lib/slug.js";
+import { resolverEstadoCampania } from "../lib/campanias.js";
 import { urlDeFoto } from "../lib/fotos.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
@@ -176,13 +177,21 @@ function mapComboDetalle(combo) {
     precioCombo: cuentas.precioCombo.toString(),
     ahorro: cuentas.ahorro.toString(),
     alcanza,
-    campanias: (combo.campanias ?? []).map((c) => ({
-      id: c.campania.id,
-      nombre: c.campania.nombre,
-      estado: c.campania.estado,
-      desde: c.campania.desde,
-      hasta: c.campania.hasta,
-    })),
+    // Las etiquetas legibles salen de `resolverEstadoCampania`, la única casa de
+    // "¿está activa ahora?": el editor no arma su propio diccionario.
+    campanias: (combo.campanias ?? []).map((c) => {
+      const resuelto = resolverEstadoCampania(c.campania);
+      return {
+        id: c.campania.id,
+        nombre: c.campania.nombre,
+        estado: c.campania.estado,
+        desde: c.campania.desde,
+        hasta: c.campania.hasta,
+        activa: resuelto.activa,
+        etiquetaEstado: resuelto.etiquetaEstado,
+        etiquetaTemporal: resuelto.etiquetaTemporal,
+      };
+    }),
     items: combo.items.map((item) => ({
       productId: item.productId,
       sku: item.product.sku,
