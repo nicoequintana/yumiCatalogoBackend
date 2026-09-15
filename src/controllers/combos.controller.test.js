@@ -3,6 +3,7 @@ import request from "supertest";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { manejadorDeErrores } from "../middlewares/errorHandler.js";
+import { MAX_IDS_LISTADO } from "./products.input.js";
 
 process.env.JWT_SECRET = "test-secret";
 
@@ -553,6 +554,26 @@ describe("GET /combos?ids=", () => {
 
     expect(res.body).toEqual([]);
     expect(comboMock.findMany).not.toHaveBeenCalled();
+  });
+
+  it(`más de ${MAX_IDS_LISTADO} ids responde 400 sin consultar, mismo tope que products.input.js`, async () => {
+    const ids = Array.from({ length: MAX_IDS_LISTADO + 1 }, (_, i) => i + 1).join(",");
+
+    const res = await request(buildApp()).get(`/api/combos?ids=${ids}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(`No se pueden pedir más de ${MAX_IDS_LISTADO} combos por id en una sola consulta.`);
+    expect(comboMock.findMany).not.toHaveBeenCalled();
+  });
+
+  it(`exactamente ${MAX_IDS_LISTADO} ids se acepta`, async () => {
+    const ids = Array.from({ length: MAX_IDS_LISTADO }, (_, i) => i + 1).join(",");
+    comboMock.findMany.mockResolvedValue([]);
+
+    const res = await request(buildApp()).get(`/api/combos?ids=${ids}`);
+
+    expect(res.status).toBe(200);
+    expect(comboMock.findMany).toHaveBeenCalled();
   });
 });
 

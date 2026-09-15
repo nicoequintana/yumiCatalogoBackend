@@ -31,6 +31,7 @@ import { rutaProducto, parsearIdDeRuta } from "../lib/slug.js";
 import { urlDeFoto } from "../lib/fotos.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
+import { MAX_IDS_LISTADO } from "./products.input.js";
 
 /**
  * ADMIN → Combos: conjuntos de productos con descuento condicionado a
@@ -508,7 +509,16 @@ export async function listarPublico(req, res, next) {
     const ahora = new Date();
 
     if (typeof req.query.ids === "string" && req.query.ids.trim() !== "") {
-      const ids = [...new Set(req.query.ids.split(",").map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+      // Mismo tope que `parsearIdsListado` (`products.controller.js`): el
+      // `IN (...)` resultante va literal al SQL, y una lista sin límite es un
+      // DoS gratis contra la base. Se cuenta sobre los crudos, ANTES de
+      // filtrar los inválidos, igual que el listado de productos.
+      const crudos = req.query.ids.split(",");
+      if (crudos.length > MAX_IDS_LISTADO) {
+        throw httpError(400, `No se pueden pedir más de ${MAX_IDS_LISTADO} combos por id en una sola consulta.`);
+      }
+
+      const ids = [...new Set(crudos.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
       if (ids.length === 0) return res.json([]);
 
       const combos = await prisma.combo.findMany({ where: { id: { in: ids } }, include: PUBLIC_INCLUDE });
