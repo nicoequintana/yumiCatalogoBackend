@@ -4,6 +4,7 @@ import { normalizarDni, esDniValido } from "../lib/dni.js";
 import { subtotalDeItem } from "../lib/dinero.js";
 import { precioConDescuento, resolverDescuentos } from "../lib/precioEfectivo.js";
 import { generarExportacionSolicitados } from "../lib/exportarProductosSolicitados.js";
+import { repartirPrecioCombo, esComboVigente } from "../lib/combos.js";
 import {
   MAX_ORDENES_HISTORICO,
   aClaveDia,
@@ -73,17 +74,29 @@ function validarCamposBase({ dni, nombre, telefono, email, items }) {
 }
 
 /**
- * Valida la forma de cada item del body ANTES de tocar la DB: productId y
- * cantidad deben ser enteros positivos. No valida existencia/disponibilidad
- * del producto acá (eso requiere DB, se hace después en `validarProductos`).
+ * Valida la forma de cada item del body ANTES de tocar la DB. Cada línea es
+ * `{productId, cantidad}` (producto suelto) O `{comboId, cantidad}` (combo) —
+ * NUNCA los dos, NUNCA ninguno. Id y cantidad deben ser enteros positivos. No
+ * valida existencia/disponibilidad acá (eso requiere DB, se hace después en
+ * `construirItemsDeOrden`).
  */
 function validarFormaItems(items) {
   for (const item of items) {
-    const productId = Number(item?.productId);
-    const cantidad = Number(item?.cantidad);
-    if (!Number.isInteger(productId) || productId <= 0) {
-      throw httpError(400, "Cada item debe tener un productId válido.");
+    const tieneProducto = item?.productId !== undefined;
+    const tieneCombo = item?.comboId !== undefined;
+    if (tieneProducto === tieneCombo) {
+      throw httpError(400, "Cada item debe tener `productId` o `comboId`, nunca los dos ni ninguno.");
     }
+
+    const id = Number(tieneProducto ? item.productId : item.comboId);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw httpError(
+        400,
+        tieneProducto ? "Cada item debe tener un productId válido." : "Cada item debe tener un comboId válido.",
+      );
+    }
+
+    const cantidad = Number(item?.cantidad);
     if (!Number.isInteger(cantidad) || cantidad <= 0) {
       throw httpError(400, "Cada item debe tener una cantidad entera mayor a 0.");
     }
@@ -107,6 +120,9 @@ function validarFormaItems(items) {
  * después cambie de precio/nombre o se elimine).
  */
 async function validarYSnapshotearProductos(items) {
+  // Una orden solo de combos no tiene productos sueltos que consultar.
+  if (items.length === 0) return { filas: [], productos: [] };
+
   const ids = items.map((item) => Number(item.productId));
   const productos = await prisma.product.findMany({ where: { id: { in: ids } } });
   const porId = new Map(productos.map((p) => [p.id, p]));
@@ -166,10 +182,153 @@ async function validarYSnapshotearProductos(items) {
       // lo consuma tiene que distinguir los dos casos.
       costoUnitario: producto.costo?.toString() ?? null,
       cantidad,
+      // Snapshot de combo: `null` explícito, es una línea suelta.
+      comboId: null,
+      comboNombre: null,
+      comboCantidad: null,
+      comboPorcentaje: null,
     });
   }
 
-  return itemsConSnapshot;
+  // `productos` viaja con las filas: la demanda agregada necesita el stock ya
+  // leído, sin una segunda consulta.
+  return { filas: itemsConSnapshot, productos };
+}
+
+const COMBO_INCLUDE_ORDEN = {
+  items: {
+    include: {
+      product: {
+        select: { id: true, nombre: true, precio: true, costo: true, visibleEnCatalogo: true, stock: true },
+      },
+    },
+    orderBy: { id: "asc" },
+  },
+  campanias: { select: { campania: { select: { estado: true, desde: true, hasta: true } } } },
+};
+
+/**
+ * Expande las líneas `{comboId, cantidad}` en filas de `ItemOrden` por
+ * producto, con los snapshots del combo (spec §6.3, §4.4). El % es el del
+ * combo, sobre precio de lista; las promociones de los productos no aplican.
+ * El reparto va SIEMPRE por `repartirPrecioCombo`: es lo que garantiza que las
+ * filas de un combo sumen exacto `precioCombo × comboCantidad`.
+ *
+ * 409 si el combo no está vigente o tiene un producto oculto (pudo cambiar
+ * entre agregar al carrito y pagar). 400 si el id no existe, igual que un
+ * `productId` inexistente. El stock NO se valida acá: lo valida
+ * `validarDemandaAgregada` sumando sueltos y combos.
+ */
+async function expandirCombosDeOrden(itemsCombo) {
+  // Una orden sin combos no consulta combos.
+  if (itemsCombo.length === 0) return { filas: [], productos: [] };
+
+  const ids = [...new Set(itemsCombo.map((item) => Number(item.comboId)))];
+  const combos = await prisma.combo.findMany({ where: { id: { in: ids } }, include: COMBO_INCLUDE_ORDEN });
+  const porId = new Map(combos.map((combo) => [combo.id, combo]));
+
+  const filas = [];
+  for (const item of itemsCombo) {
+    const comboId = Number(item.comboId);
+    const cantidadPedida = Number(item.cantidad);
+    const combo = porId.get(comboId);
+
+    if (!combo) throw httpError(400, `El combo ${comboId} no existe.`);
+    // `items.length === 0` no debería existir (la composición exige 2-10
+    // unidades), pero un combo vacío crearía una orden sin filas: se trata
+    // como no disponible en vez de confiar en la escritura del admin.
+    const disponible =
+      esComboVigente(combo) &&
+      combo.items.length > 0 &&
+      combo.items.every((i) => i.product.visibleEnCatalogo);
+    if (!disponible) {
+      throw httpError(409, `El combo «${combo.nombre}» ya no está disponible.`);
+    }
+
+    const productoPorId = new Map(combo.items.map((i) => [i.productId, i.product]));
+    const repartidas = repartirPrecioCombo(
+      combo.items.map((i) => ({ productId: i.productId, precio: i.product.precio, cantidad: i.cantidad })),
+      combo.porcentaje,
+      cantidadPedida,
+    );
+
+    for (const fila of repartidas) {
+      const producto = productoPorId.get(fila.productId);
+      filas.push({
+        productId: fila.productId,
+        nombreProducto: producto.nombre,
+        precioUnitario: fila.precioUnitario,
+        precioListaUnitario: fila.precioListaUnitario,
+        descuentoPorcentaje: combo.porcentaje,
+        costoUnitario: producto.costo?.toString() ?? null,
+        cantidad: fila.cantidad,
+        comboId: combo.id,
+        comboNombre: combo.nombre,
+        comboCantidad: cantidadPedida,
+        comboPorcentaje: combo.porcentaje,
+      });
+    }
+  }
+
+  return { filas, productos: combos.flatMap((combo) => combo.items.map((i) => i.product)) };
+}
+
+/**
+ * La demanda de cada producto es la suma de TODAS sus filas — sueltas y de
+ * combos — y se valida contra su stock de una vez (spec §6.3.3). Validar
+ * línea por línea dejaba pasar 1 lámpara suelta + 1 combo con 2 lámparas con
+ * stock 2.
+ *
+ * ⚠️ CAMBIO DE COMPORTAMIENTO para TODA orden, con o sin combos (ruling F11 de
+ * la tanda de combos, 14/09/2026): hasta acá la creación solo rechazaba
+ * `stock <= 0` ("agotado", 400, que sigue igual en
+ * `validarYSnapshotearProductos`) y una orden suelta que pedía más unidades
+ * que el stock se creaba igual — `actualizarEstado` la ajustaba recién al
+ * confirmar, con `advertencias`. Ahora cualquier demanda mayor al stock es 409
+ * al crear. Es un chequeo sobre una LECTURA, así que no es la guarda del
+ * descuento (esa sigue siendo la escritura guardada de `actualizarEstado`):
+ * una carrera entre dos checkouts todavía puede sobrevender, y el ajuste con
+ * `advertencias` al confirmar sigue siendo la red.
+ */
+function validarDemandaAgregada(filas, productos) {
+  const productoPorId = new Map(productos.map((p) => [p.id, p]));
+  const demanda = new Map();
+  for (const fila of filas) {
+    demanda.set(fila.productId, (demanda.get(fila.productId) ?? 0) + fila.cantidad);
+  }
+
+  for (const [productId, cantidad] of demanda) {
+    const producto = productoPorId.get(productId);
+    if (cantidad > producto.stock) {
+      throw httpError(
+        409,
+        `No hay stock suficiente de "${producto.nombre}": el pedido suma ${cantidad} y quedan ${producto.stock}.`,
+      );
+    }
+  }
+}
+
+/**
+ * Punto único de entrada: separa sueltos y combos, arma los snapshots de las
+ * dos fuentes, aplica `MAX_ITEMS_POR_ORDEN` sobre las filas YA EXPANDIDAS
+ * (spec §6.3.5) y valida la demanda agregada.
+ */
+async function construirItemsDeOrden(items) {
+  const itemsProducto = items.filter((item) => item.productId !== undefined);
+  const itemsCombo = items.filter((item) => item.comboId !== undefined);
+
+  const [sueltos, deCombos] = await Promise.all([
+    validarYSnapshotearProductos(itemsProducto),
+    expandirCombosDeOrden(itemsCombo),
+  ]);
+
+  const filas = [...sueltos.filas, ...deCombos.filas];
+  if (filas.length > MAX_ITEMS_POR_ORDEN) {
+    throw httpError(400, `Una orden no puede tener más de ${MAX_ITEMS_POR_ORDEN} items.`);
+  }
+
+  validarDemandaAgregada(filas, [...sueltos.productos, ...deCombos.productos]);
+  return filas;
 }
 
 /**
@@ -464,8 +623,10 @@ async function buscarOrdenDeLaClave(cuentaClienteId, clave) {
  *   1. Resolución del contacto, si hay sesión (única consulta nueva).
  *   2. Campos requeridos presentes (dni/nombre/telefono/email/items no vacío).
  *   3. DNI normalizado y válido (7-8 dígitos).
- *   4. Forma de cada item (productId/cantidad enteros positivos).
- *   5. Existencia + visibilidad + disponibilidad de cada producto.
+ *   4. Forma de cada item (`productId` XOR `comboId`, cantidad entera positiva).
+ *   5. Existencia + visibilidad + disponibilidad de cada producto y combo, tope
+ *      de filas expandidas y demanda agregada contra stock
+ *      (`construirItemsDeOrden`).
  * Recién después arranca la escritura: upsert de Cliente + creación de
  * Orden/ItemOrden dentro de una misma transacción.
  */
@@ -505,7 +666,7 @@ export async function crear(req, res, next) {
 
     validarFormaItems(items);
 
-    const itemsConSnapshot = await validarYSnapshotearProductos(items);
+    const itemsConSnapshot = await construirItemsDeOrden(items);
 
     let orden;
     try {

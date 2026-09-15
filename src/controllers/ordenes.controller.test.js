@@ -360,7 +360,10 @@ describe("crear() — topes de items y cantidades (anti-abuso)", () => {
   it("acepta una cantidad exactamente igual a MAX_CANTIDAD_POR_ITEM (999)", async () => {
     clienteFindUniqueMock.mockResolvedValue(CLIENTE_EXISTENTE);
     clienteUpdateMock.mockResolvedValue(CLIENTE_EXISTENTE);
-    productFindManyMock.mockResolvedValue([PRODUCTO_DISPONIBLE]);
+    // Stock que alcanza: desde la tanda de combos (ruling F11) una orden que
+    // pide más que el stock es 409 al crearla, y este test prueba el tope de
+    // cantidad, no el stock.
+    productFindManyMock.mockResolvedValue([{ ...PRODUCTO_DISPONIBLE, stock: 999 }]);
     ordenCreateMock.mockResolvedValue(ORDEN_CREADA_MOCK);
 
     const { req, res, next } = buildReqRes({ body: bodyValido({ items: [{ productId: 1, cantidad: 999 }] }) });
