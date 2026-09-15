@@ -148,6 +148,16 @@ describe("GET /combos/admin/combos", () => {
   });
 });
 
+describe("GET /combos/admin/combos — vistas", () => {
+  it("cada fila trae el contador de vistas", async () => {
+    comboMock.findMany.mockResolvedValue([fila({ vistas: 42 })]);
+
+    const res = await request(buildApp()).get("/api/combos/admin/combos").set("Authorization", authHeader);
+
+    expect(res.body[0].vistas).toBe(42);
+  });
+});
+
 describe("POST /combos/admin/combos", () => {
   it("crea un combo válido, nace apagado", async () => {
     productMock.findMany.mockResolvedValue([

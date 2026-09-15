@@ -142,6 +142,7 @@ function mapComboListado(combo) {
     vigencia: combo.vigencia,
     vigente: esComboVigente(combo),
     heroUrl: combo.heroUrl,
+    vistas: combo.vistas,
     unidades: cuentas.unidades,
     precioSeparado: cuentas.precioSeparado.toString(),
     precioCombo: cuentas.precioCombo.toString(),
