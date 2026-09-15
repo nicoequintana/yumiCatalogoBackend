@@ -24,6 +24,7 @@ const uploadHero = multer({
 
 router.get("/admin/combos", requireAuth, combosController.listarAdmin);
 router.post("/admin/combos", requireAuth, combosController.crear);
+router.post("/admin/combos/cotizar", requireAuth, combosController.cotizar);
 router.get("/admin/combos/:id", requireAuth, combosController.obtenerAdminPorId);
 router.put("/admin/combos/:id", requireAuth, combosController.actualizar);
 router.delete("/admin/combos/:id", requireAuth, requierePermisoDeBorrado, combosController.eliminar);

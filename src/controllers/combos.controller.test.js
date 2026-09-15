@@ -16,6 +16,7 @@ const comboMock = {
 };
 const comboItemMock = { deleteMany: vi.fn(), createMany: vi.fn() };
 const productMock = { findMany: vi.fn() };
+const promocionItemMock = { findMany: vi.fn() };
 const usuarioFindUniqueMock = vi.fn();
 const auditCreateMock = vi.fn();
 const transactionMock = vi.fn((fn) => fn({ comboItem: comboItemMock, combo: comboMock }));
@@ -35,6 +36,7 @@ vi.mock("../lib/prisma.js", () => ({
       createMany: (...a) => comboItemMock.createMany(...a),
     },
     product: { findMany: (...a) => productMock.findMany(...a) },
+    promocionItem: { findMany: (...a) => promocionItemMock.findMany(...a) },
     usuario: { findUnique: (...a) => usuarioFindUniqueMock(...a) },
     auditLog: { create: (...a) => auditCreateMock(...a) },
     $transaction: (...a) => transactionMock(...a),
@@ -88,6 +90,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
   transactionMock.mockImplementation((fn) => fn({ comboItem: comboItemMock, combo: comboMock }));
+  promocionItemMock.findMany.mockResolvedValue([]);
 });
 
 describe("GET /combos/admin/combos", () => {
@@ -348,5 +351,81 @@ describe("DELETE /combos/admin/combos/:id/hero", () => {
 
     expect(res.status).toBe(200);
     expect(eliminarArchivoMock).toHaveBeenCalledWith("combos/viejo", "image");
+  });
+});
+
+describe("POST /combos/admin/combos/cotizar", () => {
+  const PRODUCTOS = [
+    { id: 1, precio: 10000, stock: 9, visibleEnCatalogo: true },
+    { id: 2, precio: 25000, stock: 4, visibleEnCatalogo: true },
+  ];
+  const BODY = { items: [{ productId: 1, cantidad: 2 }, { productId: 2, cantidad: 1 }], porcentaje: 15 };
+
+  it("sin promociones: devuelve las cuentas, la disponibilidad y SIN aviso", async () => {
+    productMock.findMany.mockResolvedValue(PRODUCTOS);
+
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos/cotizar")
+      .set("Authorization", authHeader)
+      .send(BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      precioSeparado: "45000",
+      precioCombo: "38250",
+      ahorro: "6750",
+      unidades: 3,
+      alcanza: 4, // min(floor(9/2), floor(4/1))
+      disponible: true,
+      quedanPocos: false,
+      precioSueltoHoy: "45000",
+      avisoMasCaro: false,
+    });
+  });
+
+  it("con una promo del 20 % en los dos productos, comprar suelto sale más barato: avisoMasCaro", async () => {
+    productMock.findMany.mockResolvedValue(PRODUCTOS);
+    promocionItemMock.findMany.mockResolvedValue([
+      { productId: 1, porcentaje: 20, promocion: { id: 7, nombre: "Hot Sale" } },
+      { productId: 2, porcentaje: 20, promocion: { id: 7, nombre: "Hot Sale" } },
+    ]);
+
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos/cotizar")
+      .set("Authorization", authHeader)
+      .send(BODY);
+
+    expect(res.status).toBe(200);
+    // 8000 x 2 + 20000 = 36000 < 38250 del combo.
+    expect(res.body.precioSueltoHoy).toBe("36000");
+    expect(res.body.avisoMasCaro).toBe(true);
+  });
+
+  it("un producto oculto deja la cotización con disponible: false", async () => {
+    productMock.findMany.mockResolvedValue([PRODUCTOS[0], { ...PRODUCTOS[1], visibleEnCatalogo: false }]);
+
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos/cotizar")
+      .set("Authorization", authHeader)
+      .send(BODY);
+
+    expect(res.body.disponible).toBe(false);
+  });
+
+  it("400 con un producto que no existe, nombrando el id", async () => {
+    productMock.findMany.mockResolvedValue([{ id: 1 }]);
+
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos/cotizar")
+      .set("Authorization", authHeader)
+      .send({ items: [{ productId: 1, cantidad: 1 }, { productId: 99, cantidad: 1 }], porcentaje: 15 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("99");
+  });
+
+  it("401 sin token", async () => {
+    const res = await request(buildApp()).post("/api/combos/admin/combos/cotizar").send(BODY);
+    expect(res.status).toBe(401);
   });
 });

@@ -9,8 +9,16 @@ import {
   validarComposicion,
   cuentasCombo,
   alcanzaCombo,
+  disponibilidadCombo,
 } from "../lib/combos.js";
-import { PORCENTAJE_MIN, PORCENTAJE_MAX, esPorcentajeValido } from "../lib/precioEfectivo.js";
+import {
+  PORCENTAJE_MIN,
+  PORCENTAJE_MAX,
+  esPorcentajeValido,
+  resolverDescuentos,
+  precioConDescuento,
+} from "../lib/precioEfectivo.js";
+import { subtotalDeItem } from "../lib/dinero.js";
 import { ALLOWED_PHOTO_MIMES } from "../lib/limitesMedios.js";
 import { contenidoCoincideConMime } from "../lib/magicBytes.js";
 import { subirArchivo, eliminarArchivo } from "../services/cloudinary.service.js";
@@ -355,6 +363,65 @@ export async function quitarHero(req, res, next) {
     logAudit(req, { accion: "QUITAR_HERO", entidad: "Combo", entidadId: id, detalle: { nombre: combo.nombre } });
 
     res.json(mapComboDetalle(combo));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * `POST /admin/combos/cotizar` — alimenta la vista previa del editor
+ * mientras se edita (con debounce del lado del cliente). NO persiste nada.
+ *
+ * El aviso "Comprando por separado sale más barato" compara `precioCombo`
+ * contra la suma de los precios EFECTIVOS de hoy (con promociones vigentes,
+ * vía `resolverDescuentos`) — nunca contra el precio de lista.
+ */
+export async function cotizar(req, res, next) {
+  try {
+    const items = parsearItems(req.body);
+    const porcentaje = parsearPorcentaje(req.body);
+    const ids = items.map((i) => i.productId);
+
+    // Primero la existencia (400 con el id faltante), después la lectura
+    // completa: con un id inexistente no hay nada que cotizar.
+    await exigirIdsExistentes(prisma.product, ids, { entidad: "Estos productos" });
+    const productos = await prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, precio: true, stock: true, visibleEnCatalogo: true },
+    });
+    const porId = new Map(productos.map((p) => [p.id, p]));
+    const conProducto = items.map((item) => ({ ...item, producto: porId.get(item.productId) }));
+
+    const cuentas = cuentasCombo(
+      conProducto.map((i) => ({ precio: i.producto.precio, cantidad: i.cantidad })),
+      porcentaje,
+    );
+    const { alcanza, disponible, quedanPocos } = disponibilidadCombo(
+      conProducto.map((i) => ({
+        stock: i.producto.stock,
+        cantidad: i.cantidad,
+        visibleEnCatalogo: i.producto.visibleEnCatalogo,
+      })),
+    );
+
+    const descuentos = await resolverDescuentos(prisma, ids);
+    const precioSueltoHoy = conProducto.reduce((total, item) => {
+      const descuento = descuentos.get(item.productId) ?? null;
+      const efectivo = descuento ? precioConDescuento(item.producto.precio, descuento.porcentaje) : null;
+      return total.plus(subtotalDeItem({ precioUnitario: efectivo ?? item.producto.precio, cantidad: item.cantidad }));
+    }, cuentas.precioSeparado.mul(0));
+
+    res.json({
+      precioSeparado: cuentas.precioSeparado.toString(),
+      precioCombo: cuentas.precioCombo.toString(),
+      ahorro: cuentas.ahorro.toString(),
+      unidades: cuentas.unidades,
+      alcanza,
+      disponible,
+      quedanPocos,
+      precioSueltoHoy: precioSueltoHoy.toString(),
+      avisoMasCaro: cuentas.precioCombo.gt(precioSueltoHoy),
+    });
   } catch (err) {
     next(err);
   }
