@@ -12,6 +12,7 @@ import {
   cuentasCombo,
   alcanzaCombo,
   disponibilidadCombo,
+  productoLimitanteCombo,
   condicionComboVigente,
   esComboVigente,
 } from "../lib/combos.js";
@@ -400,6 +401,11 @@ export async function quitarHero(req, res, next) {
  * El aviso "Comprando por separado sale más barato" compara `precioCombo`
  * contra la suma de los precios EFECTIVOS de hoy (con promociones vigentes,
  * vía `resolverDescuentos`) — nunca contra el precio de lista.
+ *
+ * También resuelve las dos extras del editor que el frontend NO puede
+ * calcular (spec §8.3.2 y §8.3.3): `limitante` (qué producto topea `alcanza`,
+ * para "Lo limita X") e `items[].descuento` (la misma pill de "promo vigente"
+ * que arma `GET /products`, por fila del editor).
  */
 export async function cotizar(req, res, next) {
   try {
@@ -412,7 +418,7 @@ export async function cotizar(req, res, next) {
     await exigirIdsExistentes(prisma.product, ids, { entidad: "Estos productos" });
     const productos = await prisma.product.findMany({
       where: { id: { in: ids } },
-      select: { id: true, precio: true, stock: true, visibleEnCatalogo: true },
+      select: { id: true, nombre: true, precio: true, stock: true, visibleEnCatalogo: true },
     });
     const porId = new Map(productos.map((p) => [p.id, p]));
     const conProducto = items.map((item) => ({ ...item, producto: porId.get(item.productId) }));
@@ -436,6 +442,11 @@ export async function cotizar(req, res, next) {
       return total.plus(subtotalDeItem({ precioUnitario: efectivo ?? item.producto.precio, cantidad: item.cantidad }));
     }, cuentas.precioSeparado.mul(0));
 
+    const limitanteId = productoLimitanteCombo(
+      conProducto.map((item) => ({ productId: item.productId, stock: item.producto.stock, cantidad: item.cantidad })),
+    );
+    const limitante = limitanteId === null ? null : { productId: limitanteId, nombre: porId.get(limitanteId).nombre };
+
     res.json({
       precioSeparado: cuentas.precioSeparado.toString(),
       precioCombo: cuentas.precioCombo.toString(),
@@ -446,6 +457,8 @@ export async function cotizar(req, res, next) {
       quedanPocos,
       precioSueltoHoy: precioSueltoHoy.toString(),
       avisoMasCaro: cuentas.precioCombo.gt(precioSueltoHoy),
+      limitante,
+      items: conProducto.map((item) => ({ productId: item.productId, descuento: descuentos.get(item.productId) ?? null })),
     });
   } catch (err) {
     next(err);

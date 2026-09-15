@@ -71,6 +71,30 @@ export function alcanzaCombo(items) {
 }
 
 /**
+ * Qué producto topea `alcanza`: el primero, en el orden recibido, cuyo
+ * `floor(stock / cantidad)` iguala el mínimo. Alimenta "Lo limita X" del
+ * editor (spec §8.3.3) — el frontend NO recalcula esto, lo lee resuelto de
+ * `POST /admin/combos/cotizar`.
+ *
+ * @param {Array<{productId: number, stock: number, cantidad: number}>} items
+ * @returns {number|null} el `productId` limitante, `null` con lista vacía
+ */
+export function productoLimitanteCombo(items) {
+  if (items.length === 0) return null;
+
+  let elegido = items[0];
+  let menorAlcance = Math.floor(elegido.stock / elegido.cantidad);
+  for (const item of items.slice(1)) {
+    const alcance = Math.floor(item.stock / item.cantidad);
+    if (alcance < menorAlcance) {
+      elegido = item;
+      menorAlcance = alcance;
+    }
+  }
+  return elegido.productId;
+}
+
+/**
  * La disponibilidad pública del combo (spec §3.4): `disponible` exige todos
  * los productos visibles y `alcanza >= 1`; `quedanPocos` solo tiene sentido
  * con stock (sin stock el chip es "Agotado").

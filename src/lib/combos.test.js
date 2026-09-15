@@ -9,6 +9,7 @@ import {
   cuentasCombo,
   alcanzaCombo,
   disponibilidadCombo,
+  productoLimitanteCombo,
   validarComposicion,
   repartirPrecioCombo,
   condicionComboVigente,
@@ -102,6 +103,33 @@ describe("disponibilidadCombo", () => {
   it("sin stock: no disponible y NO quedanPocos (el chip es Agotado, no Quedan 0)", () => {
     const items = [{ stock: 0, cantidad: 1, visibleEnCatalogo: true }];
     expect(disponibilidadCombo(items)).toEqual({ alcanza: 0, disponible: false, quedanPocos: false });
+  });
+});
+
+describe("productoLimitanteCombo", () => {
+  it("devuelve el productId del item cuyo floor(stock/cantidad) es el mínimo", () => {
+    const items = [
+      { productId: 1, stock: 9, cantidad: 2 }, // alcanza para 4
+      { productId: 2, stock: 4, cantidad: 1 }, // alcanza para 4... no, alcanza para 4 también
+      { productId: 3, stock: 5, cantidad: 3 }, // alcanza para 1: el limitante
+    ];
+    expect(productoLimitanteCombo(items)).toBe(3);
+  });
+
+  it("con un solo producto, ese es el limitante", () => {
+    expect(productoLimitanteCombo([{ productId: 7, stock: 10, cantidad: 2 }])).toBe(7);
+  });
+
+  it("en un empate, gana el primero en el orden recibido", () => {
+    const items = [
+      { productId: 1, stock: 4, cantidad: 1 },
+      { productId: 2, stock: 4, cantidad: 1 },
+    ];
+    expect(productoLimitanteCombo(items)).toBe(1);
+  });
+
+  it("lista vacía: null, no hay nada que limite", () => {
+    expect(productoLimitanteCombo([])).toBeNull();
   });
 });
 

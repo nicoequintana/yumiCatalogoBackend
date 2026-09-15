@@ -394,12 +394,12 @@ describe("DELETE /combos/admin/combos/:id/hero", () => {
 
 describe("POST /combos/admin/combos/cotizar", () => {
   const PRODUCTOS = [
-    { id: 1, precio: 10000, stock: 9, visibleEnCatalogo: true },
-    { id: 2, precio: 25000, stock: 4, visibleEnCatalogo: true },
+    { id: 1, nombre: "Lámpara", precio: 10000, stock: 9, visibleEnCatalogo: true },
+    { id: 2, nombre: "Mesa", precio: 25000, stock: 4, visibleEnCatalogo: true },
   ];
   const BODY = { items: [{ productId: 1, cantidad: 2 }, { productId: 2, cantidad: 1 }], porcentaje: 15 };
 
-  it("sin promociones: devuelve las cuentas, la disponibilidad y SIN aviso", async () => {
+  it("sin promociones: devuelve las cuentas, la disponibilidad, SIN aviso, y quién limita el alcance", async () => {
     productMock.findMany.mockResolvedValue(PRODUCTOS);
 
     const res = await request(buildApp())
@@ -418,10 +418,16 @@ describe("POST /combos/admin/combos/cotizar", () => {
       quedanPocos: false,
       precioSueltoHoy: "45000",
       avisoMasCaro: false,
+      // Empate 4 y 4: gana el primero en el orden recibido (spec §8.3.3 "Lo limita X").
+      limitante: { productId: 1, nombre: "Lámpara" },
+      items: [
+        { productId: 1, descuento: null },
+        { productId: 2, descuento: null },
+      ],
     });
   });
 
-  it("con una promo del 20 % en los dos productos, comprar suelto sale más barato: avisoMasCaro", async () => {
+  it("con una promo del 20 % en los dos productos, comprar suelto sale más barato: avisoMasCaro, y el descuento viaja por producto", async () => {
     productMock.findMany.mockResolvedValue(PRODUCTOS);
     promocionItemMock.findMany.mockResolvedValue([
       { productId: 1, porcentaje: 20, promocion: { id: 7, nombre: "Hot Sale" } },
@@ -437,6 +443,27 @@ describe("POST /combos/admin/combos/cotizar", () => {
     // 8000 x 2 + 20000 = 36000 < 38250 del combo.
     expect(res.body.precioSueltoHoy).toBe("36000");
     expect(res.body.avisoMasCaro).toBe(true);
+    // Misma pill de "promo vigente" que arma `GET /products` (spec §8.3.2), sin
+    // que el frontend evalúe promociones.
+    expect(res.body.items).toEqual([
+      { productId: 1, descuento: { porcentaje: 20, promocionId: 7, promocionNombre: "Hot Sale" } },
+      { productId: 2, descuento: { porcentaje: 20, promocionId: 7, promocionNombre: "Hot Sale" } },
+    ]);
+  });
+
+  it("con stocks distintos, `limitante` nombra el producto que topea el alcance", async () => {
+    productMock.findMany.mockResolvedValue([
+      { id: 1, nombre: "Lámpara", precio: 10000, stock: 9, visibleEnCatalogo: true },
+      { id: 2, nombre: "Mesa", precio: 25000, stock: 1, visibleEnCatalogo: true }, // alcanza 1: el limitante
+    ]);
+
+    const res = await request(buildApp())
+      .post("/api/combos/admin/combos/cotizar")
+      .set("Authorization", authHeader)
+      .send(BODY);
+
+    expect(res.body.alcanza).toBe(1);
+    expect(res.body.limitante).toEqual({ productId: 2, nombre: "Mesa" });
   });
 
   it("un producto oculto deja la cotización con disponible: false", async () => {
