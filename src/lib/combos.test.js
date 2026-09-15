@@ -11,6 +11,7 @@ import {
   disponibilidadCombo,
   validarComposicion,
   repartirPrecioCombo,
+  condicionComboVigente,
 } from "./combos.js";
 
 describe("cuentasCombo", () => {
@@ -246,5 +247,38 @@ describe("repartirPrecioCombo", () => {
         50,
       ),
     ).toThrow("No se puede repartir el precio del combo sin dejar una fila en $0.");
+  });
+});
+
+describe("condicionComboVigente", () => {
+  it("exige activo: true siempre", () => {
+    const where = condicionComboVigente(new Date("2026-09-14T15:00:00.000Z"));
+    expect(where.activo).toBe(true);
+  });
+
+  it("SIEMPRE vigente entra por el primer brazo del OR, sin mirar campañas", () => {
+    const where = condicionComboVigente(new Date("2026-09-14T15:00:00.000Z"));
+    expect(where.OR[0]).toEqual({ vigencia: "SIEMPRE" });
+  });
+
+  it("CAMPANIA exige una campaña HABILITADA y en fecha", () => {
+    const where = condicionComboVigente(new Date("2026-09-14T15:00:00.000Z"));
+    expect(where.OR[1].campanias.some.campania.estado).toBe("HABILITADA");
+  });
+
+  it("el borde de las 21:00 del último día: hasta = medianoche del día X sigue vigente a las 20:59 ART (23:59 UTC) de X, pero no al día siguiente", () => {
+    // hasta = medianoche argentina del 14/09 = 2026-09-14T03:00:00.000Z
+    const hasta = new Date("2026-09-14T03:00:00.000Z");
+    // 20:59 ART del 14/09 = 23:59 UTC del 14/09: la campaña sigue en fecha.
+    const finDelDia = condicionComboVigente(new Date("2026-09-14T23:59:00.000Z"));
+    const enFecha = finDelDia.OR[1].campanias.some.campania;
+    expect(enFecha.hasta.gte.getTime()).toBeLessThanOrEqual(hasta.getTime());
+
+    // Al día siguiente (15/09, cualquier hora) la medianoche de HOY ya pasó
+    // el `hasta` de una campaña que terminó el 14: el `gte` de esa consulta
+    // usa la medianoche del 15, posterior a `hasta`.
+    const diaSiguiente = condicionComboVigente(new Date("2026-09-15T15:00:00.000Z"));
+    const medianocheDelDiaSiguiente = diaSiguiente.OR[1].campanias.some.campania.hasta.gte;
+    expect(medianocheDelDiaSiguiente.getTime()).toBeGreaterThan(hasta.getTime());
   });
 });

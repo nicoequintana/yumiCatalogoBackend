@@ -1,5 +1,6 @@
 import { Decimal } from "@prisma/client/runtime/client.js";
 import { redondearAEntero } from "./precios.js";
+import { claveDiaArgentino, inicioDelDiaArgentino } from "./horarioArgentino.js";
 
 /**
  * Combos: conjuntos de productos con un descuento que se aplica SOLO si se
@@ -190,4 +191,27 @@ export function repartirPrecioCombo(items, porcentaje, comboCantidad = 1) {
     precioListaUnitario: fila.precioListaUnitario.toString(),
     cantidad: fila.cantidad * comboCantidad,
   }));
+}
+
+/**
+ * El `where` de Prisma de un combo vigente AHORA. Espejo de
+ * `condicionPromocionVigente` (`lib/precioEfectivo.js`), pero más simple: un
+ * combo no tiene programación individual, solo `SIEMPRE` o campañas.
+ *
+ * `activo` apagado gana siempre, esté o no en fecha — por eso va afuera del
+ * `OR`, como condición propia.
+ *
+ * @param {Date} [ahora]
+ */
+export function condicionComboVigente(ahora = new Date()) {
+  const medianocheDeHoy = inicioDelDiaArgentino(claveDiaArgentino(ahora));
+  const enFecha = { desde: { lte: ahora }, hasta: { gte: medianocheDeHoy } };
+
+  return {
+    activo: true,
+    OR: [
+      { vigencia: "SIEMPRE" },
+      { campanias: { some: { campania: { estado: "HABILITADA", ...enFecha } } } },
+    ],
+  };
 }
