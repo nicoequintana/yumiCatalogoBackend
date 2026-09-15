@@ -330,6 +330,11 @@ describe("listaTarjetasCombo — el mismo texto que TarjetaCombo.jsx", () => {
     );
   });
 
+  it("el chip de stock va junto a 'N productos', antes del nombre, como la fila de chips de la card", () => {
+    const html = listaTarjetasCombo([comboPublico({ disponible: false, alcanza: 0 })]);
+    expect(html).toContain("<li><p>3 productos</p><p>Agotado</p><h3>");
+  });
+
   it("no emite los nombres de los productos", () => {
     const html = listaTarjetasCombo([comboPublico()]);
     expect(html).not.toContain("Lámpara");

@@ -208,11 +208,12 @@ export function listaTarjetasCombo(combos, { frontendUrl = null } = {}) {
   const tarjetas = combos.map((combo) => {
     const nombre = escapeHtml(combo.nombre);
     const titulo = frontendUrl ? `<a href="${escapeHtml(`${frontendUrl}${combo.ruta}`)}">${nombre}</a>` : nombre;
-    // Sin la lista de nombres de productos: la card ya no la muestra (rediseño
-    // del 15/09/2026, los nombres viven en la página del combo).
+    // Rediseño del 15/09/2026: sin la lista de nombres de productos (viven en
+    // la página del combo) y el chip de stock en la fila de chips, antes del
+    // nombre — el mismo orden que el DOM de la card.
     return (
-      `<li><p>${combo.unidades} productos</p><h3>${titulo}</h3>${parrafo(combo.frase)}` +
-      `${chipStockCombo(combo)}${talonCombo(combo)}</li>`
+      `<li><p>${combo.unidades} productos</p>${chipStockCombo(combo)}<h3>${titulo}</h3>` +
+      `${parrafo(combo.frase)}${talonCombo(combo)}</li>`
     );
   });
   return `<ul>${tarjetas.join("")}</ul>`;
