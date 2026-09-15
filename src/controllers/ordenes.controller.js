@@ -15,6 +15,7 @@ import { logAudit } from "../lib/logAudit.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { ESTADOS_ORDEN, ESTADOS_CON_STOCK_TOMADO, listaDeEstados } from "../lib/estadosOrden.js";
 import { httpError } from "../lib/httpError.js";
+import { esEnteroSeguro } from "../lib/enteroSeguro.js";
 import { escaparLike } from "../lib/escaparLike.js";
 import { parsearPaginacion } from "../lib/paginacion.js";
 import { esEmailValido } from "../lib/emailValido.js";
@@ -81,6 +82,7 @@ function validarCamposBase({ dni, nombre, telefono, email, items }) {
  * `construirItemsDeOrden`).
  */
 function validarFormaItems(items) {
+  const combosVistos = new Set();
   for (const item of items) {
     const tieneProducto = item?.productId !== undefined;
     const tieneCombo = item?.comboId !== undefined;
@@ -89,7 +91,9 @@ function validarFormaItems(items) {
     }
 
     const id = Number(tieneProducto ? item.productId : item.comboId);
-    if (!Number.isInteger(id) || id <= 0) {
+    // `esEnteroSeguro`, no `Number.isInteger`: `1e21` llegaba a Prisma y la
+    // orden cortaba con 500 (ver `lib/enteroSeguro.js`).
+    if (!esEnteroSeguro(id) || id <= 0) {
       throw httpError(
         400,
         tieneProducto ? "Cada item debe tener un productId válido." : "Cada item debe tener un comboId válido.",
@@ -102,6 +106,18 @@ function validarFormaItems(items) {
     }
     if (cantidad > MAX_CANTIDAD_POR_ITEM) {
       throw httpError(400, `Cada item admite una cantidad máxima de ${MAX_CANTIDAD_POR_ITEM} unidades.`);
+    }
+
+    // Un combo, UNA línea: `agruparLineasOrden` y `rankingCombos` agrupan por
+    // `comboId` dentro de la orden y leen un solo `comboCantidad`; dos líneas
+    // del mismo combo se cobraban bien pero se mostraban como "Kit × 1" con el
+    // triple de productos. Los productos sueltos repetidos no tienen ese
+    // problema (cada fila suelta es su propia línea) y siguen aceptándose.
+    if (tieneCombo) {
+      if (combosVistos.has(id)) {
+        throw httpError(400, `El combo ${id} está repetido en el pedido: enviá una sola línea con la cantidad total.`);
+      }
+      combosVistos.add(id);
     }
   }
 }

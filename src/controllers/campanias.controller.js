@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { logAudit } from "../lib/logAudit.js";
 import { httpError } from "../lib/httpError.js";
 import { exigirIdsExistentes } from "../lib/idsExistentes.js";
+import { esEnteroSeguro } from "../lib/enteroSeguro.js";
 import { urlDeFoto } from "../lib/fotos.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 import { LARGO_MAX_TEXTO } from "../lib/limitesTexto.js";
@@ -1700,7 +1701,8 @@ export async function guardarCombos(req, res, next) {
     if (!Array.isArray(comboIds)) {
       throw httpError(400, "Enviá la lista de combos en `comboIds`.");
     }
-    if (!comboIds.every((valor) => Number.isInteger(valor) && valor > 0)) {
+    // `esEnteroSeguro`, no `Number.isInteger`: `1e21` llegaba a Prisma → 500.
+    if (!comboIds.every((valor) => esEnteroSeguro(valor) && valor > 0)) {
       throw httpError(400, "Los ids de combo deben ser números enteros.");
     }
     if (new Set(comboIds).size !== comboIds.length) {

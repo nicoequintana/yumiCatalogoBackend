@@ -647,6 +647,46 @@ describe("GET /combos?ids=", () => {
     expect(res.status).toBe(200);
     expect(comboMock.findMany).toHaveBeenCalled();
   });
+
+  // `Number.isInteger(1e21)` es `true`: el id llegaba a Prisma y cortaba con
+  // "Unable to fit value" → 500 público + fila en ErrorLog. Mismo criterio que
+  // `parsearIdsListado` de productos: un id fuera de rango se descarta.
+  it("un id fuera de rango seguro (1e21) se descarta como cualquier id inválido, sin consultar", async () => {
+    const res = await request(buildApp()).get("/api/combos?ids=1e21");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+    expect(comboMock.findMany).not.toHaveBeenCalled();
+  });
+
+  it("un id fuera de rango junto a uno válido consulta solo el válido", async () => {
+    comboMock.findMany.mockResolvedValue([]);
+
+    await request(buildApp()).get("/api/combos?ids=1,1e21");
+
+    expect(comboMock.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: [1] } } }));
+  });
+
+  // Un borrador o un combo apagado no se publica por enumeración de ids: el
+  // carrito solo necesita saber que no está vigente para bloquear el pedido.
+  it("un combo NO vigente viaja en forma mínima: sin frase, precios, hero ni productos", async () => {
+    comboMock.findMany.mockResolvedValue([comboPublico({ activo: false })]);
+
+    const res = await request(buildApp()).get("/api/combos?ids=1");
+
+    expect(res.body).toEqual([
+      { id: 1, nombre: "Kit Living Cálido", vigente: false, disponible: false, alcanza: 0, items: [] },
+    ]);
+  });
+});
+
+describe("rutas /:id del admin con un id fuera de rango seguro", () => {
+  it("GET /combos/admin/combos/1e21 responde 404 sin consultar, igual que un producto", async () => {
+    const res = await request(buildApp()).get("/api/combos/admin/combos/1e21").set("Authorization", authHeader);
+
+    expect(res.status).toBe(404);
+    expect(comboMock.findUnique).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /combos/:idSlug", () => {

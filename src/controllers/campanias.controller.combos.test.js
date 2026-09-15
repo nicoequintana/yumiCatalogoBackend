@@ -44,6 +44,7 @@ const token = jwt.sign({ sub: 1, email: "admin@yima.test", tokenVersion: 0 }, "t
 const authHeader = `Bearer ${token}`;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   usuarioFindUniqueMock.mockResolvedValue({ id: 1, tokenVersion: 0, puedeEliminar: true });
   campaniaMock.findUnique.mockResolvedValue({ id: 7, nombre: "Navidad" });
 });
@@ -69,6 +70,15 @@ describe("PUT /campanias/:id/combos", () => {
       .set("Authorization", authHeader)
       .send({ comboIds: [1, 1] });
     expect(res.status).toBe(400);
+  });
+
+  it("400 con un id de combo fuera de rango seguro (1e21), sin consultar combos", async () => {
+    const res = await request(buildApp())
+      .put("/api/campanias/7/combos")
+      .set("Authorization", authHeader)
+      .send({ comboIds: [1e21] });
+    expect(res.status).toBe(400);
+    expect(comboMock.findMany).not.toHaveBeenCalled();
   });
 
   it("400 con un combo que ya no existe", async () => {

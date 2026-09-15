@@ -34,6 +34,7 @@ import { urlDeFoto } from "../lib/fotos.js";
 import { logEvento, headersDeEvento } from "../lib/logEvento.js";
 import { esRequestDeAdmin } from "../middlewares/auth.middleware.js";
 import { MAX_IDS_LISTADO } from "./products.input.js";
+import { esEnteroSeguro, parsearIdEntero } from "../lib/enteroSeguro.js";
 
 /**
  * ADMIN → Combos: conjuntos de productos con descuento condicionado a
@@ -43,7 +44,10 @@ import { MAX_IDS_LISTADO } from "./products.input.js";
 
 function idDeParams(req, campo = "id") {
   const id = Number(req.params[campo]);
-  if (!Number.isInteger(id)) throw httpError(404, "Combo no encontrado.");
+  // `esEnteroSeguro`, no `Number.isInteger`: `1e21` es entero para JS pero
+  // Prisma no lo puede mandar y respondía 500 (ver `lib/enteroSeguro.js`).
+  // Mismo 404 que `obtenerPorId` de productos.
+  if (!esEnteroSeguro(id)) throw httpError(404, "Combo no encontrado.");
   return id;
 }
 
@@ -540,6 +544,19 @@ export function mapComboPublico(combo, { incluirVigente = false, ahora = new Dat
   };
 }
 
+/**
+ * La forma de `?ids=`: completa si el combo está vigente, MÍNIMA si no. Un
+ * borrador o un combo apagado no se publica por enumeración de ids; el carrito
+ * solo necesita `vigente: false` para bloquear el pedido y el `nombre` para
+ * decir cuál quitar.
+ */
+function mapComboPorIds(combo, ahora) {
+  if (!esComboVigente(combo, ahora)) {
+    return { id: combo.id, nombre: combo.nombre, vigente: false, disponible: false, alcanza: 0, items: [] };
+  }
+  return mapComboPublico(combo, { incluirVigente: true, ahora });
+}
+
 /** `GET /combos` — vigentes, más nuevos primero; con `?ids=` también los no vigentes, con `vigente`. */
 export async function listarPublico(req, res, next) {
   try {
@@ -555,11 +572,13 @@ export async function listarPublico(req, res, next) {
         throw httpError(400, `No se pueden pedir más de ${MAX_IDS_LISTADO} combos por id en una sola consulta.`);
       }
 
-      const ids = [...new Set(crudos.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+      // `parsearIdEntero` y no `Number.isInteger`: `1e21` pasaba y Prisma
+      // cortaba con 500. Fuera de rango se descarta, igual que en productos.
+      const ids = [...new Set(crudos.map((crudo) => parsearIdEntero(crudo.trim())).filter((id) => id !== null))];
       if (ids.length === 0) return res.json([]);
 
       const combos = await prisma.combo.findMany({ where: { id: { in: ids } }, include: PUBLIC_INCLUDE });
-      return res.json(combos.map((combo) => mapComboPublico(combo, { incluirVigente: true, ahora })));
+      return res.json(combos.map((combo) => mapComboPorIds(combo, ahora)));
     }
 
     const combos = await prisma.combo.findMany({

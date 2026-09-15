@@ -117,6 +117,35 @@ describe("POST /ordenes — forma de los items", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("Cada item debe tener un comboId válido.");
   });
+
+  // `Number.isInteger(1e21)` es `true`: sin la guarda de rango el id llegaba a
+  // Prisma y la orden cortaba con un 500 (ver `lib/enteroSeguro.js`).
+  it("400 con un comboId fuera de rango seguro (1e21), sin consultar combos", async () => {
+    const res = await pedir([{ comboId: 1e21, cantidad: 1 }]);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Cada item debe tener un comboId válido.");
+    expect(comboFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("400 con un productId fuera de rango seguro (1e21), sin consultar productos", async () => {
+    const res = await pedir([{ productId: 1e21, cantidad: 1 }]);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Cada item debe tener un productId válido.");
+    expect(productFindManyMock).not.toHaveBeenCalled();
+  });
+
+  // Dos líneas del mismo combo se cobraban bien, pero `agruparLineasOrden` y
+  // `rankingCombos` suponen UNA línea por combo por orden: el detalle mostraba
+  // "Kit × 1" con el triple de productos.
+  it("400 si el mismo comboId aparece en dos líneas, sin consultar combos", async () => {
+    const res = await pedir([
+      { comboId: 3, cantidad: 1 },
+      { comboId: 3, cantidad: 2 },
+    ]);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("El combo 3 está repetido en el pedido: enviá una sola línea con la cantidad total.");
+    expect(comboFindManyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /ordenes — combos", () => {
